@@ -63,9 +63,30 @@ ordering across unrelated entities.
 
 max_attempts includes the initial attempt. A retry is permitted only while the
 number of attempts already started is less than max_attempts. The initial and
-maximum backoff bounds are validated by the core. The runtime will later define
-the backoff function, jitter, retryable error classification, and deadline
-interaction; this ADR does not silently choose those operational policies.
+maximum backoff bounds are validated by the core. The core exposes a deterministic capped exponential backoff calculation; the runtime
+will inject jitter and define retryable error classification and deadline interaction.
+The first retry uses the initial delay, each subsequent retry doubles it, and the
+configured maximum caps the result. Jitter is deliberately not generated in the
+domain layer.
+
+### Timeout and cancellation races
+
+Timeout and cancellation are competing terminal outcomes, not independent flags
+that can both win. The first valid terminal transition committed against the
+current entity version wins; a later competing terminal transition is rejected as
+stale/invalid. The domain does not read a wall clock or decide when a deadline has
+elapsed. A runtime or persistence adapter must evaluate deadlines and commit the
+transition using the entity version as a compare-and-swap guard. Cancellation
+requests are not proof that an in-flight external side effect was undone.
+
+### Idempotency keys
+
+`IdempotencyKey` is a distinct validated type for one logical external
+operation. The application supplies a stable key and reuses it across retries of
+that logical operation. It must not be regenerated per attempt. The key is only
+useful if the downstream system enforces deduplication or the application stores
+and checks it transactionally; AetherFlow cannot make an arbitrary external API
+idempotent by attaching a string.
 
 ### Delivery and side effects
 
@@ -85,6 +106,6 @@ durability guarantee.
   an async runtime.
 - Persistence can reject stale writes using per-entity versions.
 - Attempt history remains distinct from task-run state.
-- Retry timing and worker ownership are intentionally deferred to later milestones.
+- Runtime scheduling, jitter, retry classification, and worker ownership are intentionally deferred to later milestones.
 - The current implementation is a domain foundation, not yet a scheduler or a
   durable execution engine.
