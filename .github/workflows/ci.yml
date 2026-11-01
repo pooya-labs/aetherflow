@@ -31,7 +31,42 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
-          if git diff-tree --no-commit-id --name-only -r HEAD | grep -Eq '(^|/)Cargo.toml$'; then
+          if git show --pretty="" --name-only HEAD | grep -Eq '(^|/)Cargo.toml
+            cargo +1.99.1 generate-lockfile
+            if ! git diff --quiet -- Cargo.lock; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add Cargo.lock
+              git commit -m "chore(deps): regenerate Cargo.lock"
+              git push origin "HEAD:$GITHUB_REF_NAME"
+            fi
+          fi
+
+      - name: Verify locked dependency resolution
+        run: cargo +1.99.1 fetch --locked
+
+      - name: Verify formatting
+        run: cargo +1.99.1 fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo +1.99.1 test --workspace --locked
+
+      - name: Build workspace
+        run: cargo +1.99.1 build --workspace --release --locked
+
+      - name: Build documentation
+        run: cargo +1.99.1 doc --workspace --no-deps --locked
+      - name: Upload resolved Cargo.lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-lockfile-${{ github.sha }}
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
+ || ! cargo +1.99.1 fetch --locked --quiet; then
             cargo +1.99.1 generate-lockfile
             if ! git diff --quiet -- Cargo.lock; then
               git config user.name "github-actions[bot]"

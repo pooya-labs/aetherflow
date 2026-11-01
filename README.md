@@ -45,7 +45,7 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, bounded Tokio task scheduler, and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handlers, bounded concurrency, retry and per-attempt timeout policies, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and access to successful direct-dependency outputs. M03 is hosted-verified. PostgreSQL durable persistence is in M04 design and has not yet been implemented; the in-memory repository remains non-durable. See the roadmap for exact verification status.
+The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, bounded Tokio task scheduler, and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handlers, bounded concurrency, retry and per-attempt timeout policies, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and access to successful direct-dependency outputs. M03 is hosted-verified. The M04 PostgreSQL storage crate now includes a pool boundary and checksum/advisory-lock migration runner; initial schema application and idempotent re-run passed PostgreSQL 18 CI. Durable task repository operations, leases, and crash recovery remain under development; the in-memory repository remains non-durable. See the roadmap for exact verification status.
 
 ## License
 

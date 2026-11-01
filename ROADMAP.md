@@ -62,7 +62,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 - [x] Draft PostgreSQL v1 schema and migration strategy for workflow/task runs, ordered dependencies, attempts, fencing leases, and transactional outbox (ADR-0007; real-server validation pending).
 - [x] Select and pin deadpool-postgres 0.14.2, tokio-postgres 0.7.18, and sha2 0.10.9; upstream package metadata declares MSRV 1.85.
 - [x] Add PostgreSQL 18 integration service and schema constraint fixtures; async migration-runner verification pending.
-- [ ] Verify the transactional migration runner with advisory locking, checksum drift rejection, and idempotent PostgreSQL re-run.
+- [ ] Add PostgreSQL tests for checksum drift, untracked schema metadata, and unsupported newer schema versions.
 - [ ] Implement durable TaskRepository adapter with transaction-guarded lifecycle transitions.
 - [ ] Implement dependency-aware ready promotion and atomic `FOR UPDATE SKIP LOCKED` claims.
 - [ ] Implement lease heartbeat, expiry recovery, and monotonically increasing fencing tokens.
@@ -132,7 +132,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
 | 2026-11-02 | M03 | Closed and hosted-verified through run `41359053561`: 15 core, 35 runtime, and 2 server tests passed; workflow DAG activation, cooperative cancellation, bounded shutdown, payload I/O, and direct dependency output access verified |
 
-| 2026-11-02 | M04 | PostgreSQL 18 DDL/schema checks passed. Added pinned async driver stack, automatic Cargo.lock refresh on manifest change, and checksum/advisory-lock migration runner plus real-server idempotency test; hosted verification pending. |
+| 2026-11-02 | M04 | Pinned PostgreSQL driver stack and initial schema/migration runner committed. PostgreSQL 18 CI run `41361580073` passed runner compilation, transactional apply, idempotent re-run, ledger, table/index inventory, and constraint fixtures. Rust workspace CI lockfile refresh detection is being corrected after a shallow-checkout issue. |
 
 ## Resume instructions
 
