@@ -104,7 +104,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 **Next action:** Verify the M03 repository implementation in hosted CI. Then implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Resolve the reproducible Cargo lockfile workflow before introducing Tokio or property-testing dependencies.
 
-**Verification:** M01 hosted run `41353166515` for commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2` completed with conclusion `success`; all five quality steps passed. M03 run `41353664709` failed at formatting with seven rustfmt diffs, then run `41353732055` found one remaining formatting preference in a retry assertion. The exact formatting changes are now applied; Clippy, tests, release build, and documentation build have not yet run for M03. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+**Verification:** M01 hosted run \`41353166515\` for commit \`832e3fc50c8da7e22d2fedaaec9151b3748168b2\` completed successfully. M03 run \`41353788023\` passed formatting and Clippy; all 15 core and 9 runtime tests passed, but both bootstrap-server tests failed with TCP connection resets. The server previously read the request only once and could close while unread header bytes remained. This commit reads until the HTTP header terminator and changes the test client to send request headers in two chunks to exercise incremental input. M03 hosted verification remains pending.
 
 **Known limitations:** The in-memory repository loses all state on process exit and has no lease expiry, fencing, or crash recovery. The async scheduler/worker loop, durable event log, PostgreSQL adapter, external side-effect idempotency API, and retry jitter are not implemented. The bootstrap HTTP server remains sequential and non-production. Retryable error classification and deadline interaction remain runtime responsibilities.
 
@@ -117,9 +117,9 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | Date | Milestone | Result |
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
-| 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
+| 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Added runtime crate, deterministic clock boundary, and mutex-backed in-memory task repository with due promotion, exclusive claims, attempts, version checks, retries, cancellation, timeout, and deterministic/concurrent tests; hosted verification pending |
+| 2026-11-02 | M03 | Added runtime crate and mutex-backed in-memory repository; formatting and Clippy passed and 24 core/runtime tests passed, while two bootstrap-server tests exposed partial-request read handling; incremental header-read fix committed for verification |
 
 ## Resume instructions
 

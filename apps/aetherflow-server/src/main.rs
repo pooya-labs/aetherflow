@@ -47,7 +47,22 @@ fn run(address: &str) -> std::io::Result<()> {
 fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     let mut request = vec![0_u8; MAX_REQUEST_BYTES];
-    let bytes_read = stream.read(&mut request)?;
+    let mut bytes_read = 0;
+
+    while bytes_read < request.len() {
+        let chunk_size = stream.read(&mut request[bytes_read..])?;
+        if chunk_size == 0 {
+            break;
+        }
+        bytes_read += chunk_size;
+
+        if request[..bytes_read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+    }
     let request_line = request[..bytes_read]
         .split(|byte| *byte == b'\n')
         .next()
@@ -76,6 +91,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
+    use std::time::Duration;
 
     fn request(path: &'static str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
@@ -87,7 +103,9 @@ mod tests {
         });
 
         let mut client = TcpStream::connect(address).expect("connect");
-        write!(client, "GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n").expect("send request");
+        write!(client, "GET {path} HTTP/1.1\r\n").expect("send request line");
+        thread::sleep(Duration::from_millis(10));
+        write!(client, "host: localhost\r\n\r\n").expect("send request headers");
 
         let mut response = String::new();
         client.read_to_string(&mut response).expect("read response");
