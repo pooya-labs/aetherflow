@@ -41,3 +41,10 @@ jobs:
 
       - name: Build documentation
         run: cargo +1.99.1 doc --workspace --no-deps
+      - name: Upload resolved Cargo.lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-lockfile-${{ github.sha }}
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1

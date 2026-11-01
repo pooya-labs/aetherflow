@@ -40,4 +40,4 @@ Keep domain rules out of runtime and network adapters. The initial in-memory rep
 
 ## Verification honesty
 
-A CI workflow is committed, but its first hosted run must complete successfully before the foundation milestone can be marked verified. A lockfile is committed; regenerate it with Cargo whenever dependencies change.
+A CI workflow is committed, but its first hosted run must complete successfully before the foundation milestone can be marked verified. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. Hosted CI publishes the resolved lockfile as a short-lived artifact so dependency-resolution changes can be reviewed and committed without hand-editing the lockfile.
