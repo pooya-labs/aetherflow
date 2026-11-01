@@ -1420,7 +1420,9 @@ mod tests {
             .register(
                 TaskId::parse("task-a").expect("valid task ID"),
                 |_claim| async {
-                    Err::<TaskOutput, TaskExecutionError>(TaskExecutionError::permanent("stop here"))
+                    Err::<TaskOutput, TaskExecutionError>(TaskExecutionError::permanent(
+                        "stop here",
+                    ))
                 },
             )
             .expect("register failing task");
