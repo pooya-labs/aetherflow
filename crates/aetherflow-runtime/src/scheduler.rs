@@ -16,7 +16,8 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clock::Clock;
 use crate::repository::{
-    RepositoryError, TaskClaim, TaskInput, TaskOutput, TaskRepository, TaskRun,
+    RepositoryError, TaskClaim, TaskDependencyOutput, TaskInput, TaskOutput, TaskRepository,
+    TaskRun,
 };
 use crate::workflow::{
     TaskRunIdGenerator, WorkflowDefinition, WorkflowExecutionError, WorkflowExecutionResult,
@@ -60,6 +61,7 @@ impl TaskCancellation {
 #[derive(Clone, Debug)]
 pub struct TaskContext {
     claim: TaskClaim,
+    dependency_outputs: Vec<TaskDependencyOutput>,
     cancellation: TaskCancellation,
 }
 
@@ -74,6 +76,20 @@ impl TaskContext {
     #[must_use]
     pub fn input(&self) -> &TaskInput {
         self.claim.task_run().input()
+    }
+
+    /// Returns outputs from this task's direct dependencies.
+    #[must_use]
+    pub fn dependency_outputs(&self) -> &[TaskDependencyOutput] {
+        &self.dependency_outputs
+    }
+
+    /// Returns one direct dependency's output by task definition identifier.
+    #[must_use]
+    pub fn dependency_output(&self, task_id: &TaskId) -> Option<&TaskDependencyOutput> {
+        self.dependency_outputs
+            .iter()
+            .find(|dependency| dependency.task_id() == task_id)
     }
 
     /// Returns a cloneable cooperative cancellation handle.
@@ -316,6 +332,10 @@ impl SchedulerConfig {
 pub enum SchedulerError {
     /// The repository returned an unexpected error.
     Repository(RepositoryError),
+    /// A direct dependency has not successfully completed.
+    DependencyNotSucceeded(String),
+    /// A successful direct dependency did not retain an output payload.
+    DependencyOutputMissing(String),
     /// A task-run already has a live cancellation registration.
     DuplicateActiveClaim(String),
     /// A worker task panicked or was aborted outside normal scheduler control.
@@ -326,6 +346,12 @@ impl std::fmt::Display for SchedulerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Repository(error) => error.fmt(formatter),
+            Self::DependencyNotSucceeded(task_run_id) => {
+                write!(formatter, "task dependency has not succeeded: {task_run_id}")
+            }
+            Self::DependencyOutputMissing(task_run_id) => {
+                write!(formatter, "successful dependency has no output: {task_run_id}")
+            }
             Self::DuplicateActiveClaim(task_run_id) => {
                 write!(
                     formatter,
@@ -343,7 +369,10 @@ impl std::error::Error for SchedulerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Repository(error) => Some(error),
-            Self::DuplicateActiveClaim(_) | Self::WorkerTaskPanicked(_) => None,
+            Self::DependencyNotSucceeded(_)
+            | Self::DependencyOutputMissing(_)
+            | Self::DuplicateActiveClaim(_)
+            | Self::WorkerTaskPanicked(_) => None,
         }
     }
 }
@@ -658,11 +687,23 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                         .get(task_key)
                         .expect("every definition task has a generated run ID")
                         .clone();
-                    self.repository.insert(TaskRun::new_with_input(
+                    let dependency_run_ids = task
+                        .dependencies()
+                        .iter()
+                        .map(|dependency_id| {
+                            task_run_ids
+                                .get(dependency_id.as_str())
+                                .expect("dependency has a generated task-run ID")
+                                .clone()
+                        })
+                        .collect();
+
+                    self.repository.insert(TaskRun::new_with_dependencies(
                         task_run_id,
                         workflow_run_id.clone(),
                         task_id.clone(),
                         task.input().clone(),
+                        dependency_run_ids,
                         self.clock.now_ms(),
                         self.clock.now_ms(),
                     ))?;
@@ -742,6 +783,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     };
 
                     let handler = self.registry.handler_for(claim.task_run().task_id());
+                    let dependency_outputs = self.load_dependency_outputs(claim.task_run())?;
                     let task_run_id = claim.task_run().task_run_id().clone();
                     let expected_version = claim.task_run().version();
                     let (cancellation_tx, cancellation_rx) = watch::channel(false);
@@ -774,6 +816,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                             config,
                             claim,
                             handler,
+                            dependency_outputs,
                             cancellation_rx,
                             cancellation_tx,
                         })
@@ -870,6 +913,33 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
         }
     }
 
+    fn load_dependency_outputs(
+        &self,
+        task_run: &TaskRun,
+    ) -> Result<Vec<TaskDependencyOutput>, SchedulerError> {
+        let mut outputs = Vec::with_capacity(task_run.dependencies().len());
+
+        for dependency_run_id in task_run.dependencies() {
+            let dependency = self.repository.get(dependency_run_id)?;
+            if dependency.status() != TaskStatus::Succeeded {
+                return Err(SchedulerError::DependencyNotSucceeded(
+                    dependency_run_id.as_str().to_owned(),
+                ));
+            }
+
+            let output = dependency.output().cloned().ok_or_else(|| {
+                SchedulerError::DependencyOutputMissing(dependency_run_id.as_str().to_owned())
+            })?;
+            outputs.push(TaskDependencyOutput::new(
+                dependency.task_id().clone(),
+                dependency_run_id.clone(),
+                output,
+            ));
+        }
+
+        Ok(outputs)
+    }
+
     fn cancel_active_task_runs(
         &self,
         active_task_runs: &Mutex<HashMap<String, TaskRunId>>,
@@ -945,6 +1015,7 @@ struct ClaimExecution<R: TaskRepository + 'static> {
     config: SchedulerConfig,
     claim: TaskClaim,
     handler: Option<Arc<dyn TaskHandler>>,
+    dependency_outputs: Vec<TaskDependencyOutput>,
     cancellation_rx: watch::Receiver<bool>,
     cancellation_tx: watch::Sender<bool>,
 }
@@ -959,6 +1030,7 @@ async fn execute_claim<R: TaskRepository + 'static>(
         config,
         claim,
         handler,
+        dependency_outputs,
         cancellation_rx,
         cancellation_tx,
     } = execution;
@@ -970,6 +1042,7 @@ async fn execute_claim<R: TaskRepository + 'static>(
     let future: TaskFuture = match handler {
         Some(handler) => handler.execute(TaskContext {
             claim,
+            dependency_outputs,
             cancellation: TaskCancellation {
                 receiver: cancellation_rx,
             },
@@ -1405,6 +1478,88 @@ mod tests {
         assert_eq!(
             result.task_runs()[0].output().map(TaskOutput::as_bytes),
             Some(&b"processed"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_passes_direct_dependency_output_to_downstream_handler() {
+        use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
+        use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
+
+        let repository = Arc::new(InMemoryRepository::new());
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(
+                TaskId::parse("task-a").expect("valid task ID"),
+                |_context: super::TaskContext| async {
+                    Ok::<TaskOutput, TaskExecutionError>(
+                        TaskOutput::new(b"parent-result".to_vec())
+                            .expect("valid parent output"),
+                    )
+                },
+            )
+            .expect("register parent handler");
+        registry
+            .register(
+                TaskId::parse("task-b").expect("valid task ID"),
+                |context: super::TaskContext| async move {
+                    let parent_id = TaskId::parse("task-a").expect("valid parent task ID");
+                    let dependency = context
+                        .dependency_output(&parent_id)
+                        .expect("parent output is available");
+                    assert_eq!(dependency.output().as_bytes(), b"parent-result");
+                    Ok::<TaskOutput, TaskExecutionError>(
+                        TaskOutput::new(b"child-result".to_vec()).expect("valid child output"),
+                    )
+                },
+            )
+            .expect("register child handler");
+
+        let scheduler = TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(2, None, 1),
+        );
+        let definition = WorkflowDefinition::new(
+            WorkflowId::parse("workflow-dataflow").expect("valid workflow ID"),
+            vec![
+                WorkflowTask::new(
+                    TaskId::parse("task-a").expect("valid task ID"),
+                    Vec::new(),
+                ),
+                WorkflowTask::new(
+                    TaskId::parse("task-b").expect("valid task ID"),
+                    vec![TaskId::parse("task-a").expect("valid dependency")],
+                ),
+            ],
+        )
+        .expect("valid workflow DAG");
+
+        let result = scheduler
+            .execute_workflow(
+                definition,
+                WorkflowRunId::parse("workflow-run-dataflow").expect("valid workflow-run ID"),
+                &SequenceTaskRunIdGenerator::new(),
+                watch::channel(false).1,
+            )
+            .await
+            .expect("workflow executes");
+
+        assert_eq!(
+            result.status(),
+            aetherflow_core::domain::WorkflowStatus::Succeeded
+        );
+        assert_eq!(result.task_runs().len(), 2);
+        let child = result
+            .task_runs()
+            .iter()
+            .find(|task_run| task_run.task_id().as_str() == "task-b")
+            .expect("child task run exists");
+        assert_eq!(
+            child.output().map(TaskOutput::as_bytes),
+            Some(&b"child-result"[..])
         );
     }
 

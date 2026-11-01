@@ -138,6 +138,42 @@ impl TaskOutput {
     }
 }
 
+/// Output produced by one direct workflow dependency.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskDependencyOutput {
+    task_id: TaskId,
+    task_run_id: TaskRunId,
+    output: TaskOutput,
+}
+
+impl TaskDependencyOutput {
+    pub(crate) fn new(task_id: TaskId, task_run_id: TaskRunId, output: TaskOutput) -> Self {
+        Self {
+            task_id,
+            task_run_id,
+            output,
+        }
+    }
+
+    /// Returns the upstream task definition identifier.
+    #[must_use]
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+
+    /// Returns the upstream task execution identifier.
+    #[must_use]
+    pub fn task_run_id(&self) -> &TaskRunId {
+        &self.task_run_id
+    }
+
+    /// Returns the upstream task's successful output.
+    #[must_use]
+    pub fn output(&self) -> &TaskOutput {
+        &self.output
+    }
+}
+
 /// One task execution tracked by the single-node runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskRun {
@@ -145,6 +181,7 @@ pub struct TaskRun {
     workflow_run_id: WorkflowRunId,
     task_id: TaskId,
     input: TaskInput,
+    dependencies: Vec<TaskRunId>,
     output: Option<TaskOutput>,
     lifecycle: Versioned<TaskStatus>,
     attempts_started: u32,
@@ -184,11 +221,34 @@ impl TaskRun {
         created_at_ms: u64,
         available_at_ms: u64,
     ) -> Self {
+        Self::new_with_dependencies(
+            task_run_id,
+            workflow_run_id,
+            task_id,
+            input,
+            Vec::new(),
+            created_at_ms,
+            available_at_ms,
+        )
+    }
+
+    /// Creates a pending task run with direct workflow dependency references.
+    #[must_use]
+    pub fn new_with_dependencies(
+        task_run_id: TaskRunId,
+        workflow_run_id: WorkflowRunId,
+        task_id: TaskId,
+        input: TaskInput,
+        dependencies: Vec<TaskRunId>,
+        created_at_ms: u64,
+        available_at_ms: u64,
+    ) -> Self {
         Self {
             task_run_id,
             workflow_run_id,
             task_id,
             input,
+            dependencies,
             output: None,
             lifecycle: Versioned::new(TaskStatus::Pending),
             attempts_started: 0,
@@ -221,6 +281,12 @@ impl TaskRun {
     #[must_use]
     pub fn input(&self) -> &TaskInput {
         &self.input
+    }
+
+    /// Returns the direct predecessor task-run identifiers.
+    #[must_use]
+    pub fn dependencies(&self) -> &[TaskRunId] {
+        &self.dependencies
     }
 
     /// Returns the output payload from a successful completion, if present.

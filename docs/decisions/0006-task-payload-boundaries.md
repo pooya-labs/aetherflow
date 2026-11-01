@@ -18,7 +18,7 @@ Each individual task input and output payload is limited to 1 MiB. Constructors 
 
 ### Workflow task inputs
 
-WorkflowTask may carry one static validated TaskInput. When the coordinator materializes its TaskRun after dependencies are satisfied, it copies that input into the task-run record. Automatic predecessor-output mapping, templating, and data transformation are deliberately deferred; handlers may use application-specific services for cross-task data access until an explicit mapping contract is designed.
+WorkflowTask may carry one static validated TaskInput. When the coordinator materializes its TaskRun after dependencies are satisfied, it copies that input into the task-run record. The coordinator stores direct predecessor TaskRunId references on each materialized task. Before invoking a handler, the scheduler loads each direct predecessor's successful TaskOutput and exposes it in TaskContext as a TaskDependencyOutput keyed by TaskId and TaskRunId. The runtime does not concatenate outputs into TaskInput or prescribe a transformation; handlers own mapping and serialization.
 
 ### Handler contract and persistence
 
@@ -31,4 +31,4 @@ WorkflowExecutionResult includes TaskRun snapshots, so outputs are available to 
 - Payload transfer is bounded and independent of a serializer.
 - Handler outputs are retained only when task completion commits successfully.
 - A future database adapter can persist the opaque byte values and their size limits without changing handler semantics.
-- Application-level schema versioning and cross-task output mapping remain explicit future work.
+- Application-level schema versioning and transformations from predecessor outputs into a task's static input remain application responsibilities.
