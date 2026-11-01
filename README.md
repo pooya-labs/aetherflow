@@ -41,11 +41,11 @@ Technology choices are provisional until validated by implementation and recorde
 
 ## Repository map
 
-The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, [docs/architecture/overview.md](docs/architecture/overview.md) for system boundaries, and [docs/decisions/](docs/decisions/) for architecture decisions.
+The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, [docs/architecture/overview.md](docs/architecture/overview.md) for system boundaries, [docs/decisions/](docs/decisions/) for architecture decisions, and [docs/development.md](docs/development.md) for local commands.
 
 ## Development status
 
-No production-readiness or performance claims are made at this stage. Each milestone must include tests, documented behavior, and a reproducible verification command before it is marked complete.
+The Rust workspace now contains an infrastructure-independent core crate and a minimal bootstrap health server. The server is sequential and intentionally not production-ready. See the roadmap for verification status.
 
 ## License
 
