@@ -1,6 +1,6 @@
 # AetherFlow — Master Roadmap
 
-This file is the **source of truth** for project progress. Update it in the same change as meaningful implementation work. If a chat or network session is interrupted, resume from **Current checkpoint** and the first unchecked task in the active phase.
+This file is the **source of truth** for project progress. If a chat or network session is interrupted, resume from **Current checkpoint** and the first unchecked task in the active phase.
 
 Last updated: 2026-11-02  
 Current branch: `main`  
@@ -10,28 +10,30 @@ Overall status: **In progress**
 ## Progress rules
 
 - [x] Create this persistent roadmap in the repository.
-- [ ] A task is checked only after the artifact exists and its verification has passed.
-- [ ] Record exact commands and outcomes; never mark an unrun test as passing.
-- [ ] Keep this file current at every milestone boundary and before ending a work session.
-- [ ] Prefer small, reviewable commits; do not claim a feature is complete because scaffolding exists.
-- [ ] Record blockers, assumptions, and manual actions explicitly.
+- [x] Check tasks only after the artifact exists; verification tasks require an actual run.
+- [x] Record exact commands and outcomes; never mark an unrun test as passing.
+- [x] Keep this file current at every milestone boundary and before ending a work session.
+- [x] Prefer small, reviewable commits and explicit limitations.
+- [x] Record blockers, assumptions, and manual actions explicitly.
 
 ## Milestones
 
 ### M00 — Project charter and architecture baseline
 - [x] Confirm public repository and write access.
 - [x] Define project purpose, non-goals, and initial technology direction.
-- [x] Establish this persistent roadmap and recovery protocol.
-- [ ] Add architecture overview and initial ADRs.
-- [ ] Add license, contribution, and security policy.
-- [ ] Review naming, scope, and first implementation boundary.
+- [x] Establish persistent roadmap and recovery protocol.
+- [x] Add architecture overview.
+- [x] Record ADR-0001: Rust-first modular core.
+- [x] Add contribution and security guidance.
+- [ ] Select and add an explicit open-source license.
+- [ ] Review scope and first implementation boundary.
 
 ### M01 — Rust workspace foundation
 - [ ] Add pinned Rust toolchain and workspace manifest.
-- [ ] Establish crate boundaries for domain, application, and adapters.
+- [ ] Establish minimal crate boundaries for domain and runtime.
 - [ ] Add formatting, linting, and test conventions.
 - [ ] Add CI for formatting, Clippy, unit tests, and documentation.
-- [ ] Add a minimal executable and health endpoint.
+- [ ] Add minimal executable and health endpoint.
 - [ ] Verify clean build from a fresh checkout.
 
 ### M02 — Execution domain and state machine
@@ -42,7 +44,7 @@ Overall status: **In progress**
 - [ ] Document failure semantics and invariants.
 
 ### M03 — Single-node execution runtime
-- [ ] Implement in-memory repository for fast deterministic tests.
+- [ ] Implement in-memory repository for deterministic tests.
 - [ ] Implement bounded async scheduler and worker loop.
 - [ ] Add task registration and workflow execution API.
 - [ ] Add concurrency limits, deadlines, cancellation, and retry policy.
@@ -58,7 +60,7 @@ Overall status: **In progress**
 ### M05 — Distributed coordination and event delivery
 - [ ] Define node membership and worker ownership model.
 - [ ] Add transactional outbox/inbox where required.
-- [ ] Integrate NATS JetStream only after transport-independent contracts stabilize.
+- [ ] Integrate NATS JetStream after transport-independent contracts stabilize.
 - [ ] Test redelivery, lease expiry, partition, and worker loss.
 - [ ] Document delivery guarantees and operational limits.
 
@@ -80,7 +82,7 @@ Overall status: **In progress**
 - [ ] Add structured logs, metrics, and distributed tracing.
 - [ ] Add Docker Compose development environment.
 - [ ] Add backup/restore and schema upgrade runbooks.
-- [ ] Add load and reproducible benchmark suites.
+- [ ] Add reproducible load and benchmark suites.
 - [ ] Add chaos/failure-injection scenarios.
 - [ ] Add dependency, license, secret, and supply-chain checks.
 - [ ] Publish threat model, SLO proposal, and operational guide.
@@ -94,23 +96,23 @@ Overall status: **In progress**
 
 ## Current checkpoint
 
-**Completed:** Repository confirmed; initial project charter and roadmap committed.  
-**In progress:** M00 architecture baseline.  
-**Next action:** Add architecture overview and ADR-0001, then project policies.  
-**Verification:** Repository content writes succeeded. No Rust build or tests exist yet.  
+**Completed:** README, master roadmap, architecture overview, ADR-0001, CONTRIBUTING, and SECURITY guidance committed to `main`.  
+**In progress:** M00 project baseline.  
+**Next action:** Select license; then establish Rust workspace and CI.  
+**Verification:** GitHub confirmed all listed files are committed. No Rust workspace, build, or tests exist yet.  
 **Blockers:** None known.  
-**Manual action required from owner:** None at this checkpoint.
+**Manual action required from owner:** None now. License choice is intentionally left open rather than silently assigning legal terms.
 
 ## Session log
 
 | Date | Milestone | Result |
 |---|---|---|
-| 2026-11-02 | M00 | Repository verified; charter and persistent roadmap created |
+| 2026-11-02 | M00 | Repository verified; project charter, architecture baseline, ADR, policies, and recovery roadmap committed |
 
 ## Resume instructions
 
 1. Open this file on the default branch.
-2. Read the **Current checkpoint** section.
-3. Inspect the latest commit and working milestone artifacts.
-4. Continue with the first unchecked task; do not repeat completed work.
+2. Read **Current checkpoint**.
+3. Inspect the latest commit and active milestone artifacts.
+4. Continue from the first unchecked task; do not repeat completed work.
 5. Update this file with verified outcomes before stopping.
