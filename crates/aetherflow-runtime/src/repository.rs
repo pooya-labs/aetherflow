@@ -157,7 +157,10 @@ impl std::fmt::Display for RepositoryError {
             Self::DuplicateTaskRun(id) => write!(formatter, "task run already exists: {id}"),
             Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
             Self::StaleVersion { expected, actual } => {
-                write!(formatter, "stale task-run version: expected {expected}, actual {actual}")
+                write!(
+                    formatter,
+                    "stale task-run version: expected {expected}, actual {actual}"
+                )
             }
             Self::WorkerMismatch(id) => {
                 write!(formatter, "worker does not own task-run claim: {id}")
@@ -320,7 +323,10 @@ impl TaskRepository for InMemoryRepository {
                 continue;
             }
 
-            if matches!(task.status(), TaskStatus::Pending | TaskStatus::RetryWaiting) {
+            if matches!(
+                task.status(),
+                TaskStatus::Pending | TaskStatus::RetryWaiting
+            ) {
                 task.lifecycle.transition(TaskStatus::Ready)?;
                 task.updated_at_ms = now_ms;
                 promoted.push(task.task_run_id.clone());
@@ -501,12 +507,20 @@ mod tests {
         let id = task.task_run_id().clone();
         repository.insert(task).expect("insert task");
 
-        assert!(repository.promote_due(49).expect("promote early").is_empty());
+        assert!(
+            repository
+                .promote_due(49)
+                .expect("promote early")
+                .is_empty()
+        );
         assert_eq!(
             repository.get(&id).expect("read task").status(),
             TaskStatus::Pending
         );
-        assert_eq!(repository.promote_due(50).expect("promote due"), vec![id.clone()]);
+        assert_eq!(
+            repository.promote_due(50).expect("promote due"),
+            vec![id.clone()]
+        );
         assert_eq!(
             repository.get(&id).expect("read ready task").status(),
             TaskStatus::Ready
@@ -516,8 +530,12 @@ mod tests {
     #[test]
     fn claims_are_exclusive_and_deterministically_ordered() {
         let repository = InMemoryRepository::new();
-        repository.insert(task_run("task-run-b", 10, 10)).expect("insert b");
-        repository.insert(task_run("task-run-a", 10, 10)).expect("insert a");
+        repository
+            .insert(task_run("task-run-b", 10, 10))
+            .expect("insert b");
+        repository
+            .insert(task_run("task-run-a", 10, 10))
+            .expect("insert a");
         repository.promote_due(10).expect("promote due");
 
         let first = repository
@@ -556,8 +574,16 @@ mod tests {
             .schedule_retry(&id, &worker("worker-01"), first_version, 100, 20)
             .expect("schedule retry");
 
-        assert!(repository.promote_due(99).expect("too early").is_empty());
-        assert_eq!(repository.promote_due(100).expect("retry due"), vec![id.clone()]);
+        assert!(
+            repository
+                .promote_due(99)
+                .expect("too early")
+                .is_empty()
+        );
+        assert_eq!(
+            repository.promote_due(100).expect("retry due"),
+            vec![id.clone()]
+        );
 
         let second_claim = repository
             .claim_next(&worker("worker-02"), 101)
@@ -669,7 +695,9 @@ mod tests {
         let id = task.task_run_id().clone();
         repository.insert(task).expect("insert task");
 
-        let timeout = repository.timeout(&id, 0, 10).expect("time out pending task");
+        let timeout = repository
+            .timeout(&id, 0, 10)
+            .expect("time out pending task");
         assert_eq!(timeout.to, TaskStatus::TimedOut);
         assert_eq!(
             repository.cancel(&id, 0, 11),
