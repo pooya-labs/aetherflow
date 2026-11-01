@@ -1,10 +1,10 @@
 //! Bounded asynchronous task scheduler and local worker loop.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aetherflow_core::domain::{
@@ -24,23 +24,74 @@ use crate::workflow::{
 pub type TaskFuture =
     Pin<Box<dyn Future<Output = Result<(), TaskExecutionError>> + Send + 'static>>;
 
+/// Cooperative cancellation signal supplied to a running task handler.
+#[derive(Clone, Debug)]
+pub struct TaskCancellation {
+    receiver: watch::Receiver<bool>,
+}
+
+impl TaskCancellation {
+    /// Returns whether cancellation has already been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        *self.receiver.borrow()
+    }
+
+    /// Waits until cancellation is requested or the scheduler drops the signal.
+    ///
+    /// A handler should check this signal at safe interruption points and
+    /// arrange its own cleanup for resources or external operations.
+    pub async fn cancelled(&mut self) {
+        loop {
+            if *self.receiver.borrow_and_update() {
+                return;
+            }
+
+            if self.receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Context passed to every task-handler attempt.
+#[derive(Clone, Debug)]
+pub struct TaskContext {
+    claim: TaskClaim,
+    cancellation: TaskCancellation,
+}
+
+impl TaskContext {
+    /// Returns the immutable claim and attempt snapshot.
+    #[must_use]
+    pub fn claim(&self) -> &TaskClaim {
+        &self.claim
+    }
+
+    /// Returns a cloneable cooperative cancellation handle.
+    #[must_use]
+    pub fn cancellation(&self) -> TaskCancellation {
+        self.cancellation.clone()
+    }
+}
+
 /// Executes one claimed task attempt.
 ///
-/// Implementations receive an immutable snapshot. They must make external side
-/// effects idempotent when retries are possible; the scheduler does not promise
-/// exactly-once execution.
+/// Implementations receive the claim and a cooperative cancellation signal.
+/// They must make external side effects idempotent when retries are possible;
+/// the scheduler does not promise exactly-once execution.
 pub trait TaskHandler: Send + Sync + 'static {
-    /// Executes the claimed attempt.
-    fn execute(&self, claim: TaskClaim) -> TaskFuture;
+    /// Executes the claimed attempt with its cancellation context.
+    fn execute(&self, context: TaskContext) -> TaskFuture;
 }
 
 impl<F, Fut> TaskHandler for F
 where
-    F: Fn(TaskClaim) -> Fut + Send + Sync + 'static,
+    F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), TaskExecutionError>> + Send + 'static,
 {
-    fn execute(&self, claim: TaskClaim) -> TaskFuture {
-        Box::pin((self)(claim))
+    fn execute(&self, context: TaskContext) -> TaskFuture {
+        Box::pin((self)(context))
     }
 }
 
@@ -213,6 +264,8 @@ impl SchedulerConfig {
 pub enum SchedulerError {
     /// The repository returned an unexpected error.
     Repository(RepositoryError),
+    /// A task-run already has a live cancellation registration.
+    DuplicateActiveClaim(String),
     /// A worker task panicked or was aborted outside normal scheduler control.
     WorkerTaskPanicked(String),
 }
@@ -221,6 +274,9 @@ impl std::fmt::Display for SchedulerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Repository(error) => error.fmt(formatter),
+            Self::DuplicateActiveClaim(task_run_id) => {
+                write!(formatter, "task run already has an active claim: {task_run_id}")
+            }
             Self::WorkerTaskPanicked(message) => {
                 write!(formatter, "worker task terminated unexpectedly: {message}")
             }
@@ -232,7 +288,7 @@ impl std::error::Error for SchedulerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Repository(error) => Some(error),
-            Self::WorkerTaskPanicked(_) => None,
+            Self::DuplicateActiveClaim(_) | Self::WorkerTaskPanicked(_) => None,
         }
     }
 }
@@ -253,6 +309,7 @@ pub struct TaskScheduler<R: TaskRepository + 'static> {
     worker_id: WorkerId,
     registry: Arc<TaskRegistry>,
     config: SchedulerConfig,
+    cancellations: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
 
 impl<R: TaskRepository + 'static> Clone for TaskScheduler<R> {
@@ -263,6 +320,7 @@ impl<R: TaskRepository + 'static> Clone for TaskScheduler<R> {
             worker_id: self.worker_id.clone(),
             registry: Arc::clone(&self.registry),
             config: self.config.clone(),
+            cancellations: Arc::clone(&self.cancellations),
         }
     }
 }
@@ -283,6 +341,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             worker_id,
             registry: Arc::new(registry),
             config,
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -303,9 +362,92 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
         task_run_id: &TaskRunId,
         expected_version: u64,
     ) -> Result<Transition<TaskStatus>, SchedulerError> {
-        Ok(self
+        self.cancel_task_run_at(task_run_id, expected_version, self.clock.now_ms())
+    }
+
+    fn cancel_task_run_at(
+        &self,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+        now_ms: u64,
+    ) -> Result<Transition<TaskStatus>, SchedulerError> {
+        let transition = self
             .repository
-            .cancel(task_run_id, expected_version, self.clock.now_ms())?)
+            .cancel(task_run_id, expected_version, now_ms)?;
+        self.signal_task_cancellation(task_run_id);
+        Ok(transition)
+    }
+
+    fn register_task_cancellation(
+        &self,
+        task_run_id: &TaskRunId,
+        sender: watch::Sender<bool>,
+    ) -> Result<(), SchedulerError> {
+        let key = task_run_id.as_str().to_owned();
+        let mut cancellations = self
+            .cancellations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        match cancellations.entry(key.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(sender);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(SchedulerError::DuplicateActiveClaim(key)),
+        }
+    }
+
+    fn signal_task_cancellation(&self, task_run_id: &TaskRunId) {
+        let cancellations = self
+            .cancellations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if let Some(sender) = cancellations.get(task_run_id.as_str()) {
+            let _ = sender.send(true);
+        }
+    }
+
+    fn remove_task_cancellation(
+        cancellations: &Mutex<HashMap<String, watch::Sender<bool>>>,
+        task_run_id: &TaskRunId,
+    ) {
+        let mut cancellations = cancellations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cancellations.remove(task_run_id.as_str());
+    }
+
+    fn cancel_workflow_tasks(
+        &self,
+        activated: &BTreeSet<String>,
+        task_run_ids: &BTreeMap<String, TaskRunId>,
+        now_ms: u64,
+    ) -> Result<(), WorkflowExecutionError> {
+        for task_key in activated {
+            let task_run_id = task_run_ids
+                .get(task_key)
+                .expect("activated task has a generated run ID");
+
+            loop {
+                let task_run = self.repository.get(task_run_id)?;
+                if task_run.status().is_terminal() {
+                    break;
+                }
+
+                match self.cancel_task_run_at(task_run_id, task_run.version(), now_ms) {
+                    Ok(_) => break,
+                    Err(SchedulerError::Repository(
+                        RepositoryError::StaleVersion { .. }
+                        | RepositoryError::InvalidTransition(_),
+                    )) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Executes a validated workflow definition using dependency-aware task activation.
@@ -354,9 +496,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
         if *external_shutdown.borrow_and_update() {
             workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-            cancel_workflow_tasks(
-                self.repository.as_ref(),
-                &activated,
+            self.cancel_workflow_tasks(
+                                &activated,
                 &task_run_ids,
                 self.clock.now_ms(),
             )?;
@@ -388,9 +529,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                 && *external_shutdown.borrow_and_update()
             {
                 workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-                cancel_workflow_tasks(
-                    self.repository.as_ref(),
-                    &activated,
+                self.cancel_workflow_tasks(
+                                        &activated,
                     &task_run_ids,
                     self.clock.now_ms(),
                 )?;
@@ -434,9 +574,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     _ => unreachable!("only non-success terminal task states are selected"),
                 };
                 workflow_lifecycle.transition(workflow_status)?;
-                cancel_workflow_tasks(
-                    self.repository.as_ref(),
-                    &activated,
+                self.cancel_workflow_tasks(
+                                        &activated,
                     &task_run_ids,
                     self.clock.now_ms(),
                 )?;
@@ -515,9 +654,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
             if shutdown_requested {
                 workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-                cancel_workflow_tasks(
-                    self.repository.as_ref(),
-                    &activated,
+                self.cancel_workflow_tasks(
+                                        &activated,
                     &task_run_ids,
                     self.clock.now_ms(),
                 )?;
@@ -560,13 +698,36 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     };
 
                     let handler = self.registry.handler_for(claim.task_run().task_id());
+                    let task_run_id = claim.task_run().task_run_id().clone();
+                    let expected_version = claim.task_run().version();
+                    let (cancellation_tx, cancellation_rx) = watch::channel(false);
+                    self.register_task_cancellation(&task_run_id, cancellation_tx.clone())?;
+
+                    let latest = self.repository.get(&task_run_id)?;
+                    if latest.status() != TaskStatus::Running || latest.version() != expected_version {
+                        let _ = cancellation_tx.send(true);
+                    }
+
                     let repository = Arc::clone(&self.repository);
                     let clock = Arc::clone(&self.clock);
                     let worker_id = self.worker_id.clone();
                     let config = self.config.clone();
+                    let cancellations = Arc::clone(&self.cancellations);
 
                     active_tasks.spawn(async move {
-                        execute_claim(repository, clock, worker_id, config, claim, handler).await
+                        let result = execute_claim(
+                            repository,
+                            clock,
+                            worker_id,
+                            config,
+                            claim,
+                            handler,
+                            cancellation_rx,
+                            cancellation_tx,
+                        )
+                        .await;
+                        Self::remove_task_cancellation(&cancellations, &task_run_id);
+                        result
                     });
                 }
             }
@@ -604,35 +765,6 @@ async fn join_worker(
     }
 }
 
-fn cancel_workflow_tasks<R: TaskRepository>(
-    repository: &R,
-    activated: &BTreeSet<String>,
-    task_run_ids: &BTreeMap<String, TaskRunId>,
-    now_ms: u64,
-) -> Result<(), WorkflowExecutionError> {
-    for task_key in activated {
-        let task_run_id = task_run_ids
-            .get(task_key)
-            .expect("activated task has a generated run ID");
-
-        loop {
-            let task_run = repository.get(task_run_id)?;
-            if task_run.status().is_terminal() {
-                break;
-            }
-
-            match repository.cancel(task_run_id, task_run.version(), now_ms) {
-                Ok(_) => break,
-                Err(RepositoryError::StaleVersion { .. }) => continue,
-                Err(RepositoryError::InvalidTransition(_)) => break,
-                Err(error) => return Err(SchedulerError::Repository(error).into()),
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn collect_workflow_result<R: TaskRepository>(
     repository: &R,
     definition: &WorkflowDefinition,
@@ -665,6 +797,8 @@ async fn execute_claim<R: TaskRepository + 'static>(
     config: SchedulerConfig,
     claim: TaskClaim,
     handler: Option<Arc<dyn TaskHandler>>,
+    cancellation_rx: watch::Receiver<bool>,
+    cancellation_tx: watch::Sender<bool>,
 ) -> Result<(), SchedulerError> {
     let task_run_id = claim.task_run().task_run_id().clone();
     let task_id = claim.task_run().task_id().clone();
@@ -672,7 +806,12 @@ async fn execute_claim<R: TaskRepository + 'static>(
     let attempt_number = claim.attempt_number();
 
     let future: TaskFuture = match handler {
-        Some(handler) => handler.execute(claim),
+        Some(handler) => handler.execute(TaskContext {
+            claim,
+            cancellation: TaskCancellation {
+                receiver: cancellation_rx,
+            },
+        }),
         None => {
             let message = format!("no handler registered for task '{}'", task_id.as_str());
             Box::pin(async move { Err(TaskExecutionError::permanent(message)) })
@@ -680,7 +819,13 @@ async fn execute_claim<R: TaskRepository + 'static>(
     };
 
     let outcome = match config.task_timeout {
-        Some(timeout) => tokio::time::timeout(timeout, future).await.ok(),
+        Some(timeout) => {
+            let result = tokio::time::timeout(timeout, future).await;
+            if result.is_err() {
+                let _ = cancellation_tx.send(true);
+            }
+            result.ok()
+        }
         None => Some(future.await),
     };
 
@@ -1115,10 +1260,11 @@ mod tests {
         registry
             .register(
                 TaskId::parse("task-a").expect("valid task ID"),
-                move |_claim| {
+                move |context| {
                     let finished = Arc::clone(&handler_finished);
+                    let mut cancellation = context.cancellation();
                     async move {
-                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        cancellation.cancelled().await;
                         finished.store(1, Ordering::SeqCst);
                         Ok::<(), TaskExecutionError>(())
                     }
@@ -1181,16 +1327,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_context_exposes_claim_and_cooperative_cancellation() {
+        let repository = Arc::new(InMemoryRepository::new());
+        let finished = Arc::new(AtomicUsize::new(0));
+        let handler_finished = Arc::clone(&finished);
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(task_id(), move |context| {
+                let finished = Arc::clone(&handler_finished);
+                let claim = context.claim().clone();
+                let mut cancellation = context.cancellation();
+                async move {
+                    assert_eq!(claim.attempt_number().get(), 1);
+                    cancellation.cancelled().await;
+                    finished.store(1, Ordering::SeqCst);
+                    Ok::<(), TaskExecutionError>(())
+                }
+            })
+            .expect("register cooperative handler");
+
+        let scheduler = Arc::new(TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(1, None, 1),
+        ));
+        let task = task_run("task-run-cooperative");
+        let id = task.task_run_id().clone();
+        scheduler.submit_task_run(task).expect("submit task run");
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let running_scheduler = Arc::clone(&scheduler);
+        let handle = tokio::spawn(async move { running_scheduler.run(shutdown_rx).await });
+        wait_for_status(&repository, &id, TaskStatus::Running).await;
+        let version = repository.get(&id).expect("read running task").version();
+        scheduler.cancel_task_run(&id, version).expect("cancel task");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while finished.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("cooperative handler observes cancellation");
+
+        assert_eq!(repository.get(&id).expect("read task").status(), TaskStatus::Cancelled);
+        shutdown_tx.send(true).expect("signal scheduler shutdown");
+        handle.await.expect("join scheduler").expect("scheduler run");
+    }
+
+    #[tokio::test]
     async fn cancellation_invalidates_completion_from_running_handler() {
         let repository = Arc::new(InMemoryRepository::new());
         let finished = Arc::new(AtomicUsize::new(0));
         let handler_finished = Arc::clone(&finished);
         let mut registry = TaskRegistry::new();
         registry
-            .register(task_id(), move |_claim| {
+            .register(task_id(), move |context| {
                 let finished = Arc::clone(&handler_finished);
+                let mut cancellation = context.cancellation();
                 async move {
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    cancellation.cancelled().await;
                     finished.store(1, Ordering::SeqCst);
                     Ok::<(), TaskExecutionError>(())
                 }

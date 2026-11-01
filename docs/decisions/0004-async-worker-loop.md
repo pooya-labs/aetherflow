@@ -18,7 +18,7 @@ Use Tokio `=1.54.1` in `aetherflow-runtime`, with only the macros, multi-thread 
 
 A fixed registry maps a typed TaskId to one handler. Duplicate registrations are rejected. A missing handler is treated as a permanent task failure rather than silently leaving a claimed task in Running.
 
-Handlers receive a snapshot of TaskClaim and return a future whose result is classified as retryable or permanent. Handler code owns the idempotency of external effects; the scheduler does not promise exactly-once execution.
+Handlers receive a TaskContext containing an immutable TaskClaim snapshot and a cooperative TaskCancellation handle. The scheduler registers one watch-based signal per active task run. Direct task cancellation and workflow cancellation signal the matching handler; handlers may await the signal and perform their own cleanup. A handler that ignores the token is not forcibly stopped. Handler code owns the idempotency of external effects; the scheduler does not promise exactly-once execution.
 
 ### Bounded scheduling
 
@@ -32,11 +32,13 @@ A configured per-attempt timeout drops the handler future and attempts to commit
 
 ### Cancellation and shutdown
 
-Cancellation commits a terminal repository transition. A running handler future is not forcibly cancelled; when it later tries to commit, its stale version is ignored and the cancellation remains authoritative.
+Cancellation commits a terminal repository transition and signals the active handler's TaskCancellation token. Cooperative handlers can stop at safe interruption points and release their own resources. A handler that ignores the token continues running; when it later tries to commit, its stale version is ignored and the cancellation remains authoritative. Timeout also signals the token before settling TimedOut.
 
 Shutdown stops claiming new work and drains active handlers before returning. There is no forced drain deadline yet, so a non-terminating handler can delay shutdown indefinitely.
 
 ### Explicit limitations
+
+The cancellation registry is process-local and is not durable. Cooperative cancellation depends on handler code checking or awaiting its token; the scheduler does not guarantee that arbitrary external effects stop. Shutdown still drains without a deadline.
 
 The scheduler is single-process and uses the in-memory repository. Worker panics terminate the scheduler and can leave their task run in Running until process shutdown. No lease expiry, fencing, recovery, persisted input/output, workflow DAG, or distributed delivery exists yet.
 

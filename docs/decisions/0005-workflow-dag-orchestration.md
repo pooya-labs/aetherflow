@@ -22,7 +22,7 @@ A workflow execution inserts only root task runs initially. A dependent task run
 
 The workflow begins Pending and transitions to Running. When every task succeeds, the workflow becomes Succeeded. The first observed non-success terminal task outcome, ordered by task updated time and TaskId for ties, determines whether the workflow becomes Failed, TimedOut, or Cancelled. Remaining materialized non-terminal tasks are cancelled with expected-version checks.
 
-External shutdown requests cancel the workflow and its materialized non-terminal tasks. The worker loop then stops claiming and drains in-flight handlers. Cancellation remains an orchestration-state change: it does not forcibly stop an external side effect or guarantee handler code has stopped.
+External shutdown requests cancel the workflow and its materialized non-terminal tasks. Cancellation is propagated through each active task's cooperative TaskCancellation token. The worker loop then stops claiming and drains in-flight handlers. A handler can perform cleanup when it observes the token, but cancellation does not prove an external side effect was stopped or undone.
 
 ### Identifier generation
 
