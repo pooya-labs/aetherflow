@@ -68,7 +68,7 @@ jobs:
           psql --version
 
       - name: Run async migration runner against PostgreSQL 18
-        run: cargo +1.99.1 test -p aetherflow-storage-postgres --test postgres_migrations --locked
+        run: cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
 
       - name: Verify migration ledger, required tables, and indexes
         run: |
