@@ -7,6 +7,10 @@ use deadpool_postgres::Pool;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
+mod task_repository;
+
+pub use task_repository::{DurableTaskRun, NewTaskRun, PgTaskClaim, PgTaskRepository, RecoveredLease};
+
 const INITIAL_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0001_initial_schema.sql");
 const MIGRATION_VERSION: i64 = 1;
@@ -32,7 +36,7 @@ pub enum MigrationOutcome {
     },
 }
 
-/// PostgreSQL storage failures.
+/// PostgreSQL storage and durable-task failures.
 #[derive(Debug, Eq, PartialEq)]
 pub enum StorageError {
     /// A connection could not be acquired from the pool.
@@ -42,30 +46,27 @@ pub enum StorageError {
     /// Migration metadata exists but does not describe the expected schema.
     UntrackedSchema,
     /// The database schema is newer than this binary supports.
-    NewerSchema {
-        /// Version found in the database.
-        found: i64,
-        /// Highest version supported by this binary.
-        supported: i64,
-    },
+    NewerSchema { found: i64, supported: i64 },
     /// An applied migration has a different name than this binary expects.
-    MigrationNameMismatch {
-        /// Version being checked.
-        version: i64,
-        /// Expected immutable migration name.
-        expected: String,
-        /// Name stored in the database.
-        actual: String,
-    },
+    MigrationNameMismatch { version: i64, expected: String, actual: String },
     /// An applied migration's checksum differs from the immutable source.
-    MigrationChecksumMismatch {
-        /// Version being checked.
-        version: i64,
-        /// SHA-256 checksum expected by this binary.
-        expected: String,
-        /// SHA-256 checksum stored in the database.
-        actual: String,
-    },
+    MigrationChecksumMismatch { version: i64, expected: String, actual: String },
+    /// A task run does not exist.
+    TaskRunNotFound(String),
+    /// A task claim is stale, expired, or belongs to another worker.
+    ClaimLost(String),
+    /// A lease duration is zero or cannot be represented as signed milliseconds.
+    InvalidLeaseDuration,
+    /// A retry policy cannot be represented by PostgreSQL columns.
+    InvalidRetryPolicy,
+    /// A workflow or task definition is invalid for durable creation.
+    InvalidWorkflow(String),
+    /// Data read from PostgreSQL violates a runtime contract.
+    InvalidStoredValue(String),
+    /// A related row expected inside an atomic operation is missing.
+    InconsistentState(String),
+    /// The persisted attempt budget does not permit another retry.
+    RetryBudgetExhausted(String),
 }
 
 impl fmt::Display for StorageError {
@@ -80,22 +81,32 @@ impl fmt::Display for StorageError {
                 formatter,
                 "database schema version {found} is newer than supported version {supported}"
             ),
-            Self::MigrationNameMismatch {
-                version,
-                expected,
-                actual,
-            } => write!(
+            Self::MigrationNameMismatch { version, expected, actual } => write!(
                 formatter,
                 "migration {version} name mismatch: expected {expected}, found {actual}"
             ),
-            Self::MigrationChecksumMismatch {
-                version,
-                expected,
-                actual,
-            } => write!(
+            Self::MigrationChecksumMismatch { version, expected, actual } => write!(
                 formatter,
                 "migration {version} checksum mismatch: expected {expected}, found {actual}"
             ),
+            Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
+            Self::ClaimLost(id) => write!(formatter, "task claim is no longer owned: {id}"),
+            Self::InvalidLeaseDuration => formatter.write_str(
+                "lease duration must be a positive signed millisecond value",
+            ),
+            Self::InvalidRetryPolicy => formatter.write_str(
+                "retry policy cannot be represented by PostgreSQL columns",
+            ),
+            Self::InvalidWorkflow(message) => write!(formatter, "invalid workflow: {message}"),
+            Self::InvalidStoredValue(message) => {
+                write!(formatter, "invalid value stored in PostgreSQL: {message}")
+            }
+            Self::InconsistentState(message) => {
+                write!(formatter, "inconsistent PostgreSQL state: {message}")
+            }
+            Self::RetryBudgetExhausted(id) => {
+                write!(formatter, "task retry budget is exhausted: {id}")
+            }
         }
     }
 }
