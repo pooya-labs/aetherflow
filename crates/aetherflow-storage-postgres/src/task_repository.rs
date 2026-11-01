@@ -319,7 +319,7 @@ impl PgTaskRepository {
                 ],
             )
             .await
-            .map_err(|error| StorageError::Database(error.to_string()))?;
+            .map_err(|error| StorageError::Database(format!("insert workflow run: {error:?}")))?;
 
         for task in tasks {
             let max_attempts = i32::try_from(task.retry_policy.max_attempts().get())
@@ -369,7 +369,7 @@ impl PgTaskRepository {
                         ],
                     )
                     .await
-                    .map_err(|error| StorageError::Database(error.to_string()))?;
+                    .map_err(|error| StorageError::Database(format!("insert dependency edge: {error:?}")))?;
             }
         }
 
@@ -892,7 +892,7 @@ async fn append_outbox(
             ],
         )
         .await
-        .map_err(|error| StorageError::Database(error.to_string()))?;
+        .map_err(|error| StorageError::Database(format!("append outbox event {event_type}: {error:?}")))?;
     Ok(())
 }
 
