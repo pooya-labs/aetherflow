@@ -27,20 +27,23 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
 
+      - name: Verify locked dependency resolution
+        run: cargo +1.99.1 fetch --locked
+
       - name: Verify formatting
         run: cargo +1.99.1 fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo +1.99.1 clippy --workspace --all-targets -- -D warnings
+        run: cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Run tests
-        run: cargo +1.99.1 test --workspace
+        run: cargo +1.99.1 test --workspace --locked
 
       - name: Build workspace
-        run: cargo +1.99.1 build --workspace --release
+        run: cargo +1.99.1 build --workspace --release --locked
 
       - name: Build documentation
-        run: cargo +1.99.1 doc --workspace --no-deps
+        run: cargo +1.99.1 doc --workspace --no-deps --locked
       - name: Upload resolved Cargo.lock
         uses: actions/upload-artifact@v7
         with:

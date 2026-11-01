@@ -102,13 +102,13 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 **In progress:** M03 single-node runtime. A new `aetherflow-runtime` crate now contains a process-local in-memory task repository, deterministic due-task promotion, exclusive local claiming, attempt counting, expected-version checks, retry scheduling, cancellation, timeout, and an injectable monotonic clock boundary. The in-memory repository and its deterministic/concurrency tests are committed and hosted-verified in run `41353963000`.
 
-**Next action:** Implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Commit the Cargo-resolved Tokio lockfile from the short-lived CI artifact, then implement the bounded async scheduler and worker loop. Keep the in-memory adapter explicitly non-durable.
+**Next action:** Implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable.
 
 **Verification:** M01 hosted run \`41353166515\` for commit \`832e3fc50c8da7e22d2fedaaec9151b3748168b2\` completed successfully. M03 hosted run \`41353963000\` for commit \`54aee8d4be0b88e8610654eb92ed8d4444d009c9\` completed successfully: formatting, Clippy, workspace tests, release build, and documentation build all passed. The repository passed 15 core tests, 9 runtime tests, and 2 server tests. Tokio \`1.54.1\` is now pinned in the runtime manifest; this commit adds a short-lived CI artifact for Cargo's resolved lockfile. The generated lockfile and async scheduler are not yet committed. Local Rust compilation is unavailable because \`rustc\` is not installed in the working environment.
 
 **Known limitations:** The in-memory repository loses all state on process exit and has no lease expiry, fencing, or crash recovery. The async scheduler/worker loop, durable event log, PostgreSQL adapter, external side-effect idempotency API, and retry jitter are not implemented. The bootstrap HTTP server remains sequential and non-production. Retryable error classification and deadline interaction remain runtime responsibilities.
 
-**Blockers:** M03 hosted verification pending. Property-based test dependency remains deferred; the pinned Tokio lockfile is awaiting Cargo's hosted resolution artifact. License selection remains with repository owner.
+**Blockers:** M03 hosted verification pending. Property-based tests remain deferred; Tokio is pinned and its generated lockfile is committed. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -119,7 +119,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Added runtime crate and mutex-backed in-memory repository; fixed incremental HTTP header reads after CI exposed a TCP reset; final hosted run `41353963000` passed formatting, Clippy, all workspace tests, release build, and docs |
+| 2026-11-02 | M03 | Added runtime crate and mutex-backed in-memory repository; fixed incremental HTTP header reads; hosted run `41353963000` passed all quality checks. Pinned Tokio `1.54.1`, retrieved Cargo-generated lockfile from CI artifact, and enabled locked dependency verification; async scheduler remains next |
 
 ## Resume instructions
 
