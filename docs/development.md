@@ -34,11 +34,11 @@ The current server is intentionally a minimal standard-library bootstrap. It han
 ## Workspace layout
 
 - `crates/aetherflow-core`: infrastructure-independent domain primitives.
-- `crates/aetherflow-runtime`: single-node runtime contracts, in-memory repository, and bounded async scheduler.
+- `crates/aetherflow-runtime`: single-node runtime contracts, in-memory repository, bounded async scheduler, DAG validation, and workflow-run coordinator.
 - `apps/aetherflow-server`: minimal process and bootstrap health endpoint.
 
 Keep domain rules out of runtime and network adapters. The initial in-memory repository uses one short-held mutex and deterministic caller-supplied timestamps; never hold repository locks across an `.await`. It is a test/runtime adapter, not durable storage. Add dependencies only when a milestone has a concrete need and record material architecture changes in an ADR.
 
 ## Verification honesty
 
-A CI workflow is committed, but its first hosted run must complete successfully before the foundation milestone can be marked verified. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. CI runs every check with locked dependency resolution and publishes the resolved lockfile as a short-lived artifact for review when the dependency graph changes.
+A CI workflow is committed, but its first hosted run must complete successfully before the foundation milestone can be marked verified. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. CI runs every check with locked dependency resolution and publishes the resolved lockfile as a short-lived artifact for review when the dependency graph changes. The latest fully green workflow coordinator run is `41356396516` (42 unit tests, release build, and docs).

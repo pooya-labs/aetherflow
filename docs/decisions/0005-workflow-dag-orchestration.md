@@ -1,6 +1,6 @@
 # ADR-0005: Workflow DAG orchestration
 
-- **Status:** Accepted for the M03 implementation baseline
+- **Status:** Accepted; implementation hosted-verified in run `41356396516`
 - **Date:** 2026-11-02
 - **Scope:** Process-local workflow definition validation and dependency-aware task activation
 
@@ -30,7 +30,7 @@ TaskRunIdGenerator is injected into workflow execution. SequenceTaskRunIdGenerat
 
 ### Explicit limitations
 
-Workflow-run lifecycle state is held in the execution call and returned as a terminal WorkflowExecutionResult; it is not persisted. Workflow task input/output, workflow deadlines, compensation, distributed workers, durable state transitions, and lease/fencing are out of scope for M03.
+Workflow-run lifecycle state is held in the execution call and returned as a terminal WorkflowExecutionResult; it is not persisted. Handler futures do not yet receive cooperative cancellation tokens; cancellation only commits orchestration state and invalidates later stale completion. Shutdown has no forced drain deadline. Workflow task input/output, workflow deadlines, compensation, distributed workers, durable state transitions, and lease/fencing are out of scope for M03.
 
 ## Consequences
 
