@@ -408,12 +408,7 @@ impl TaskRunIdGenerator for SequenceTaskRunIdGenerator {
 
             if self
                 .next
-                .compare_exchange_weak(
-                    current,
-                    next,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
                 break current;
