@@ -704,7 +704,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     let cancellations = Arc::clone(&self.cancellations);
 
                     active_tasks.spawn(async move {
-                        let result = execute_claim(
+                        let result = execute_claim(ClaimExecution {
                             repository,
                             clock,
                             worker_id,
@@ -713,7 +713,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                             handler,
                             cancellation_rx,
                             cancellation_tx,
-                        )
+                        })
                         .await;
                         Self::remove_task_cancellation(&cancellations, &task_run_id);
                         result
@@ -779,7 +779,7 @@ fn collect_workflow_result<R: TaskRepository>(
     ))
 }
 
-async fn execute_claim<R: TaskRepository + 'static>(
+struct ClaimExecution<R: TaskRepository + 'static> {
     repository: Arc<R>,
     clock: Arc<dyn Clock>,
     worker_id: WorkerId,
@@ -788,7 +788,21 @@ async fn execute_claim<R: TaskRepository + 'static>(
     handler: Option<Arc<dyn TaskHandler>>,
     cancellation_rx: watch::Receiver<bool>,
     cancellation_tx: watch::Sender<bool>,
+}
+
+async fn execute_claim<R: TaskRepository + 'static>(
+    execution: ClaimExecution<R>,
 ) -> Result<(), SchedulerError> {
+    let ClaimExecution {
+        repository,
+        clock,
+        worker_id,
+        config,
+        claim,
+        handler,
+        cancellation_rx,
+        cancellation_tx,
+    } = execution;
     let task_run_id = claim.task_run().task_run_id().clone();
     let task_id = claim.task_run().task_id().clone();
     let expected_version = claim.task_run().version();
@@ -1249,7 +1263,7 @@ mod tests {
         registry
             .register(
                 TaskId::parse("task-a").expect("valid task ID"),
-                move |context| {
+                move |context: super::TaskContext| {
                     let finished = Arc::clone(&handler_finished);
                     let mut cancellation = context.cancellation();
                     async move {
