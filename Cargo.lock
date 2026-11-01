@@ -25,7 +25,10 @@ dependencies = [
 name = "aetherflow-storage-postgres"
 version = "0.1.0"
 dependencies = [
+ "aetherflow-core",
+ "aetherflow-runtime",
  "deadpool-postgres",
+ "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tokio-postgres",
