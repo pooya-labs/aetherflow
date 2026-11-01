@@ -82,7 +82,18 @@ CREATE TABLE task_runs (
     CONSTRAINT task_runs_workflow_id_uq UNIQUE (workflow_run_id, task_run_id),
     CONSTRAINT task_runs_attempt_budget_check CHECK (attempts_started <= max_attempts),
     CONSTRAINT task_runs_running_lease_check
-        CHECK ((status = 'running') = (claimed_by IS NOT NULL AND lease_expires_at IS NOT NULL)),
+        CHECK (
+            (
+                status = 'running'
+                AND claimed_by IS NOT NULL
+                AND lease_expires_at IS NOT NULL
+            )
+            OR (
+                status <> 'running'
+                AND claimed_by IS NULL
+                AND lease_expires_at IS NULL
+            )
+        ),
     CONSTRAINT task_runs_started_timestamp_check
         CHECK (attempts_started = 0 OR started_at IS NOT NULL),
     CONSTRAINT task_runs_output_status_check
