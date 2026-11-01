@@ -346,7 +346,9 @@ impl PgTaskRepository {
                     ],
                 )
                 .await
-                .map_err(|error| StorageError::Database(format!("insert task-run row: {error:?}")))?;
+                .map_err(|error| {
+                    StorageError::Database(format!("insert task-run row: {error:?}"))
+                })?;
         }
 
         for task in tasks {
