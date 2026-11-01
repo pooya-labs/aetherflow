@@ -15,14 +15,16 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clock::Clock;
-use crate::repository::{RepositoryError, TaskClaim, TaskRepository, TaskRun};
+use crate::repository::{
+    RepositoryError, TaskClaim, TaskInput, TaskOutput, TaskRepository, TaskRun,
+};
 use crate::workflow::{
     TaskRunIdGenerator, WorkflowDefinition, WorkflowExecutionError, WorkflowExecutionResult,
 };
 
 /// Boxed asynchronous task-handler future.
 pub type TaskFuture =
-    Pin<Box<dyn Future<Output = Result<(), TaskExecutionError>> + Send + 'static>>;
+    Pin<Box<dyn Future<Output = Result<TaskOutput, TaskExecutionError>> + Send + 'static>>;
 
 /// Cooperative cancellation signal supplied to a running task handler.
 #[derive(Clone, Debug)]
@@ -68,6 +70,12 @@ impl TaskContext {
         &self.claim
     }
 
+    /// Returns the validated opaque input bytes for this task run.
+    #[must_use]
+    pub fn input(&self) -> &TaskInput {
+        self.claim.task_run().input()
+    }
+
     /// Returns a cloneable cooperative cancellation handle.
     #[must_use]
     pub fn cancellation(&self) -> TaskCancellation {
@@ -88,7 +96,7 @@ pub trait TaskHandler: Send + Sync + 'static {
 impl<F, Fut> TaskHandler for F
 where
     F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), TaskExecutionError>> + Send + 'static,
+    Fut: Future<Output = Result<TaskOutput, TaskExecutionError>> + Send + 'static,
 {
     fn execute(&self, context: TaskContext) -> TaskFuture {
         Box::pin((self)(context))
@@ -531,10 +539,11 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                 .get(&task_key)
                 .expect("every definition task has a generated run ID")
                 .clone();
-            self.repository.insert(TaskRun::new(
+            self.repository.insert(TaskRun::new_with_input(
                 task_run_id,
                 workflow_run_id.clone(),
                 task.task_id().clone(),
+                task.input().clone(),
                 now_ms,
                 now_ms,
             ))?;
@@ -649,10 +658,11 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                         .get(task_key)
                         .expect("every definition task has a generated run ID")
                         .clone();
-                    self.repository.insert(TaskRun::new(
+                    self.repository.insert(TaskRun::new_with_input(
                         task_run_id,
                         workflow_run_id.clone(),
                         task_id.clone(),
+                        task.input().clone(),
                         self.clock.now_ms(),
                         self.clock.now_ms(),
                     ))?;
@@ -983,8 +993,8 @@ async fn execute_claim<R: TaskRepository + 'static>(
 
     let now_ms = clock.now_ms();
     match outcome {
-        Some(Ok(())) => {
-            settle(repository.complete(&task_run_id, &worker_id, expected_version, now_ms))
+        Some(Ok(output)) => {
+            settle(repository.complete(&task_run_id, &worker_id, expected_version, output, now_ms))
         }
         Some(Err(error)) => {
             eprintln!("task run {} failed: {error}", task_run_id.as_str());
@@ -1018,7 +1028,7 @@ fn settle<T>(result: Result<T, RepositoryError>) -> Result<(), SchedulerError> {
 mod tests {
     use super::{SchedulerConfig, TaskExecutionError, TaskRegistry, TaskScheduler};
     use crate::clock::MonotonicClock;
-    use crate::repository::{InMemoryRepository, TaskRepository, TaskRun};
+    use crate::repository::{InMemoryRepository, TaskInput, TaskOutput, TaskRepository, TaskRun};
     use aetherflow_core::domain::{
         RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId,
     };
@@ -1100,7 +1110,7 @@ mod tests {
         let mut registry = TaskRegistry::new();
         registry
             .register(task_id(), |_claim| async {
-                Ok::<(), TaskExecutionError>(())
+                Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
             })
             .expect("register handler");
         let scheduler = TaskScheduler::new(
@@ -1179,7 +1189,7 @@ mod tests {
         registry
             .register(task_id(), |_claim| async {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok::<(), TaskExecutionError>(())
+                Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
             })
             .expect("register handler");
         let scheduler = TaskScheduler::new(
@@ -1220,7 +1230,7 @@ mod tests {
                     maximum.fetch_max(current, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(20)).await;
                     active.fetch_sub(1, Ordering::SeqCst);
-                    Ok::<(), TaskExecutionError>(())
+                    Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                 }
             })
             .expect("register handler");
@@ -1286,7 +1296,7 @@ mod tests {
                         let name = name.clone();
                         async move {
                             order.lock().expect("lock order").push(name);
-                            Ok::<(), TaskExecutionError>(())
+                            Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                         }
                     },
                 )
@@ -1345,6 +1355,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_task_input_reaches_handler_and_output_is_returned() {
+        use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
+        use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
+
+        let repository = Arc::new(InMemoryRepository::new());
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(task_id(), |context: super::TaskContext| async move {
+                assert_eq!(context.input().as_bytes(), b"workflow-input");
+                Ok::<TaskOutput, TaskExecutionError>(
+                    TaskOutput::new(b"processed".to_vec()).expect("valid task output"),
+                )
+            })
+            .expect("register handler");
+        let scheduler = TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(1, None, 1),
+        );
+        let input = TaskInput::new(b"workflow-input".to_vec()).expect("valid task input");
+        let definition = WorkflowDefinition::new(
+            WorkflowId::parse("workflow-payload").expect("valid workflow ID"),
+            vec![
+                WorkflowTask::new(TaskId::parse("task-01").expect("valid task ID"), Vec::new())
+                    .with_input(input.clone()),
+            ],
+        )
+        .expect("valid workflow");
+
+        let result = scheduler
+            .execute_workflow(
+                definition,
+                WorkflowRunId::parse("workflow-run-payload").expect("valid workflow-run ID"),
+                &SequenceTaskRunIdGenerator::new(),
+                watch::channel(false).1,
+            )
+            .await
+            .expect("workflow completes");
+
+        assert_eq!(
+            result.status(),
+            aetherflow_core::domain::WorkflowStatus::Succeeded
+        );
+        assert_eq!(result.task_runs().len(), 1);
+        assert_eq!(result.task_runs()[0].input(), &input);
+        assert_eq!(
+            result.task_runs()[0].output().map(TaskOutput::as_bytes),
+            Some(&b"processed"[..])
+        );
+    }
+
+    #[tokio::test]
     async fn failed_task_prevents_dependent_task_activation() {
         use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
         use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
@@ -1368,7 +1432,7 @@ mod tests {
                     let downstream = Arc::clone(&downstream);
                     async move {
                         downstream.fetch_add(1, Ordering::SeqCst);
-                        Ok::<(), TaskExecutionError>(())
+                        Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                     }
                 },
             )
@@ -1430,7 +1494,7 @@ mod tests {
                     async move {
                         cancellation.cancelled().await;
                         finished.store(1, Ordering::SeqCst);
-                        Ok::<(), TaskExecutionError>(())
+                        Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                     }
                 },
             )
@@ -1505,7 +1569,7 @@ mod tests {
                     assert_eq!(claim.attempt_number().get(), 1);
                     cancellation.cancelled().await;
                     finished.store(1, Ordering::SeqCst);
-                    Ok::<(), TaskExecutionError>(())
+                    Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                 }
             })
             .expect("register cooperative handler");
@@ -1565,7 +1629,7 @@ mod tests {
                     started.store(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     completed.store(1, Ordering::SeqCst);
-                    Ok::<(), TaskExecutionError>(())
+                    Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                 }
             })
             .expect("register unresponsive handler");
@@ -1616,7 +1680,7 @@ mod tests {
                 async move {
                     cancellation.cancelled().await;
                     finished.store(1, Ordering::SeqCst);
-                    Ok::<(), TaskExecutionError>(())
+                    Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
                 }
             })
             .expect("register handler");

@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use aetherflow_core::domain::{TaskId, TaskRunId, WorkflowId, WorkflowRunId, WorkflowStatus};
 
-use crate::repository::TaskRun;
+use crate::repository::{TaskInput, TaskRun};
 
 /// One task in a workflow definition and the tasks that must succeed first.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowTask {
     task_id: TaskId,
     dependencies: Vec<TaskId>,
+    input: TaskInput,
 }
 
 impl WorkflowTask {
@@ -20,7 +21,21 @@ impl WorkflowTask {
         Self {
             task_id,
             dependencies,
+            input: TaskInput::empty(),
         }
+    }
+
+    /// Sets the opaque input payload supplied when this task is materialized.
+    #[must_use]
+    pub fn with_input(mut self, input: TaskInput) -> Self {
+        self.input = input;
+        self
+    }
+
+    /// Returns the input payload supplied to this task.
+    #[must_use]
+    pub fn input(&self) -> &TaskInput {
+        &self.input
     }
 
     /// Returns the task definition identifier.
@@ -273,6 +288,14 @@ mod tests {
         assert_eq!(first.as_str(), "task-run-1");
         assert_eq!(second.as_str(), "task-run-2");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn workflow_task_retains_its_validated_input_payload() {
+        let input = TaskInput::new(b"payload".to_vec()).expect("valid task input");
+        let workflow_task = task("task-a", &[]).with_input(input.clone());
+
+        assert_eq!(workflow_task.input(), &input);
     }
 
     #[test]
