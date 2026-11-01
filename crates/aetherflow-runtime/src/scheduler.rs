@@ -1336,7 +1336,7 @@ mod tests {
         let handler_finished = Arc::clone(&finished);
         let mut registry = TaskRegistry::new();
         registry
-            .register(task_id(), move |context| {
+            .register(task_id(), move |context: super::TaskContext| {
                 let finished = Arc::clone(&handler_finished);
                 let claim = context.claim().clone();
                 let mut cancellation = context.cancellation();
@@ -1395,7 +1395,7 @@ mod tests {
         let handler_finished = Arc::clone(&finished);
         let mut registry = TaskRegistry::new();
         registry
-            .register(task_id(), move |context| {
+            .register(task_id(), move |context: super::TaskContext| {
                 let finished = Arc::clone(&handler_finished);
                 let mut cancellation = context.cancellation();
                 async move {
