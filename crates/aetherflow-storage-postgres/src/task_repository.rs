@@ -879,12 +879,11 @@ async fn append_outbox(
     event_type: &str,
     payload: serde_json::Value,
 ) -> Result<(), StorageError> {
-    let payload = payload.to_string();
     transaction
         .execute(
             "INSERT INTO outbox_events \
          (aggregate_type, aggregate_id, aggregate_version, event_type, payload) \
-         VALUES ($1, $2, $3, $4, $5::jsonb)",
+         VALUES ($1, $2, $3, $4, $5)",
             &[
                 &aggregate_type,
                 &aggregate_id,
