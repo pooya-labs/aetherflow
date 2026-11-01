@@ -41,7 +41,7 @@ Technology choices are provisional until validated by implementation and recorde
 
 ## Repository map
 
-The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, and [docs/architecture/overview.md](docs/architecture/overview.md) for the current system boundaries.
+The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, [docs/architecture/overview.md](docs/architecture/overview.md) for system boundaries, and [docs/decisions/](docs/decisions/) for architecture decisions.
 
 ## Development status
 
@@ -49,4 +49,4 @@ No production-readiness or performance claims are made at this stage. Each miles
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+License selection is pending; no license grant is made yet.
