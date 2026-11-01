@@ -789,18 +789,16 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             let now = tokio::time::Instant::now();
             if stop_claiming
                 && cancellation_started_at.is_none()
-                && shutdown_started_at.is_some_and(|started| {
-                    now >= started + self.config.shutdown_drain_timeout
-                })
+                && shutdown_started_at
+                    .is_some_and(|started| now >= started + self.config.shutdown_drain_timeout)
             {
                 self.cancel_active_task_runs(&active_task_runs)?;
                 cancellation_started_at = Some(now);
             }
 
             if stop_claiming
-                && cancellation_started_at.is_some_and(|started| {
-                    now >= started + self.config.cancellation_grace_period
-                })
+                && cancellation_started_at
+                    .is_some_and(|started| now >= started + self.config.cancellation_grace_period)
             {
                 active_tasks.abort_all();
 
@@ -834,8 +832,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             let next_shutdown_deadline = cancellation_started_at
                 .map(|started| started + self.config.cancellation_grace_period)
                 .or_else(|| {
-                    shutdown_started_at
-                        .map(|started| started + self.config.shutdown_drain_timeout)
+                    shutdown_started_at.map(|started| started + self.config.shutdown_drain_timeout)
                 });
 
             tokio::select! {
@@ -1574,10 +1571,7 @@ mod tests {
             .expect("register unresponsive handler");
 
         let scheduler_config = config(1, None, 1)
-            .with_shutdown_timeouts(
-                Duration::from_millis(20),
-                Duration::from_millis(20),
-            )
+            .with_shutdown_timeouts(Duration::from_millis(20), Duration::from_millis(20))
             .expect("valid shutdown timeouts");
         let scheduler = TaskScheduler::new(
             Arc::clone(&repository),
