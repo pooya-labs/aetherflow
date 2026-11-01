@@ -1147,7 +1147,7 @@ mod tests {
                     if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                         Err(TaskExecutionError::retryable("temporary failure"))
                     } else {
-                        Ok(())
+                        Ok(TaskOutput::empty())
                     }
                 }
             })
@@ -1420,7 +1420,7 @@ mod tests {
             .register(
                 TaskId::parse("task-a").expect("valid task ID"),
                 |_claim| async {
-                    Err::<(), TaskExecutionError>(TaskExecutionError::permanent("stop here"))
+                    Err::<TaskOutput, TaskExecutionError>(TaskExecutionError::permanent("stop here"))
                 },
             )
             .expect("register failing task");

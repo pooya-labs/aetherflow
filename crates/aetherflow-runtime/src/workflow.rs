@@ -263,6 +263,7 @@ impl std::error::Error for WorkflowDefinitionError {}
 #[cfg(test)]
 mod tests {
     use super::{WorkflowDefinition, WorkflowDefinitionError, WorkflowTask};
+    use crate::repository::TaskInput;
     use aetherflow_core::domain::{TaskId, WorkflowId};
 
     fn task(id: &str, dependencies: &[&str]) -> WorkflowTask {
