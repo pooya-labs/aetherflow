@@ -574,12 +574,7 @@ mod tests {
             .schedule_retry(&id, &worker("worker-01"), first_version, 100, 20)
             .expect("schedule retry");
 
-        assert!(
-            repository
-                .promote_due(99)
-                .expect("too early")
-                .is_empty()
-        );
+        assert!(repository.promote_due(99).expect("too early").is_empty());
         assert_eq!(
             repository.promote_due(100).expect("retry due"),
             vec![id.clone()]
