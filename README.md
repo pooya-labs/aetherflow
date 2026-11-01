@@ -45,7 +45,7 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-The Rust workspace now contains an infrastructure-independent core crate and a minimal bootstrap health server. The server is sequential and intentionally not production-ready. See the roadmap for verification status.
+The Rust workspace contains an infrastructure-independent core, an initial single-node runtime crate with an in-memory repository, and a minimal bootstrap health server. The server remains sequential and intentionally not production-ready. The in-memory repository is process-local and non-durable; see the roadmap for hosted verification status.
 
 ## License
 

@@ -4,8 +4,8 @@ This file is the **source of truth** for project progress. If a chat or network 
 
 Last updated: 2026-11-02  
 Current branch: `main`  
-Current milestone: **M02 — Execution domain and state machine**  
-Overall status: **In progress; formatting repair committed, hosted CI rerun pending**
+Current milestone: **M03 — Single-node execution runtime**  
+Overall status: **M03 in progress; M01 hosted CI verified**
 
 ## Progress rules
 
@@ -34,7 +34,7 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 - [x] Add formatting, Clippy, and test conventions.
 - [x] Add CI for formatting, Clippy, unit tests, build, and documentation.
 - [x] Add minimal executable and bootstrap HTTP health endpoint.
-- [ ] Verify clean build and all checks from a fresh checkout via hosted CI.
+- [x] Verify clean build and all checks from a fresh checkout via hosted CI (run `41353166515`, commit `832e3fc`).
 
 ### M02 — Execution domain and state machine
 - [x] Define distinct workflow, workflow-run, task, task-run, attempt, and worker identities.
@@ -46,7 +46,7 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 - [x] Document failure semantics, versioning invariants, and delivery limitations.
 
 ### M03 — Single-node execution runtime
-- [ ] Implement in-memory repository for deterministic tests.
+- [x] Implement in-memory repository for deterministic tests (hosted verification pending).
 - [ ] Implement bounded async scheduler and worker loop.
 - [ ] Add task registration and workflow execution API.
 - [ ] Add concurrency limits, deadlines, cancellation, and retry policy.
@@ -98,17 +98,17 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed. M02 now has typed execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry backoff, exhaustive transition-matrix tests, overflow and terminal-race tests, and ADR-0002 documenting semantics.
+**Completed:** M00 architecture baseline except owner license selection. M01 is verified by hosted run `41353166515` on commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2`: formatting, Clippy, workspace tests, release build, and documentation build all passed. M02 has distinct execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive deterministic transition matrices, terminal-outcome race and overflow tests, and ADR-0002. Property-based tests remain deliberately deferred until dependency and lockfile generation are handled reproducibly.
 
-**In progress:** M01 hosted verification. M02 deterministic coverage now includes exhaustive workflow/task transition matrices, competing terminal outcomes, and version overflow; property-based tests remain deferred until dependency and lockfile handling is established.
+**In progress:** M03 single-node runtime. A new `aetherflow-runtime` crate now contains a process-local in-memory task repository, deterministic due-task promotion, exclusive local claiming, attempt counting, expected-version checks, retry scheduling, cancellation, timeout, and an injectable monotonic clock boundary. The current repository implementation and its tests are committed; hosted verification is pending.
 
-**Next action:** Re-run hosted CI after the formatting and test-coverage repair. Inspect every check through documentation build; fix any remaining lint, compile, or test failures. Only after a green M01 run, establish property-based test dependency/lockfile handling and begin M03 design.
+**Next action:** Verify the M03 repository implementation in hosted CI. Then implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Resolve the reproducible Cargo lockfile workflow before introducing Tokio or property-testing dependencies.
 
-**Verification:** Hosted run `41352955804` for commit `6a3e0bd64649c4799ffa501154ccd3859bfd3aa4` failed at `cargo +1.99.1 fmt --all -- --check` with three formatting diffs. Commit `35f8ec7001b1ac0d99273933a674418c72ec2ae7` applied those and added the missing exhaustive transition matrices, terminal-outcome race, and version-overflow tests. Follow-up run `41353108165` then found two further formatting-only diffs in those new tests; this commit fixes both. Clippy, tests, release build, and documentation build have not run yet. No green run has been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+**Verification:** M01 hosted run `41353166515` for commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2` completed with conclusion `success`; all five quality steps passed. The M03 repository commit is the current head; its hosted CI run is pending. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
-**Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy now calculates capped exponential backoff without jitter; the runtime must inject jitter and classify retryable errors.
+**Known limitations:** The in-memory repository loses all state on process exit and has no lease expiry, fencing, or crash recovery. The async scheduler/worker loop, durable event log, PostgreSQL adapter, external side-effect idempotency API, and retry jitter are not implemented. The bootstrap HTTP server remains sequential and non-production. Retryable error classification and deadline interaction remain runtime responsibilities.
 
-**Blockers:** Hosted CI verification pending. License selection remains with repository owner.
+**Blockers:** M03 hosted verification pending. Property-based test and Tokio dependency/lockfile workflow remains to be established. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -118,7 +118,8 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
-| 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; two successive hosted rustfmt-only failures triaged, final formatting repair committed for rerun |
+| 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
+| 2026-11-02 | M03 | Added runtime crate, deterministic clock boundary, and mutex-backed in-memory task repository with due promotion, exclusive claims, attempts, version checks, retries, cancellation, timeout, and deterministic/concurrent tests; hosted verification pending |
 
 ## Resume instructions
 

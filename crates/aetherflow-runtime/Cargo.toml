@@ -1,0 +1,13 @@
+[package]
+name = "aetherflow-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Single-node execution runtime and in-memory repository for AetherFlow."
+
+[dependencies]
+aetherflow-core = { path = "../aetherflow-core" }
+
+[lints]
+workspace = true

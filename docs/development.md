@@ -32,10 +32,11 @@ The current server is intentionally a minimal standard-library bootstrap. It han
 
 ## Workspace layout
 
-- `crates/aetherflow-core`: infrastructure-independent primitives.
+- `crates/aetherflow-core`: infrastructure-independent domain primitives.
+- `crates/aetherflow-runtime`: single-node runtime contracts and in-memory repository.
 - `apps/aetherflow-server`: minimal process and bootstrap health endpoint.
 
-Keep domain rules out of network adapters. Add dependencies only when a milestone has a concrete need and record material architecture changes in an ADR.
+Keep domain rules out of runtime and network adapters. The initial in-memory repository uses one short-held mutex and deterministic caller-supplied timestamps; never hold repository locks across an `.await`. It is a test/runtime adapter, not durable storage. Add dependencies only when a milestone has a concrete need and record material architecture changes in an ADR.
 
 ## Verification honesty
 

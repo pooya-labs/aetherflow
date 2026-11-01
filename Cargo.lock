@@ -7,6 +7,13 @@ name = "aetherflow-core"
 version = "0.1.0"
 
 [[package]]
+name = "aetherflow-runtime"
+version = "0.1.0"
+dependencies = [
+ "aetherflow-core",
+]
+
+[[package]]
 name = "aetherflow-server"
 version = "0.1.0"
 dependencies = [
