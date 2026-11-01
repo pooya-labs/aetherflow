@@ -9,7 +9,9 @@ use std::fmt;
 
 mod task_repository;
 
-pub use task_repository::{DurableTaskRun, NewTaskRun, PgTaskClaim, PgTaskRepository, RecoveredLease};
+pub use task_repository::{
+    DurableTaskRun, NewTaskRun, PgTaskClaim, PgTaskRepository, RecoveredLease,
+};
 
 const INITIAL_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0001_initial_schema.sql");
@@ -48,9 +50,17 @@ pub enum StorageError {
     /// The database schema is newer than this binary supports.
     NewerSchema { found: i64, supported: i64 },
     /// An applied migration has a different name than this binary expects.
-    MigrationNameMismatch { version: i64, expected: String, actual: String },
+    MigrationNameMismatch {
+        version: i64,
+        expected: String,
+        actual: String,
+    },
     /// An applied migration's checksum differs from the immutable source.
-    MigrationChecksumMismatch { version: i64, expected: String, actual: String },
+    MigrationChecksumMismatch {
+        version: i64,
+        expected: String,
+        actual: String,
+    },
     /// A task run does not exist.
     TaskRunNotFound(String),
     /// A task claim is stale, expired, or belongs to another worker.
@@ -81,22 +91,30 @@ impl fmt::Display for StorageError {
                 formatter,
                 "database schema version {found} is newer than supported version {supported}"
             ),
-            Self::MigrationNameMismatch { version, expected, actual } => write!(
+            Self::MigrationNameMismatch {
+                version,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "migration {version} name mismatch: expected {expected}, found {actual}"
             ),
-            Self::MigrationChecksumMismatch { version, expected, actual } => write!(
+            Self::MigrationChecksumMismatch {
+                version,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "migration {version} checksum mismatch: expected {expected}, found {actual}"
             ),
             Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
             Self::ClaimLost(id) => write!(formatter, "task claim is no longer owned: {id}"),
-            Self::InvalidLeaseDuration => formatter.write_str(
-                "lease duration must be a positive signed millisecond value",
-            ),
-            Self::InvalidRetryPolicy => formatter.write_str(
-                "retry policy cannot be represented by PostgreSQL columns",
-            ),
+            Self::InvalidLeaseDuration => {
+                formatter.write_str("lease duration must be a positive signed millisecond value")
+            }
+            Self::InvalidRetryPolicy => {
+                formatter.write_str("retry policy cannot be represented by PostgreSQL columns")
+            }
             Self::InvalidWorkflow(message) => write!(formatter, "invalid workflow: {message}"),
             Self::InvalidStoredValue(message) => {
                 write!(formatter, "invalid value stored in PostgreSQL: {message}")
