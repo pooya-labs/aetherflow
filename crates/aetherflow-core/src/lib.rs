@@ -2,6 +2,8 @@
 //!
 //! The core crate must remain free of network, database, and runtime adapters.
 
+pub mod domain;
+
 /// The product version compiled into this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
