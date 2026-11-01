@@ -191,6 +191,10 @@ impl TaskRegistry {
 pub enum SchedulerConfigError {
     /// The scheduler poll interval must be greater than zero.
     ZeroPollInterval,
+    /// The graceful shutdown drain timeout must be greater than zero.
+    ZeroShutdownDrainTimeout,
+    /// The cooperative cancellation grace period must be greater than zero.
+    ZeroCancellationGracePeriod,
 }
 
 impl std::fmt::Display for SchedulerConfigError {
@@ -198,6 +202,12 @@ impl std::fmt::Display for SchedulerConfigError {
         match self {
             Self::ZeroPollInterval => {
                 formatter.write_str("scheduler poll interval must be non-zero")
+            }
+            Self::ZeroShutdownDrainTimeout => {
+                formatter.write_str("shutdown drain timeout must be non-zero")
+            }
+            Self::ZeroCancellationGracePeriod => {
+                formatter.write_str("cancellation grace period must be non-zero")
             }
         }
     }
@@ -212,6 +222,8 @@ pub struct SchedulerConfig {
     poll_interval: Duration,
     task_timeout: Option<Duration>,
     retry_policy: RetryPolicy,
+    shutdown_drain_timeout: Duration,
+    cancellation_grace_period: Duration,
 }
 
 impl SchedulerConfig {
@@ -231,6 +243,8 @@ impl SchedulerConfig {
             poll_interval,
             task_timeout,
             retry_policy,
+            shutdown_drain_timeout: Duration::from_secs(30),
+            cancellation_grace_period: Duration::from_secs(5),
         })
     }
 
@@ -256,6 +270,36 @@ impl SchedulerConfig {
     #[must_use]
     pub const fn retry_policy(&self) -> RetryPolicy {
         self.retry_policy
+    }
+
+    /// Returns the graceful drain period before cooperative cancellation is requested.
+    #[must_use]
+    pub const fn shutdown_drain_timeout(&self) -> Duration {
+        self.shutdown_drain_timeout
+    }
+
+    /// Returns the cleanup period allowed after cancellation is signalled.
+    #[must_use]
+    pub const fn cancellation_grace_period(&self) -> Duration {
+        self.cancellation_grace_period
+    }
+
+    /// Overrides the graceful-drain and cooperative-cancellation periods.
+    pub fn with_shutdown_timeouts(
+        mut self,
+        shutdown_drain_timeout: Duration,
+        cancellation_grace_period: Duration,
+    ) -> Result<Self, SchedulerConfigError> {
+        if shutdown_drain_timeout.is_zero() {
+            return Err(SchedulerConfigError::ZeroShutdownDrainTimeout);
+        }
+        if cancellation_grace_period.is_zero() {
+            return Err(SchedulerConfigError::ZeroCancellationGracePeriod);
+        }
+
+        self.shutdown_drain_timeout = shutdown_drain_timeout;
+        self.cancellation_grace_period = cancellation_grace_period;
+        Ok(self)
     }
 }
 
@@ -665,7 +709,10 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
     /// Shutdown stops additional claims and drains active handlers before returning.
     pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), SchedulerError> {
         let mut active_tasks: JoinSet<Result<(), SchedulerError>> = JoinSet::new();
+        let active_task_runs = Arc::new(Mutex::new(HashMap::<String, TaskRunId>::new()));
         let mut stop_claiming = *shutdown.borrow_and_update();
+        let mut shutdown_started_at = stop_claiming.then(tokio::time::Instant::now);
+        let mut cancellation_started_at = None;
 
         loop {
             if !stop_claiming {
@@ -702,6 +749,12 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     let worker_id = self.worker_id.clone();
                     let config = self.config.clone();
                     let cancellations = Arc::clone(&self.cancellations);
+                    let active_for_cleanup = Arc::clone(&active_task_runs);
+                    let active_key = task_run_id.as_str().to_owned();
+                    active_task_runs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(active_key.clone(), task_run_id.clone());
 
                     active_tasks.spawn(async move {
                         let result = execute_claim(ClaimExecution {
@@ -716,18 +769,82 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                         })
                         .await;
                         Self::remove_task_cancellation(&cancellations, &task_run_id);
+                        active_for_cleanup
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&active_key);
                         result
                     });
                 }
+            }
+
+            if stop_claiming && shutdown_started_at.is_none() {
+                shutdown_started_at = Some(tokio::time::Instant::now());
             }
 
             if stop_claiming && active_tasks.is_empty() {
                 return Ok(());
             }
 
+            let now = tokio::time::Instant::now();
+            if stop_claiming
+                && cancellation_started_at.is_none()
+                && shutdown_started_at.is_some_and(|started| {
+                    now >= started + self.config.shutdown_drain_timeout
+                })
+            {
+                self.cancel_active_task_runs(&active_task_runs)?;
+                cancellation_started_at = Some(now);
+            }
+
+            if stop_claiming
+                && cancellation_started_at.is_some_and(|started| {
+                    now >= started + self.config.cancellation_grace_period
+                })
+            {
+                active_tasks.abort_all();
+
+                while let Some(joined) = active_tasks.join_next().await {
+                    match joined {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => return Err(error),
+                        Err(error) if error.is_cancelled() => {}
+                        Err(error) => {
+                            return Err(SchedulerError::WorkerTaskPanicked(error.to_string()));
+                        }
+                    }
+                }
+
+                let active_ids = active_task_runs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for task_run_id in active_ids {
+                    Self::remove_task_cancellation(&self.cancellations, &task_run_id);
+                }
+                active_task_runs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clear();
+                return Ok(());
+            }
+
+            let next_shutdown_deadline = cancellation_started_at
+                .map(|started| started + self.config.cancellation_grace_period)
+                .or_else(|| {
+                    shutdown_started_at
+                        .map(|started| started + self.config.shutdown_drain_timeout)
+                });
+
             tokio::select! {
                 changed = shutdown.changed(), if !stop_claiming => {
-                    stop_claiming = changed.is_err() || *shutdown.borrow_and_update();
+                    let requested = changed.is_err() || *shutdown.borrow_and_update();
+                    if requested {
+                        stop_claiming = true;
+                        shutdown_started_at = Some(tokio::time::Instant::now());
+                    }
                 }
                 joined = active_tasks.join_next(), if !active_tasks.is_empty() => {
                     match joined {
@@ -738,9 +855,44 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                         None => {}
                     }
                 }
+                _ = tokio::time::sleep_until(
+                    next_shutdown_deadline.unwrap_or_else(tokio::time::Instant::now)
+                ), if stop_claiming => {}
                 _ = tokio::time::sleep(self.config.poll_interval), if !stop_claiming => {}
             }
         }
+    }
+
+    fn cancel_active_task_runs(
+        &self,
+        active_task_runs: &Mutex<HashMap<String, TaskRunId>>,
+    ) -> Result<(), SchedulerError> {
+        let task_run_ids = active_task_runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for task_run_id in task_run_ids {
+            loop {
+                let task_run = self.repository.get(&task_run_id)?;
+                if task_run.status().is_terminal() {
+                    break;
+                }
+
+                match self.cancel_task_run(&task_run_id, task_run.version()) {
+                    Ok(_) => break,
+                    Err(SchedulerError::Repository(
+                        RepositoryError::StaleVersion { .. }
+                        | RepositoryError::InvalidTransition(_),
+                    )) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -914,6 +1066,18 @@ mod tests {
             retry_policy(attempts),
         )
         .expect("valid scheduler config")
+    }
+
+    #[test]
+    fn scheduler_rejects_zero_shutdown_timeouts() {
+        assert!(matches!(
+            config(1, None, 1).with_shutdown_timeouts(Duration::ZERO, Duration::from_millis(1)),
+            Err(super::SchedulerConfigError::ZeroShutdownDrainTimeout)
+        ));
+        assert!(matches!(
+            config(1, None, 1).with_shutdown_timeouts(Duration::from_millis(1), Duration::ZERO),
+            Err(super::SchedulerConfigError::ZeroCancellationGracePeriod)
+        ));
     }
 
     async fn wait_for_status(
@@ -1386,6 +1550,63 @@ mod tests {
             .await
             .expect("join scheduler")
             .expect("scheduler run");
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_and_aborts_unresponsive_handlers_after_deadlines() {
+        let repository = Arc::new(InMemoryRepository::new());
+        let started = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let handler_started = Arc::clone(&started);
+        let handler_completed = Arc::clone(&completed);
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(task_id(), move |_context: super::TaskContext| {
+                let started = Arc::clone(&handler_started);
+                let completed = Arc::clone(&handler_completed);
+                async move {
+                    started.store(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    completed.store(1, Ordering::SeqCst);
+                    Ok::<(), TaskExecutionError>(())
+                }
+            })
+            .expect("register unresponsive handler");
+
+        let scheduler_config = config(1, None, 1)
+            .with_shutdown_timeouts(
+                Duration::from_millis(20),
+                Duration::from_millis(20),
+            )
+            .expect("valid shutdown timeouts");
+        let scheduler = TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            scheduler_config,
+        );
+        let task = task_run("task-run-shutdown-bound");
+        let id = task.task_run_id().clone();
+        scheduler.submit_task_run(task).expect("submit task run");
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(async move { scheduler.run(shutdown_rx).await });
+        wait_for_status(&repository, &id, TaskStatus::Running).await;
+
+        shutdown_tx.send(true).expect("signal shutdown");
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("bounded shutdown returns")
+            .expect("join scheduler")
+            .expect("scheduler shutdown");
+
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            repository.get(&id).expect("read task").status(),
+            TaskStatus::Cancelled
+        );
     }
 
     #[tokio::test]

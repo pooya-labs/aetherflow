@@ -45,7 +45,7 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, bounded Tokio task scheduler, and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handler registration, bounded concurrency, retry classification, per-attempt timeouts, dependency-aware task activation, workflow lifecycle aggregation, version-guarded cancellation, and graceful drain. Bounded shutdown deadlines and durable persistence remain under development; the in-memory repository is non-durable. See the roadmap for exact verification status.
+The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, bounded Tokio task scheduler, and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handler registration, bounded concurrency, retry classification, per-attempt timeouts, dependency-aware task activation, workflow lifecycle aggregation, version-guarded cancellation, and graceful drain. Durable persistence remains under development; the in-memory repository is non-durable. See the roadmap for exact verification status.
 
 ## License
 

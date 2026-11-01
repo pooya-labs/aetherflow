@@ -34,11 +34,11 @@ A configured per-attempt timeout drops the handler future and attempts to commit
 
 Cancellation commits a terminal repository transition and signals the active handler's TaskCancellation token. Cooperative handlers can stop at safe interruption points and release their own resources. A handler that ignores the token continues running; when it later tries to commit, its stale version is ignored and the cancellation remains authoritative. Timeout also signals the token before settling TimedOut.
 
-Shutdown stops claiming new work and drains active handlers before returning. There is no forced drain deadline yet, so a non-terminating handler can delay shutdown indefinitely.
+Shutdown stops claiming new work and follows a configurable two-stage policy. First, it allows active handlers to finish normally for a graceful-drain period (30 seconds by default). Next, it commits Cancelled for remaining active task runs and signals their cooperative cancellation tokens, then waits for a cancellation-grace period (5 seconds by default). If handlers remain, their futures are aborted and their task-run state remains Cancelled. Operations already delegated to independent blocking threads or external systems may outlive the handler future and still require application-level cleanup/idempotency.
 
 ### Explicit limitations
 
-The cancellation registry is process-local and is not durable. Cooperative cancellation depends on handler code checking or awaiting its token; the scheduler does not guarantee that arbitrary external effects stop. Shutdown still drains without a deadline.
+The cancellation registry is process-local and is not durable. Cooperative cancellation depends on handler code checking or awaiting its token; the scheduler does not guarantee that arbitrary external effects stop. A forced abort drops the handler future; independently spawned blocking work or already-issued external effects may continue.
 
 The scheduler is single-process and uses the in-memory repository. Worker panics terminate the scheduler and can leave their task run in Running until process shutdown. No lease expiry, fencing, recovery, persisted input/output, workflow DAG, or distributed delivery exists yet.
 
