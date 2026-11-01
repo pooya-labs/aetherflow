@@ -47,10 +47,11 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 ### M03 — Single-node execution runtime
 - [x] Implement in-memory repository for deterministic tests and verify it with hosted CI (run `41353963000`, commit `54aee8d`).
-- [ ] Implement bounded async scheduler and worker loop.
-- [ ] Add task registration and workflow execution API.
-- [ ] Add concurrency limits, deadlines, cancellation, and retry policy.
-- [ ] Add integration tests for success and failure paths.
+- [x] Implement bounded async scheduler and worker loop (hosted CI run `41354805491`).
+- [x] Add typed task-handler registration API with duplicate-registration protection; workflow DAG execution API remains open.
+- [x] Add bounded concurrency, per-attempt timeout, version-guarded cancellation, and retryable/permanent failure policy.
+- [x] Add async scheduler/repository tests for success, retry, timeout, cancellation race, and concurrency limits.
+- [ ] Implement workflow DAG execution API and dependency-aware task activation.
 
 ### M04 — Durable persistence
 - [ ] Design PostgreSQL schema and migration strategy.
@@ -98,17 +99,17 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 is verified by hosted run `41353166515` on commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2`: formatting, Clippy, workspace tests, release build, and documentation build all passed. M02 has distinct execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive deterministic transition matrices, terminal-outcome race and overflow tests, and ADR-0002. Tokio `1.54.1` is pinned and its Cargo-generated lockfile is committed; CI now enforces `cargo fetch --locked` and locked builds.
+**Completed:** M00 architecture baseline except owner license selection. M01 is verified by hosted run `41353166515` on commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2`: formatting, Clippy, workspace tests, release build, and documentation build all passed. M02 has distinct execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive deterministic transition matrices, terminal-outcome race and overflow tests, and ADR-0002. Tokio `1.54.1` is pinned, its Cargo-generated lockfile is committed, and CI enforces locked dependency resolution.
 
-**In progress:** M03 single-node runtime. The verified in-memory repository supports deterministic due promotion, exclusive local claims, attempt accounting, expected-version checks, retry scheduling, cancellation, timeout, and an injectable monotonic clock. The new async scheduler adds a fixed TaskId handler registry, bounded in-flight tasks, retryable/permanent error classification, per-attempt timeout, and graceful drain on shutdown. Hosted verification of the scheduler commit is pending.
+**In progress:** M03 single-node runtime. The synchronous in-memory repository is verified. The bounded Tokio scheduler and handler registry are now also hosted-verified: it limits in-flight attempts, classifies retryable/permanent failures, applies per-attempt timeouts, settles with expected-version checks, and drains active work after shutdown. Five async scheduler tests cover success, retry, timeout, concurrency limits, and cancellation/completion races. Hosted run `41354805491` passed all checks on commit `ccc549935d96c2f9ef78c2758dd2c30f6694a505`.
 
-**Next action:** Verify the async scheduler with hosted CI. Then add cooperative cancellation signalling, a bounded shutdown-drain policy, panic recovery semantics, task input/output persistence boundaries, and end-to-end workflow execution tests. Keep the adapter explicitly non-durable; PostgreSQL, leases, and distributed coordination remain M04/M05.
+**Next action:** Implement workflow DAG execution: workflow submission, dependency-aware task activation, workflow-run lifecycle aggregation, and end-to-end success/failure tests. Then add cooperative cancellation signalling and a bounded shutdown-drain policy. Keep the in-memory adapter explicitly non-durable; PostgreSQL, leases, and distributed coordination remain M04/M05.
 
-**Verification:** M01 hosted run \`41353166515\` and M03 repository/server run \`41353963000\` passed all quality checks. Tokio lockfile generation run \`41354159107\` passed; committed lockfile verification run \`41354279238\` also passed all checks. Scheduler run \`41354575080\` passed locked dependency resolution but initially failed formatting; the formatting repair is in commit \`e83acac61b7dc35f3a07e99bf69e4600121db491\`. Follow-up scheduler run \`41354669032\` passed locked dependency resolution and formatting but failed Clippy due to one unused import, a missing test-trait import, and a manual \`Result::ok\` conversion. This commit fixes those exact issues. Scheduler tests, release build, and docs remain unverified until a later green run. Local Rust compilation is unavailable because \`rustc\` is not installed in the working environment.
+**Verification:** M01 run `41353166515`, M03 repository/server run `41353963000`, lockfile resolution run `41354159107`, locked-build run `41354279238`, and async scheduler run `41354805491` all completed successfully. The scheduler run passed locked dependency resolution, formatting, Clippy, 15 core tests, 14 runtime tests, 2 server tests, release build, and documentation build. Total: 31 unit tests passed, zero failed. Local Rust compilation remains unavailable because `rustc` is not installed in the working environment.
 
-**Known limitations:** The in-memory repository loses state on process exit and has no lease expiry, fencing, or crash recovery. The scheduler is single-process; timeout drops the handler future, while cancellation changes repository state but does not forcibly stop a running handler future. Worker panics stop the scheduler and can leave a task in Running until process exit. There is no durable event log, PostgreSQL adapter, persisted task input/output, external side-effect idempotency API, or retry jitter. The bootstrap HTTP server remains sequential and non-production.
+**Known limitations:** The in-memory repository loses state on process exit and has no lease expiry, fencing, or crash recovery. The scheduler is single-process; timeout drops the handler future, while cancellation changes repository state but does not forcibly stop a running handler future. Worker panics stop the scheduler and can leave a task in Running until process exit. There is no workflow DAG execution, durable event log, PostgreSQL adapter, persisted task input/output, external side-effect idempotency API, or retry jitter. Shutdown drains without a deadline, so a non-terminating handler can delay shutdown indefinitely. The bootstrap HTTP server remains sequential and non-production.
 
-**Blockers:** Hosted verification of the async scheduler pending. Property-based tests remain deferred; Tokio is pinned and its generated lockfile is committed. License selection remains with repository owner.
+**Blockers:** Workflow DAG orchestration remains the outstanding M03 feature. Property-based tests remain deferred; Tokio is pinned and its generated lockfile is committed. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -119,7 +120,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Verified in-memory repository and server. Pinned Tokio `1.54.1`, committed Cargo-generated lockfile, and enforced locked builds. Added bounded async scheduler, fixed task-handler registry, retry/timeout logic, cancellation state race handling, and graceful drain; CI formatting passed, Clippy errors triaged and corrected; full verification pending |
+| 2026-11-02 | M03 | Verified in-memory repository and server; pinned Tokio `1.54.1` and committed Cargo lockfile; added bounded async scheduler, handler registry, retry/timeout/cancel handling and graceful drain. Hosted run `41354805491` passed formatting, Clippy, 31 unit tests, release build, and docs. Workflow DAG orchestration remains next |
 
 ## Resume instructions
 
