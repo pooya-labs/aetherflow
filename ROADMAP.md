@@ -60,9 +60,9 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 ### M04 — Durable persistence
 - [x] Draft PostgreSQL v1 schema and migration strategy for workflow/task runs, ordered dependencies, attempts, fencing leases, and transactional outbox (ADR-0007; real-server validation pending).
-- [ ] Select and pin an async PostgreSQL driver compatible with the declared Rust 1.85 MSRV.
-- [ ] Add PostgreSQL integration service to CI and execute migrations against a real PostgreSQL instance.
-- [ ] Implement transactional migration runner with version/checksum tracking and safe startup behavior.
+- [x] Select and pin deadpool-postgres 0.14.2, tokio-postgres 0.7.18, and sha2 0.10.9; upstream package metadata declares MSRV 1.85.
+- [x] Add PostgreSQL 18 integration service and schema constraint fixtures; async migration-runner verification pending.
+- [ ] Verify the transactional migration runner with advisory locking, checksum drift rejection, and idempotent PostgreSQL re-run.
 - [ ] Implement durable TaskRepository adapter with transaction-guarded lifecycle transitions.
 - [ ] Implement dependency-aware ready promotion and atomic `FOR UPDATE SKIP LOCKED` claims.
 - [ ] Implement lease heartbeat, expiry recovery, and monotonically increasing fencing tokens.
@@ -111,15 +111,15 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 **Completed:** M00 architecture baseline except owner license selection. M01 is hosted-verified by run `41353166515`. M02 includes typed execution identities (including idempotency keys), explicit lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive transition matrices, and ADR-0002. M03 single-node runtime is complete: in-memory repository, bounded Tokio scheduler, deterministic DAG validation, workflow-run coordinator, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and successful direct-dependency output access.
 
-**In progress:** M04 durable persistence. A PostgreSQL v1 schema draft and transaction contract are committed in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`, `docs/persistence/postgres-transaction-contract.md`, and ADR-0007. The schema covers workflow runs, task runs, ordered dependency edges, attempt history, lease/fencing state, and an outbox. It has not yet been executed against PostgreSQL; no database driver or durable adapter has been added.
+**In progress:** M04 durable persistence. A PostgreSQL v1 schema draft and transaction contract are committed in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`, `docs/persistence/postgres-transaction-contract.md`, and ADR-0007. The schema covers workflow runs, task runs, ordered dependency edges, attempt history, lease/fencing state, and an outbox. It has not yet been executed against PostgreSQL; selected pinned async driver stack: deadpool-postgres 0.14.2, tokio-postgres 0.7.18, and sha2 0.10.9, with upstream MSRV 1.85. A new PostgreSQL storage crate now contains a pool boundary, checksum-aware advisory-locked migration runner, and an environment-gated integration test. Hosted compile and real-server verification of the runner are pending.
 
-**Next action:** Select an async PostgreSQL driver after checking Rust 1.85 MSRV and feature footprint. Rerun PostgreSQL 18 constraint fixtures with a valid claimed-task row, then test payload, lease, dependency, and outbox invariants. Then implement transactional migrations and a PostgreSQL TaskRepository: promote due tasks only after all dependencies succeed, claim ready rows with row locking, heartbeat using owner plus fencing token, reject expired/stale completion, recover expired leases, and write outbox events in the same transaction as state changes.
+**Next action:** Verify the new PostgreSQL storage crate, lockfile update, and migration runner in hosted Rust CI and PostgreSQL 18 integration CI. Then implement transactional repository operations for workflow/task creation, dependency-aware ready promotion, SKIP LOCKED claims, heartbeat/fencing, lease recovery, and same-transaction outbox writes.
 
 **Verification:** M01 run \`41353166515\`; M03 repository/server run \`41353963000\`; async scheduler run \`41354805491\`; DAG validation run \`41355173212\`; workflow coordinator run \`41356396516\`; cooperative cancellation run \`41357065422\`; bounded shutdown run \`41357506821\`; payload I/O run \`41358509174\`; direct-dependency dataflow run \`41359053561\`; and Rust CI run \`41360691079\` all completed successfully. The latest Rust CI passed 52 tests (15 core, 35 runtime, 2 server), formatting, Clippy, release build, and docs. PostgreSQL 18 run \`41360691136\` successfully applied the migration and verified all six tables and eight indexes, then failed in the fixture step because its valid running-task row omitted owner/lease fields required by the newly hardened constraint. The fixture is corrected in this commit; PostgreSQL constraint verification is pending rerun. Local Rust compilation remains unavailable because \`rustc\` is not installed in the working environment.
 
 **Known limitations:** No PostgreSQL driver/adapter, durable workflow state, transactional outbox publisher, lease renewal/recovery, or cross-process cancellation exists yet. The in-memory repository loses state on process exit. Handler cancellation is cooperative; an aborted future cannot undo external side effects. Task payloads are opaque bytes capped at 1 MiB each; the application owns encoding/schema versions and transforms direct dependency outputs into handler-specific inputs. The bootstrap HTTP server remains sequential and non-production.
 
-**Blockers:** PostgreSQL DDL execution and integration testing are required before calling the schema verified. Driver selection must preserve the declared Rust 1.85 MSRV. License selection remains with repository owner.
+**Blockers:** Hosted compilation and PostgreSQL integration validation of the new driver/migration runner are pending. Do not call the durable adapter complete until transactional repository, crash-recovery, and fencing tests pass. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -132,7 +132,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
 | 2026-11-02 | M03 | Closed and hosted-verified through run `41359053561`: 15 core, 35 runtime, and 2 server tests passed; workflow DAG activation, cooperative cancellation, bounded shutdown, payload I/O, and direct dependency output access verified |
 
-| 2026-11-02 | M04 | Added PostgreSQL v1 schema draft, lease/fencing and transactional-outbox contract, plus ADR-0007. DDL execution and adapter implementation remain pending. |
+| 2026-11-02 | M04 | PostgreSQL 18 DDL/schema checks passed. Added pinned async driver stack, automatic Cargo.lock refresh on manifest change, and checksum/advisory-lock migration runner plus real-server idempotency test; hosted verification pending. |
 
 ## Resume instructions
 

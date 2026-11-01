@@ -46,3 +46,7 @@ The foundation and current single-node runtime milestones are checked by hosted 
 ## PostgreSQL persistence work
 
 The initial PostgreSQL schema draft lives in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`. Its intended claim, heartbeat, fencing, recovery, and outbox transaction boundaries are described in `docs/persistence/postgres-transaction-contract.md`. The migration has not yet been executed against PostgreSQL; do not treat the DDL as production-validated until the PostgreSQL CI integration stage passes.
+
+## PostgreSQL storage crate
+
+The `aetherflow-storage-postgres` crate owns the asynchronous PostgreSQL pool boundary and initial migration runner. The caller supplies a configured `deadpool-postgres` pool so TLS, authentication, and pool sizing remain deployment choices. `PgStore::migrate()` serializes migration attempts with a transaction-scoped advisory lock, applies the initial DDL and migration-ledger row atomically, and rejects untracked, newer, or checksum-drifted schemas. Its integration test uses `AETHERFLOW_TEST_DATABASE_URL`; without that variable it skips so ordinary workspace tests do not require a running database.

@@ -4,10 +4,16 @@ on:
   push:
     branches: [main]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/aetherflow-storage-postgres/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - ".github/workflows/postgres-schema.yml"
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/aetherflow-storage-postgres/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - ".github/workflows/postgres-schema.yml"
   workflow_dispatch:
@@ -39,9 +45,19 @@ jobs:
       PGUSER: aetherflow
       PGPASSWORD: aetherflow-ci-password
       PGDATABASE: aetherflow_test
+      AETHERFLOW_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_test
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+
+      - name: Refresh lockfile for local validation
+        run: cargo +1.99.1 generate-lockfile
+
+      - name: Fetch locked dependencies
+        run: cargo +1.99.1 fetch --locked
 
       - name: Install PostgreSQL client
         run: |
@@ -51,13 +67,20 @@ jobs:
           fi
           psql --version
 
-      - name: Apply initial schema in one transaction
-        run: |
-          psql --set ON_ERROR_STOP=1 --single-transaction \
-            --file crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql
+      - name: Run async migration runner against PostgreSQL 18
+        run: cargo +1.99.1 test -p aetherflow-storage-postgres --test postgres_migrations --locked
 
-      - name: Verify required tables and indexes exist
+      - name: Verify migration ledger, required tables, and indexes
         run: |
+          migration_count="$(psql --no-align --tuples-only --command "
+            SELECT count(*)
+            FROM aetherflow_schema_migrations
+            WHERE version = 1
+              AND migration_name = '0001_initial_schema.sql'
+              AND checksum_sha256 ~ '^[0-9a-f]{64}$';
+          ")"
+          test "$migration_count" = "1"
+
           table_count="$(psql --no-align --tuples-only --command "
             SELECT count(*)
             FROM information_schema.tables
@@ -90,7 +113,7 @@ jobs:
           ")"
           test "$index_count" = "8"
 
-      - name: Verify valid records and reject invalid invariants
+      - name: Verify schema records and reject invalid invariants
         run: |
           psql --set ON_ERROR_STOP=1 <<'SQL'
           BEGIN;

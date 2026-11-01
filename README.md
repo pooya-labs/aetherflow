@@ -50,3 +50,7 @@ The Rust workspace contains an infrastructure-independent core, a single-node ru
 ## License
 
 License selection is pending; no license grant is made yet.
+
+## Persistence status
+
+The PostgreSQL storage crate and initial schema are under active M04 verification. The schema has passed PostgreSQL 18 DDL and constraint checks; the async migration runner and durable repository operations are not yet declared production-ready. See [the PostgreSQL transaction contract](docs/persistence/postgres-transaction-contract.md).

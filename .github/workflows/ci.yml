@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: rust-ci-${{ github.ref }}
@@ -26,6 +26,21 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+
+      - name: Refresh Cargo.lock after manifest changes on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          if git diff-tree --no-commit-id --name-only -r HEAD | grep -Eq '(^|/)Cargo.toml$'; then
+            cargo +1.99.1 generate-lockfile
+            if ! git diff --quiet -- Cargo.lock; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add Cargo.lock
+              git commit -m "chore(deps): regenerate Cargo.lock"
+              git push origin "HEAD:$GITHUB_REF_NAME"
+            fi
+          fi
 
       - name: Verify locked dependency resolution
         run: cargo +1.99.1 fetch --locked
