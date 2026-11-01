@@ -16,7 +16,7 @@ A workflow definition contains a typed WorkflowId and a non-empty set of Workflo
 
 ### Activation semantics
 
-A workflow execution inserts only root task runs initially. A dependent task run is materialized after all its dependencies have reached Succeeded. Tasks whose dependencies never succeed are never inserted into the repository. The existing TaskScheduler worker loop handles each activated run and its local retry policy.
+A WorkflowTask may declare one static opaque TaskInput payload. The coordinator copies it into the task-run record when that task becomes eligible. A workflow execution inserts only root task runs initially. A dependent task run is materialized after all its dependencies have reached Succeeded. Tasks whose dependencies never succeed are never inserted into the repository. The existing TaskScheduler worker loop handles each activated run and its local retry policy.
 
 ### Workflow lifecycle aggregation
 
@@ -30,7 +30,7 @@ TaskRunIdGenerator is injected into workflow execution. SequenceTaskRunIdGenerat
 
 ### Explicit limitations
 
-Workflow-run lifecycle state is held in the execution call and returned as a terminal WorkflowExecutionResult; it is not persisted. Handler futures do not yet receive cooperative cancellation tokens; cancellation only commits orchestration state and invalidates later stale completion. Shutdown has no forced drain deadline. Workflow task input/output, workflow deadlines, compensation, distributed workers, durable state transitions, and lease/fencing are out of scope for M03.
+Workflow-run lifecycle state is held in the execution call and returned as a terminal WorkflowExecutionResult; it is not persisted. Automatic predecessor-output mapping, templating, and transformation are not part of this baseline; applications own any mapping needed by handlers. Handler futures do not yet receive cooperative cancellation tokens; cancellation only commits orchestration state and invalidates later stale completion. Shutdown has no forced drain deadline. Workflow task input/output, workflow deadlines, compensation, distributed workers, durable state transitions, and lease/fencing are out of scope for M03.
 
 ## Consequences
 

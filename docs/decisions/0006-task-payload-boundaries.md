@@ -1,6 +1,6 @@
 # ADR-0006: Task input and output payload boundaries
 
-- **Status:** Accepted for the M03 implementation baseline
+- **Status:** Accepted; implementation hosted-verified in run `41358509174`
 - **Date:** 2026-11-02
 - **Scope:** Single-process task input delivery, successful output retention, and payload size validation
 

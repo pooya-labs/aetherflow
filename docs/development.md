@@ -29,7 +29,7 @@ Then request `http://127.0.0.1:8080/health`. Change the bind address with `AETHE
 AETHERFLOW_BIND=0.0.0.0:8080 cargo run -p aetherflow-server
 ```
 
-The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The runtime scheduler uses Tokio. It supports cooperative handler cancellation and bounded two-stage shutdown (30-second graceful drain plus 5-second cancellation grace by default; both are configurable). The server's network stack remains a sequential standard-library bootstrap and is not production-ready.
+Task payloads are transport-neutral byte arrays. Each input/output is limited to 1 MiB. The application owns serialization and schema compatibility. The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The runtime scheduler uses Tokio. It supports cooperative handler cancellation and bounded two-stage shutdown (30-second graceful drain plus 5-second cancellation grace by default; both are configurable). The server's network stack remains a sequential standard-library bootstrap and is not production-ready.
 
 ## Workspace layout
 
@@ -39,6 +39,6 @@ The current server is intentionally a minimal standard-library bootstrap. It han
 
 Task inputs and outputs are opaque byte payloads limited to 1 MiB each; applications own serialization and schema versions. WorkflowTask supports a static input payload, while automatic predecessor-output mapping is not implemented yet. Keep domain rules out of runtime and network adapters. The initial in-memory repository uses one short-held mutex and deterministic caller-supplied timestamps; never hold repository locks across an `.await`. It is a test/runtime adapter, not durable storage. Add dependencies only when a milestone has a concrete need and record material architecture changes in an ADR.
 
-## Verification honesty
+## Verification
 
-A CI workflow is committed, but its first hosted run must complete successfully before the foundation milestone can be marked verified. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. CI runs every check with locked dependency resolution and publishes the resolved lockfile as a short-lived artifact for review when the dependency graph changes. The latest fully green workflow coordinator run is `41356396516` (42 unit tests, release build, and docs).
+The foundation and current single-node runtime milestones are checked by hosted CI. The latest fully green run is `41358509174`; it verified 51 unit tests, formatting, Clippy, release build, and docs. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. CI runs every check with locked dependency resolution and publishes the resolved lockfile as a short-lived artifact for review when the dependency graph changes. The latest fully green task I/O run is `41358509174` (51 unit tests: 15 core, 34 runtime, 2 server; release build and docs).
