@@ -40,9 +40,9 @@ Overall status: **In progress; hosted CI verification pending**
 - [x] Define distinct workflow, workflow-run, task, task-run, attempt, and worker identities.
 - [x] Specify workflow/task lifecycle states and legal transitions.
 - [x] Define the initial bounded retry contract and attempt-count semantics.
-- [ ] Specify timeout/cancellation race handling and idempotency-key API.
-- [x] Implement deterministic transition tests.
-- [ ] Add property-based transition tests.
+- [x] Specify first-committed terminal outcome for timeout/cancellation races and a stable idempotency-key contract.
+- [x] Implement deterministic transition tests, including exhaustive workflow/task transition matrices and competing terminal outcomes.
+- [ ] Add property-based transition tests (deferred until the dependency and lockfile workflow is established).
 - [x] Document failure semantics, versioning invariants, and delivery limitations.
 
 ### M03 — Single-node execution runtime
@@ -98,15 +98,15 @@ Overall status: **In progress; hosted CI verification pending**
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed. M02 now has typed execution identities, explicit workflow/task lifecycle graphs, versioned transitions, a bounded retry-policy value, deterministic unit tests, and ADR-0002 documenting semantics.
+**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed. M02 now has typed execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry backoff, exhaustive transition-matrix tests, overflow and terminal-race tests, and ADR-0002 documenting semantics.
 
-**In progress:** M01 hosted verification and M02 domain hardening.
+**In progress:** M01 hosted verification and M02 domain hardening. Domain transition coverage and the initial retry/idempotency/race contracts are now implemented; property-based tests remain deferred.
 
-**Next action:** Inspect the newest hosted CI run for commit `f89c9fe58b4a1ec79543a4f156b5f2dc8fd98e3c`. Fix any remaining format/lint/compile/test failures. Then add transition-matrix coverage and property-based tests, and define timeout/cancellation/idempotency contracts before starting the runtime.
+**Next action:** Inspect the hosted CI run for the latest domain changes. Fix any formatting, lint, compile, or test failures. Then establish property-based test dependency/lockfile handling and begin M03 in-memory repository and runtime design only after M01 is green.
 
-**Verification:** The previous completed CI run failed in formatting; an intermediate run also observed a missing module because commits triggered CI while the multi-file change was still being applied. The latest server formatting correction has been committed; hosted verification for the latest commit is pending. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+**Verification:** The latest observed hosted run for commit `c5f787c3711630f8476640a28f0115ced416844a` was in progress; a subsequent ADR commit may queue a newer run. Earlier runs exposed rustfmt differences in the domain module; those formatting corrections are committed. No green run has yet been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
-**Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy validates bounds and attempt budget but does not yet calculate backoff or classify errors.
+**Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy now calculates capped exponential backoff without jitter; the runtime must inject jitter and classify retryable errors.
 
 **Blockers:** Hosted CI verification pending. License selection remains with repository owner.
 
@@ -118,7 +118,7 @@ Overall status: **In progress; hosted CI verification pending**
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
-| 2026-11-02 | M02 | Typed IDs, workflow/task lifecycle state machines, versioned transitions, retry-policy contract, deterministic tests, and ADR-0002 committed; hosted verification pending |
+| 2026-11-02 | M02 | Typed IDs and idempotency keys, workflow/task lifecycle state machines, versioned transitions, capped exponential backoff, exhaustive transition tests, terminal-race and overflow tests, and ADR-0002 committed; hosted verification pending |
 
 ## Resume instructions
 
