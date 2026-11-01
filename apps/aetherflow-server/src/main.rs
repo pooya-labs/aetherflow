@@ -87,8 +87,7 @@ mod tests {
         });
 
         let mut client = TcpStream::connect(address).expect("connect");
-        write!(client, "GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n")
-            .expect("send request");
+        write!(client, "GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n").expect("send request");
 
         let mut response = String::new();
         client.read_to_string(&mut response).expect("read response");
