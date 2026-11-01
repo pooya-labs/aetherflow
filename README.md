@@ -2,7 +2,7 @@
 
 **A durable, distributed workflow execution platform built with Rust.**
 
-AetherFlow is an open-source engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
+AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
 > **Project status:** Architecture and foundation phase. APIs and implementation details are not yet stable.
 
