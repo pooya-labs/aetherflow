@@ -43,8 +43,7 @@ impl std::fmt::Display for TaskPayloadError {
         write!(
             formatter,
             "task payload is {} bytes; maximum is {} bytes",
-            self.actual_bytes,
-            self.maximum_bytes
+            self.actual_bytes, self.maximum_bytes
         )
     }
 }
@@ -634,8 +633,8 @@ impl TaskRepository for InMemoryRepository {
 #[cfg(test)]
 mod tests {
     use super::{
-        InMemoryRepository, RepositoryError, TaskInput, TaskOutput, TaskRepository, TaskRun,
-        MAX_TASK_PAYLOAD_BYTES,
+        InMemoryRepository, MAX_TASK_PAYLOAD_BYTES, RepositoryError, TaskInput, TaskOutput,
+        TaskRepository, TaskRun,
     };
     use aetherflow_core::domain::{TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId};
     use std::sync::{Arc, Barrier};
@@ -902,13 +901,7 @@ mod tests {
 
         repository.cancel(&id, version, 2).expect("cancel task");
         assert_eq!(
-            repository.complete(
-                &id,
-                &worker("worker-01"),
-                version,
-                TaskOutput::empty(),
-                3,
-            ),
+            repository.complete(&id, &worker("worker-01"), version, TaskOutput::empty(), 3,),
             Err(RepositoryError::StaleVersion {
                 expected: version,
                 actual: version + 1,
