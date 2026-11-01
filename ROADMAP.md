@@ -46,7 +46,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 - [x] Document failure semantics, versioning invariants, and delivery limitations.
 
 ### M03 — Single-node execution runtime
-- [x] Implement in-memory repository for deterministic tests (hosted verification pending).
+- [x] Implement in-memory repository for deterministic tests and verify it with hosted CI (run `41353963000`, commit `54aee8d`).
 - [ ] Implement bounded async scheduler and worker loop.
 - [ ] Add task registration and workflow execution API.
 - [ ] Add concurrency limits, deadlines, cancellation, and retry policy.
@@ -100,11 +100,11 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 **Completed:** M00 architecture baseline except owner license selection. M01 is verified by hosted run `41353166515` on commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2`: formatting, Clippy, workspace tests, release build, and documentation build all passed. M02 has distinct execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive deterministic transition matrices, terminal-outcome race and overflow tests, and ADR-0002. Property-based tests remain deliberately deferred until dependency and lockfile generation are handled reproducibly.
 
-**In progress:** M03 single-node runtime. A new `aetherflow-runtime` crate now contains a process-local in-memory task repository, deterministic due-task promotion, exclusive local claiming, attempt counting, expected-version checks, retry scheduling, cancellation, timeout, and an injectable monotonic clock boundary. The current repository implementation and its tests are committed; hosted verification is pending.
+**In progress:** M03 single-node runtime. A new `aetherflow-runtime` crate now contains a process-local in-memory task repository, deterministic due-task promotion, exclusive local claiming, attempt counting, expected-version checks, retry scheduling, cancellation, timeout, and an injectable monotonic clock boundary. The in-memory repository and its deterministic/concurrency tests are committed and hosted-verified in run `41353963000`.
 
-**Next action:** Verify the M03 repository implementation in hosted CI. Then implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Resolve the reproducible Cargo lockfile workflow before introducing Tokio or property-testing dependencies.
+**Next action:** Implement the bounded async scheduler and worker loop, task registration/execution API, deadlines, graceful shutdown, and integration tests. Keep the in-memory adapter explicitly non-durable. Establish a reproducible Cargo lockfile refresh/verification workflow before introducing Tokio or property-testing dependencies.
 
-**Verification:** M01 hosted run \`41353166515\` for commit \`832e3fc50c8da7e22d2fedaaec9151b3748168b2\` completed successfully. M03 run \`41353788023\` passed formatting and Clippy; all 15 core and 9 runtime tests passed, but both bootstrap-server tests failed with TCP connection resets. The server previously read the request only once and could close while unread header bytes remained. This commit reads until the HTTP header terminator and changes the test client to send request headers in two chunks to exercise incremental input. M03 hosted verification remains pending.
+**Verification:** M01 hosted run `41353166515` for commit `832e3fc50c8da7e22d2fedaaec9151b3748168b2` completed successfully. M03 hosted run `41353963000` for commit `54aee8d4be0b88e8610654eb92ed8d4444d009c9` completed with conclusion `success`: formatting, Clippy, workspace tests, release build, and documentation build all passed. The repository passed 15 core tests, 9 runtime tests, and 2 server tests. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
 **Known limitations:** The in-memory repository loses all state on process exit and has no lease expiry, fencing, or crash recovery. The async scheduler/worker loop, durable event log, PostgreSQL adapter, external side-effect idempotency API, and retry jitter are not implemented. The bootstrap HTTP server remains sequential and non-production. Retryable error classification and deadline interaction remain runtime responsibilities.
 
@@ -119,7 +119,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Added runtime crate and mutex-backed in-memory repository; formatting and Clippy passed and 24 core/runtime tests passed, while two bootstrap-server tests exposed partial-request read handling; incremental header-read fix committed for verification |
+| 2026-11-02 | M03 | Added runtime crate and mutex-backed in-memory repository; fixed incremental HTTP header reads after CI exposed a TCP reset; final hosted run `41353963000` passed formatting, Clippy, all workspace tests, release build, and docs |
 
 ## Resume instructions
 
