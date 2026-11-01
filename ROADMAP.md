@@ -4,7 +4,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 
 Last updated: 2026-11-02  
 Current branch: `main`  
-Current milestone: **M01 — Rust workspace foundation**  
+Current milestone: **M02 — Execution domain and state machine**  
 Overall status: **In progress; hosted CI verification pending**
 
 ## Progress rules
@@ -37,11 +37,13 @@ Overall status: **In progress; hosted CI verification pending**
 - [ ] Verify clean build and all checks from a fresh checkout via hosted CI.
 
 ### M02 — Execution domain and state machine
-- [ ] Define workflow, run, task, attempt, and worker identities.
-- [ ] Specify lifecycle states and legal transitions.
-- [ ] Define retry, timeout, cancellation, and idempotency contracts.
-- [ ] Implement deterministic transition tests and property-based tests.
-- [ ] Document failure semantics and invariants.
+- [x] Define distinct workflow, workflow-run, task, task-run, attempt, and worker identities.
+- [x] Specify workflow/task lifecycle states and legal transitions.
+- [x] Define the initial bounded retry contract and attempt-count semantics.
+- [ ] Specify timeout/cancellation race handling and idempotency-key API.
+- [x] Implement deterministic transition tests.
+- [ ] Add property-based transition tests.
+- [x] Document failure semantics, versioning invariants, and delivery limitations.
 
 ### M03 — Single-node execution runtime
 - [ ] Implement in-memory repository for deterministic tests.
@@ -96,12 +98,18 @@ Overall status: **In progress; hosted CI verification pending**
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed to `main`.  
-**In progress:** M01 verification.  
-**Next action:** Inspect hosted CI result; fix any format, lint, build, or test failures before starting M02.  
-**Verification:** CI workflow exists and has been triggered. Latest observed run for commit `583c3538e8253eacc3eacad4685112f5f48ae18a` was pending at the time of this update. Local Rust compilation was not possible in this environment because `rustc` is not installed.  
-**Known limitation:** Bootstrap HTTP server is sequential and intentionally not production-ready.  
-**Blockers:** Hosted CI result pending. License selection remains with repository owner.  
+**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed. M02 now has typed execution identities, explicit workflow/task lifecycle graphs, versioned transitions, a bounded retry-policy value, deterministic unit tests, and ADR-0002 documenting semantics.
+
+**In progress:** M01 hosted verification and M02 domain hardening.
+
+**Next action:** Inspect the newest hosted CI run for commit `f89c9fe58b4a1ec79543a4f156b5f2dc8fd98e3c`. Fix any remaining format/lint/compile/test failures. Then add transition-matrix coverage and property-based tests, and define timeout/cancellation/idempotency contracts before starting the runtime.
+
+**Verification:** The previous completed CI run failed in formatting; an intermediate run also observed a missing module because commits triggered CI while the multi-file change was still being applied. The latest server formatting correction has been committed; hosted verification for the latest commit is pending. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+
+**Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy validates bounds and attempt budget but does not yet calculate backoff or classify errors.
+
+**Blockers:** Hosted CI verification pending. License selection remains with repository owner.
+
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
 ## Session log
@@ -109,7 +117,8 @@ Overall status: **In progress; hosted CI verification pending**
 | Date | Milestone | Result |
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
-| 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted verification pending |
+| 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
+| 2026-11-02 | M02 | Typed IDs, workflow/task lifecycle state machines, versioned transitions, retry-policy contract, deterministic tests, and ADR-0002 committed; hosted verification pending |
 
 ## Resume instructions
 
