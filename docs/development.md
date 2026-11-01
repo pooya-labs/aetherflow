@@ -29,12 +29,12 @@ Then request `http://127.0.0.1:8080/health`. Change the bind address with `AETHE
 AETHERFLOW_BIND=0.0.0.0:8080 cargo run -p aetherflow-server
 ```
 
-The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The production async HTTP stack will be introduced after execution contracts are defined.
+The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The runtime scheduler uses Tokio; the server's network stack remains a sequential standard-library bootstrap and is not production-ready.
 
 ## Workspace layout
 
 - `crates/aetherflow-core`: infrastructure-independent domain primitives.
-- `crates/aetherflow-runtime`: single-node runtime contracts and in-memory repository.
+- `crates/aetherflow-runtime`: single-node runtime contracts, in-memory repository, and bounded async scheduler.
 - `apps/aetherflow-server`: minimal process and bootstrap health endpoint.
 
 Keep domain rules out of runtime and network adapters. The initial in-memory repository uses one short-held mutex and deterministic caller-supplied timestamps; never hold repository locks across an `.await`. It is a test/runtime adapter, not durable storage. Add dependencies only when a milestone has a concrete need and record material architecture changes in an ADR.
