@@ -347,10 +347,16 @@ impl std::fmt::Display for SchedulerError {
         match self {
             Self::Repository(error) => error.fmt(formatter),
             Self::DependencyNotSucceeded(task_run_id) => {
-                write!(formatter, "task dependency has not succeeded: {task_run_id}")
+                write!(
+                    formatter,
+                    "task dependency has not succeeded: {task_run_id}"
+                )
             }
             Self::DependencyOutputMissing(task_run_id) => {
-                write!(formatter, "successful dependency has no output: {task_run_id}")
+                write!(
+                    formatter,
+                    "successful dependency has no output: {task_run_id}"
+                )
             }
             Self::DuplicateActiveClaim(task_run_id) => {
                 write!(
@@ -1493,8 +1499,7 @@ mod tests {
                 TaskId::parse("task-a").expect("valid task ID"),
                 |_context: super::TaskContext| async {
                     Ok::<TaskOutput, TaskExecutionError>(
-                        TaskOutput::new(b"parent-result".to_vec())
-                            .expect("valid parent output"),
+                        TaskOutput::new(b"parent-result".to_vec()).expect("valid parent output"),
                     )
                 },
             )
@@ -1525,10 +1530,7 @@ mod tests {
         let definition = WorkflowDefinition::new(
             WorkflowId::parse("workflow-dataflow").expect("valid workflow ID"),
             vec![
-                WorkflowTask::new(
-                    TaskId::parse("task-a").expect("valid task ID"),
-                    Vec::new(),
-                ),
+                WorkflowTask::new(TaskId::parse("task-a").expect("valid task ID"), Vec::new()),
                 WorkflowTask::new(
                     TaskId::parse("task-b").expect("valid task ID"),
                     vec![TaskId::parse("task-a").expect("valid dependency")],
