@@ -1,6 +1,6 @@
 //! Validated workflow definitions and deterministic dependency ordering.
 
-use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use aetherflow_core::domain::{TaskId, WorkflowId};
 
@@ -76,9 +76,7 @@ impl WorkflowDefinition {
                 let dependency_key = dependency.as_str().to_owned();
 
                 if dependency_key == *task_key {
-                    return Err(WorkflowDefinitionError::SelfDependency(
-                        task_key.clone(),
-                    ));
+                    return Err(WorkflowDefinitionError::SelfDependency(task_key.clone()));
                 }
 
                 if !seen_dependencies.insert(dependency_key.clone()) {
@@ -234,7 +232,10 @@ impl std::fmt::Display for WorkflowDefinitionError {
                 "task {task_id} depends on unknown task {dependency_id}"
             ),
             Self::Cycle(task_ids) => {
-                write!(formatter, "workflow contains a dependency cycle: {task_ids:?}")
+                write!(
+                    formatter,
+                    "workflow contains a dependency cycle: {task_ids:?}"
+                )
             }
         }
     }
@@ -298,9 +299,7 @@ mod tests {
                 workflow_id(),
                 vec![task("task-a", &[]), task("task-a", &[])],
             ),
-            Err(WorkflowDefinitionError::DuplicateTask(
-                "task-a".to_owned()
-            ))
+            Err(WorkflowDefinitionError::DuplicateTask("task-a".to_owned()))
         );
     }
 
@@ -319,9 +318,7 @@ mod tests {
     fn rejects_self_dependencies() {
         assert_eq!(
             WorkflowDefinition::new(workflow_id(), vec![task("task-a", &["task-a"])]),
-            Err(WorkflowDefinitionError::SelfDependency(
-                "task-a".to_owned()
-            ))
+            Err(WorkflowDefinitionError::SelfDependency("task-a".to_owned()))
         );
     }
 
@@ -330,10 +327,7 @@ mod tests {
         assert_eq!(
             WorkflowDefinition::new(
                 workflow_id(),
-                vec![
-                    task("task-a", &[]),
-                    task("task-b", &["task-a", "task-a"]),
-                ],
+                vec![task("task-a", &[]), task("task-b", &["task-a", "task-a"]),],
             ),
             Err(WorkflowDefinitionError::DuplicateDependency {
                 task_id: "task-b".to_owned(),
