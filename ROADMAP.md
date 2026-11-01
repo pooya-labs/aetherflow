@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-02  
 Current branch: `main`  
 Current milestone: **M02 — Execution domain and state machine**  
-Overall status: **In progress; hosted CI verification pending**
+Overall status: **In progress; formatting repair committed, hosted CI rerun pending**
 
 ## Progress rules
 
@@ -100,11 +100,11 @@ Overall status: **In progress; hosted CI verification pending**
 
 **Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed. M02 now has typed execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry backoff, exhaustive transition-matrix tests, overflow and terminal-race tests, and ADR-0002 documenting semantics.
 
-**In progress:** M01 hosted verification and M02 domain hardening. Domain transition coverage and the initial retry/idempotency/race contracts are now implemented; property-based tests remain deferred.
+**In progress:** M01 hosted verification. M02 deterministic coverage now includes exhaustive workflow/task transition matrices, competing terminal outcomes, and version overflow; property-based tests remain deferred until dependency and lockfile handling is established.
 
-**Next action:** Inspect the hosted CI run for the latest domain changes. Fix any formatting, lint, compile, or test failures. Then establish property-based test dependency/lockfile handling and begin M03 in-memory repository and runtime design only after M01 is green.
+**Next action:** Re-run hosted CI after the formatting and test-coverage repair. Inspect every check through documentation build; fix any remaining lint, compile, or test failures. Only after a green M01 run, establish property-based test dependency/lockfile handling and begin M03 design.
 
-**Verification:** The latest observed hosted run for commit `c5f787c3711630f8476640a28f0115ced416844a` was in progress; a subsequent ADR commit may queue a newer run. Earlier runs exposed rustfmt differences in the domain module; those formatting corrections are committed. No green run has yet been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+**Verification:** Hosted run `41352955804` for commit `6a3e0bd64649c4799ffa501154ccd3859bfd3aa4` completed with failure at `cargo +1.99.1 fmt --all -- --check`. The log identified three formatting diffs in `domain.rs`; Clippy, tests, release build, and documentation build were skipped. This commit applies those exact formatting fixes and adds the previously documented exhaustive matrix, terminal-race, and version-overflow tests. No green run has yet been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
 **Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy now calculates capped exponential backoff without jitter; the runtime must inject jitter and classify retryable errors.
 
@@ -118,7 +118,7 @@ Overall status: **In progress; hosted CI verification pending**
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
-| 2026-11-02 | M02 | Typed IDs and idempotency keys, workflow/task lifecycle state machines, versioned transitions, capped exponential backoff, exhaustive transition tests, terminal-race and overflow tests, and ADR-0002 committed; hosted verification pending |
+| 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI formatting failure diagnosed and repaired, rerun pending |
 
 ## Resume instructions
 

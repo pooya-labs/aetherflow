@@ -37,7 +37,10 @@ define_id!(TaskId, "Identifies a task definition within a workflow.");
 define_id!(TaskRunId, "Identifies one execution of a task definition.");
 define_id!(AttemptId, "Identifies one attempt to execute a task run.");
 define_id!(WorkerId, "Identifies a worker process or worker instance.");
-define_id!(IdempotencyKey, "Identifies one logical side effect across delivery attempts.");
+define_id!(
+    IdempotencyKey,
+    "Identifies one logical side effect across delivery attempts."
+);
 
 /// Lifecycle state shared by versioned workflow and task executions.
 pub trait Lifecycle: Copy + Eq {
@@ -355,8 +358,9 @@ impl RetryPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId, TaskStatus, TransitionError,
-        Versioned, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
+        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId,
+        TaskStatus, TransitionError, Versioned, WorkerId, WorkflowId, WorkflowRunId,
+        WorkflowStatus,
     };
     use std::num::NonZeroU32;
 
@@ -451,10 +455,22 @@ mod tests {
         assert!(policy.permits_retry(2));
         assert!(!policy.permits_retry(3));
         assert_eq!(policy.max_attempts().get(), 3);
-        assert_eq!(policy.backoff_ms(NonZeroU32::new(1).expect("non-zero")), 100);
-        assert_eq!(policy.backoff_ms(NonZeroU32::new(2).expect("non-zero")), 200);
-        assert_eq!(policy.backoff_ms(NonZeroU32::new(3).expect("non-zero")), 400);
-        assert_eq!(policy.backoff_ms(NonZeroU32::new(8).expect("non-zero")), 1_000);
+        assert_eq!(
+            policy.backoff_ms(NonZeroU32::new(1).expect("non-zero")),
+            100
+        );
+        assert_eq!(
+            policy.backoff_ms(NonZeroU32::new(2).expect("non-zero")),
+            200
+        );
+        assert_eq!(
+            policy.backoff_ms(NonZeroU32::new(3).expect("non-zero")),
+            400
+        );
+        assert_eq!(
+            policy.backoff_ms(NonZeroU32::new(8).expect("non-zero")),
+            1_000
+        );
     }
 
     #[test]
@@ -464,4 +480,126 @@ mod tests {
             Err(RetryPolicyError::InitialBackoffExceedsMaximum)
         );
     }
+    #[test]
+    fn workflow_transition_matrix_is_exhaustive() {
+        let states = [
+            WorkflowStatus::Pending,
+            WorkflowStatus::Running,
+            WorkflowStatus::Succeeded,
+            WorkflowStatus::Failed,
+            WorkflowStatus::Cancelled,
+            WorkflowStatus::TimedOut,
+        ];
+
+        for from in states {
+            for to in states {
+                let expected = matches!(
+                    (from, to),
+                    (
+                        WorkflowStatus::Pending,
+                        WorkflowStatus::Running
+                            | WorkflowStatus::Cancelled
+                            | WorkflowStatus::TimedOut
+                    ) | (
+                        WorkflowStatus::Running,
+                        WorkflowStatus::Succeeded
+                            | WorkflowStatus::Failed
+                            | WorkflowStatus::Cancelled
+                            | WorkflowStatus::TimedOut
+                    )
+                );
+                assert_eq!(
+                    from.allows(to),
+                    expected,
+                    "{} -> {}",
+                    from.name(),
+                    to.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn task_transition_matrix_is_exhaustive() {
+        let states = [
+            TaskStatus::Pending,
+            TaskStatus::Ready,
+            TaskStatus::Running,
+            TaskStatus::RetryWaiting,
+            TaskStatus::Succeeded,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+            TaskStatus::TimedOut,
+        ];
+
+        for from in states {
+            for to in states {
+                let expected = matches!(
+                    (from, to),
+                    (
+                        TaskStatus::Pending,
+                        TaskStatus::Ready | TaskStatus::Cancelled | TaskStatus::TimedOut
+                    ) | (
+                        TaskStatus::Ready,
+                        TaskStatus::Running | TaskStatus::Cancelled | TaskStatus::TimedOut
+                    ) | (
+                        TaskStatus::Running,
+                        TaskStatus::Succeeded
+                            | TaskStatus::Failed
+                            | TaskStatus::RetryWaiting
+                            | TaskStatus::Cancelled
+                            | TaskStatus::TimedOut
+                    ) | (
+                        TaskStatus::RetryWaiting,
+                        TaskStatus::Ready | TaskStatus::Cancelled | TaskStatus::TimedOut
+                    )
+                );
+                assert_eq!(
+                    from.allows(to),
+                    expected,
+                    "{} -> {}",
+                    from.name(),
+                    to.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn first_committed_terminal_outcome_wins_competing_races() {
+        let terminal_states = [
+            WorkflowStatus::Succeeded,
+            WorkflowStatus::Failed,
+            WorkflowStatus::Cancelled,
+            WorkflowStatus::TimedOut,
+        ];
+
+        for first in terminal_states {
+            let mut state = Versioned::new(WorkflowStatus::Running);
+            state.transition(first).expect("first terminal outcome commits");
+
+            for competing in terminal_states {
+                assert!(matches!(
+                    state.transition(competing),
+                    Err(TransitionError::InvalidTransition { .. })
+                ));
+                assert_eq!(state.status(), first);
+                assert_eq!(state.version(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn version_overflow_rejects_transition_without_mutation() {
+        let mut state = Versioned::new(WorkflowStatus::Pending);
+        state.version = u64::MAX;
+
+        assert_eq!(
+            state.transition(WorkflowStatus::Running),
+            Err(TransitionError::VersionOverflow)
+        );
+        assert_eq!(state.status(), WorkflowStatus::Pending);
+        assert_eq!(state.version(), u64::MAX);
+    }
+
 }
