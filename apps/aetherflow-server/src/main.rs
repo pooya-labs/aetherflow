@@ -11,8 +11,7 @@ use std::time::Duration;
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
 fn main() -> ExitCode {
-    let address = std::env::var("AETHERFLOW_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+    let address = std::env::var("AETHERFLOW_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
 
     match run(&address) {
         Ok(()) => ExitCode::SUCCESS,
@@ -58,14 +57,14 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     let path = parts.next().unwrap_or_default();
 
     let (status, body) = if method == b"GET" && path == b"/health" {
-        ("200 OK", "{\"status\":\"ok\"}")
+        ("200 OK", "{\\"status\\":\\"ok\\"}")
     } else {
-        ("404 Not Found", "{\"error\":\"not_found\"}")
+        ("404 Not Found", "{\\"error\\":\\"not_found\\"}")
     };
 
     write!(
         stream,
-        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\\r\\ncontent-type: application/json\\r\\ncontent-length: {}\\r\\nconnection: close\\r\\n\\r\\n{body}",
         body.len()
     )?;
     stream.flush()
@@ -88,7 +87,7 @@ mod tests {
         });
 
         let mut client = TcpStream::connect(address).expect("connect");
-        write!(client, "GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n")
+        write!(client, "GET {path} HTTP/1.1\\r\\nhost: localhost\\r\\n\\r\\n")
             .expect("send request");
 
         let mut response = String::new();
@@ -101,13 +100,13 @@ mod tests {
     fn health_endpoint_returns_ok() {
         let response = request("/health");
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with("{\"status\":\"ok\"}"));
+        assert!(response.ends_with("{\\"status\\":\\"ok\\"}"));
     }
 
     #[test]
     fn unknown_path_returns_not_found() {
         let response = request("/not-a-route");
         assert!(response.starts_with("HTTP/1.1 404 Not Found"));
-        assert!(response.ends_with("{\"error\":\"not_found\"}"));
+        assert!(response.ends_with("{\\"error\\":\\"not_found\\"}"));
     }
 }
