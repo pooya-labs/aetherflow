@@ -264,7 +264,6 @@ mod tests {
         WorkflowId::parse("workflow-01").expect("valid workflow ID")
     }
 
-
     #[test]
     fn sequence_generator_returns_unique_valid_task_run_ids() {
         let generator = super::SequenceTaskRunIdGenerator::new();
@@ -365,7 +364,6 @@ mod tests {
     }
 }
 
-
 /// Generates task-run identifiers when a workflow execution is materialized.
 pub trait TaskRunIdGenerator: Send + Sync {
     /// Returns a unique task-run identifier within the generator's namespace.
@@ -428,7 +426,10 @@ impl std::fmt::Display for TaskRunIdGenerationError {
         match self {
             Self::SequenceExhausted => formatter.write_str("task-run ID sequence exhausted"),
             Self::InvalidIdentifier(message) => {
-                write!(formatter, "generated task-run identifier is invalid: {message}")
+                write!(
+                    formatter,
+                    "generated task-run identifier is invalid: {message}"
+                )
             }
         }
     }
@@ -548,7 +549,6 @@ impl From<aetherflow_core::domain::TransitionError> for WorkflowExecutionError {
         Self::InvalidTransition(value)
     }
 }
-
 
 impl From<crate::repository::RepositoryError> for WorkflowExecutionError {
     fn from(value: crate::repository::RepositoryError) -> Self {

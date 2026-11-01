@@ -255,7 +255,6 @@ pub struct TaskScheduler<R: TaskRepository + 'static> {
     config: SchedulerConfig,
 }
 
-
 impl<R: TaskRepository + 'static> Clone for TaskScheduler<R> {
     fn clone(&self) -> Self {
         Self {
@@ -309,7 +308,6 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             .cancel(task_run_id, expected_version, self.clock.now_ms())?)
     }
 
-
     /// Executes a validated workflow definition using dependency-aware task activation.
     ///
     /// Only root tasks are inserted initially. A downstream task is inserted
@@ -335,7 +333,10 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
         }
 
         let mut activated = BTreeSet::new();
-        for task in definition.tasks().filter(|task| task.dependencies().is_empty()) {
+        for task in definition
+            .tasks()
+            .filter(|task| task.dependencies().is_empty())
+        {
             let task_key = task.task_id().as_str().to_owned();
             let task_run_id = task_run_ids
                 .get(&task_key)
@@ -353,7 +354,12 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
         if *external_shutdown.borrow_and_update() {
             workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-            cancel_workflow_tasks(self.repository.as_ref(), &activated, &task_run_ids, self.clock.now_ms())?;
+            cancel_workflow_tasks(
+                self.repository.as_ref(),
+                &activated,
+                &task_run_ids,
+                self.clock.now_ms(),
+            )?;
             return collect_workflow_result(
                 self.repository.as_ref(),
                 &definition,
@@ -366,9 +372,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
         let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
         let worker_scheduler = self.clone();
-        let mut worker_handle = tokio::spawn(async move {
-            worker_scheduler.run(worker_shutdown_rx).await
-        });
+        let mut worker_handle =
+            tokio::spawn(async move { worker_scheduler.run(worker_shutdown_rx).await });
 
         loop {
             if worker_handle.is_finished() {
@@ -418,9 +423,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                         TaskStatus::Failed | TaskStatus::TimedOut | TaskStatus::Cancelled
                     )
                 })
-                .min_by_key(|(task_key, task_run)| {
-                    (task_run.updated_at_ms(), (*task_key).clone())
-                })
+                .min_by_key(|(task_key, task_run)| (task_run.updated_at_ms(), (*task_key).clone()))
                 .map(|(_, task_run)| task_run.status());
 
             if let Some(task_status) = terminal_outcome {
@@ -590,7 +593,6 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
         }
     }
 }
-
 
 async fn join_worker(
     handle: &mut JoinHandle<Result<(), SchedulerError>>,
@@ -954,12 +956,9 @@ mod tests {
         assert_eq!(maximum.load(Ordering::SeqCst), 2);
     }
 
-
     #[tokio::test]
     async fn workflow_activates_tasks_only_after_dependencies_succeed() {
-        use crate::workflow::{
-            SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask,
-        };
+        use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
         use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
         use std::sync::Mutex;
 
@@ -1003,10 +1002,7 @@ mod tests {
                     TaskId::parse("task-b").expect("valid task ID"),
                     vec![TaskId::parse("task-a").expect("valid dependency")],
                 ),
-                WorkflowTask::new(
-                    TaskId::parse("task-a").expect("valid task ID"),
-                    Vec::new(),
-                ),
+                WorkflowTask::new(TaskId::parse("task-a").expect("valid task ID"), Vec::new()),
             ],
         )
         .expect("valid workflow DAG");
@@ -1021,12 +1017,17 @@ mod tests {
             .await
             .expect("workflow executes");
 
-        assert_eq!(result.status(), aetherflow_core::domain::WorkflowStatus::Succeeded);
+        assert_eq!(
+            result.status(),
+            aetherflow_core::domain::WorkflowStatus::Succeeded
+        );
         assert_eq!(result.task_runs().len(), 3);
-        assert!(result
-            .task_runs()
-            .iter()
-            .all(|task_run| task_run.status() == TaskStatus::Succeeded));
+        assert!(
+            result
+                .task_runs()
+                .iter()
+                .all(|task_run| task_run.status() == TaskStatus::Succeeded)
+        );
         assert_eq!(
             *order.lock().expect("read execution order"),
             ["task-a", "task-b", "task-c"]
@@ -1074,10 +1075,7 @@ mod tests {
         let definition = WorkflowDefinition::new(
             WorkflowId::parse("workflow-failure").expect("valid workflow ID"),
             vec![
-                WorkflowTask::new(
-                    TaskId::parse("task-a").expect("valid task ID"),
-                    Vec::new(),
-                ),
+                WorkflowTask::new(TaskId::parse("task-a").expect("valid task ID"), Vec::new()),
                 WorkflowTask::new(
                     TaskId::parse("task-b").expect("valid task ID"),
                     vec![TaskId::parse("task-a").expect("valid dependency")],
@@ -1096,7 +1094,10 @@ mod tests {
             .await
             .expect("workflow reaches failed state");
 
-        assert_eq!(result.status(), aetherflow_core::domain::WorkflowStatus::Failed);
+        assert_eq!(
+            result.status(),
+            aetherflow_core::domain::WorkflowStatus::Failed
+        );
         assert_eq!(result.task_runs().len(), 1);
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 0);
         drop(shutdown_tx);
@@ -1145,8 +1146,7 @@ mod tests {
             running_scheduler
                 .execute_workflow(
                     definition,
-                    WorkflowRunId::parse("workflow-run-cancel")
-                        .expect("valid workflow-run ID"),
+                    WorkflowRunId::parse("workflow-run-cancel").expect("valid workflow-run ID"),
                     &SequenceTaskRunIdGenerator::new(),
                     shutdown_rx,
                 )
