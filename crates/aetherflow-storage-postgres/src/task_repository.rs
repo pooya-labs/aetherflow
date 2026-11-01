@@ -369,7 +369,9 @@ impl PgTaskRepository {
                         ],
                     )
                     .await
-                    .map_err(|error| StorageError::Database(format!("insert dependency edge: {error:?}")))?;
+                    .map_err(|error| {
+                        StorageError::Database(format!("insert dependency edge: {error:?}"))
+                    })?;
             }
         }
 
@@ -892,7 +894,9 @@ async fn append_outbox(
             ],
         )
         .await
-        .map_err(|error| StorageError::Database(format!("append outbox event {event_type}: {error:?}")))?;
+        .map_err(|error| {
+            StorageError::Database(format!("append outbox event {event_type}: {error:?}"))
+        })?;
     Ok(())
 }
 

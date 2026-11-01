@@ -155,7 +155,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("claim child")
         .expect("child is ready");
-    assert_eq!(child_claim.task_run().dependencies(), std::slice::from_ref(&parent_id));
+    assert_eq!(
+        child_claim.task_run().dependencies(),
+        std::slice::from_ref(&parent_id)
+    );
     repository
         .complete(
             &child_id,
