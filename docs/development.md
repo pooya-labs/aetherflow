@@ -29,7 +29,7 @@ Then request `http://127.0.0.1:8080/health`. Change the bind address with `AETHE
 AETHERFLOW_BIND=0.0.0.0:8080 cargo run -p aetherflow-server
 ```
 
-The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The runtime scheduler uses Tokio; the server's network stack remains a sequential standard-library bootstrap and is not production-ready.
+The current server is intentionally a minimal standard-library bootstrap. It handles connections sequentially and is not hardened or intended for production. The runtime scheduler uses Tokio. It supports cooperative handler cancellation and bounded two-stage shutdown (30-second graceful drain plus 5-second cancellation grace by default; both are configurable). The server's network stack remains a sequential standard-library bootstrap and is not production-ready.
 
 ## Workspace layout
 
