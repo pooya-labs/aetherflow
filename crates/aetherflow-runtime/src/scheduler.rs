@@ -1,6 +1,6 @@
 //! Bounded asynchronous task scheduler and local worker loop.
 
-use std::collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
@@ -275,7 +275,10 @@ impl std::fmt::Display for SchedulerError {
         match self {
             Self::Repository(error) => error.fmt(formatter),
             Self::DuplicateActiveClaim(task_run_id) => {
-                write!(formatter, "task run already has an active claim: {task_run_id}")
+                write!(
+                    formatter,
+                    "task run already has an active claim: {task_run_id}"
+                )
             }
             Self::WorkerTaskPanicked(message) => {
                 write!(formatter, "worker task terminated unexpectedly: {message}")
@@ -496,11 +499,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
         if *external_shutdown.borrow_and_update() {
             workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-            self.cancel_workflow_tasks(
-                                &activated,
-                &task_run_ids,
-                self.clock.now_ms(),
-            )?;
+            self.cancel_workflow_tasks(&activated, &task_run_ids, self.clock.now_ms())?;
             return collect_workflow_result(
                 self.repository.as_ref(),
                 &definition,
@@ -529,11 +528,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                 && *external_shutdown.borrow_and_update()
             {
                 workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-                self.cancel_workflow_tasks(
-                                        &activated,
-                    &task_run_ids,
-                    self.clock.now_ms(),
-                )?;
+                self.cancel_workflow_tasks(&activated, &task_run_ids, self.clock.now_ms())?;
                 let _ = worker_shutdown_tx.send(true);
                 join_worker(&mut worker_handle).await?;
                 return collect_workflow_result(
@@ -574,11 +569,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     _ => unreachable!("only non-success terminal task states are selected"),
                 };
                 workflow_lifecycle.transition(workflow_status)?;
-                self.cancel_workflow_tasks(
-                                        &activated,
-                    &task_run_ids,
-                    self.clock.now_ms(),
-                )?;
+                self.cancel_workflow_tasks(&activated, &task_run_ids, self.clock.now_ms())?;
                 let _ = worker_shutdown_tx.send(true);
                 join_worker(&mut worker_handle).await?;
                 return collect_workflow_result(
@@ -654,11 +645,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
             if shutdown_requested {
                 workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-                self.cancel_workflow_tasks(
-                                        &activated,
-                    &task_run_ids,
-                    self.clock.now_ms(),
-                )?;
+                self.cancel_workflow_tasks(&activated, &task_run_ids, self.clock.now_ms())?;
                 let _ = worker_shutdown_tx.send(true);
                 join_worker(&mut worker_handle).await?;
                 return collect_workflow_result(
@@ -704,7 +691,9 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     self.register_task_cancellation(&task_run_id, cancellation_tx.clone())?;
 
                     let latest = self.repository.get(&task_run_id)?;
-                    if latest.status() != TaskStatus::Running || latest.version() != expected_version {
+                    if latest.status() != TaskStatus::Running
+                        || latest.version() != expected_version
+                    {
                         let _ = cancellation_tx.send(true);
                     }
 
@@ -1362,7 +1351,9 @@ mod tests {
         let handle = tokio::spawn(async move { running_scheduler.run(shutdown_rx).await });
         wait_for_status(&repository, &id, TaskStatus::Running).await;
         let version = repository.get(&id).expect("read running task").version();
-        scheduler.cancel_task_run(&id, version).expect("cancel task");
+        scheduler
+            .cancel_task_run(&id, version)
+            .expect("cancel task");
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while finished.load(Ordering::SeqCst) == 0 {
@@ -1372,9 +1363,15 @@ mod tests {
         .await
         .expect("cooperative handler observes cancellation");
 
-        assert_eq!(repository.get(&id).expect("read task").status(), TaskStatus::Cancelled);
+        assert_eq!(
+            repository.get(&id).expect("read task").status(),
+            TaskStatus::Cancelled
+        );
         shutdown_tx.send(true).expect("signal scheduler shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
     }
 
     #[tokio::test]
