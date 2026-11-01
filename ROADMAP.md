@@ -51,7 +51,8 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 - [x] Add typed task-handler registration API with duplicate-registration protection; workflow DAG execution API remains open.
 - [x] Add bounded concurrency, per-attempt timeout, version-guarded cancellation, and retryable/permanent failure policy.
 - [x] Add async scheduler/repository tests for success, retry, timeout, cancellation race, and concurrency limits.
-- [ ] Implement workflow DAG execution API and dependency-aware task activation.
+- [x] Add validated workflow DAG definitions with deterministic topological ordering, duplicate/missing/self dependency checks, and cycle detection (CI verification pending).
+- [ ] Implement workflow-run orchestration API and dependency-aware task activation.
 
 ### M04 — Durable persistence
 - [ ] Design PostgreSQL schema and migration strategy.
@@ -103,9 +104,9 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 **In progress:** M03 single-node runtime. The synchronous in-memory repository is verified. The bounded Tokio scheduler and handler registry are now also hosted-verified: it limits in-flight attempts, classifies retryable/permanent failures, applies per-attempt timeouts, settles with expected-version checks, and drains active work after shutdown. Five async scheduler tests cover success, retry, timeout, concurrency limits, and cancellation/completion races. Hosted run `41354805491` passed all checks on commit `ccc549935d96c2f9ef78c2758dd2c30f6694a505`.
 
-**Next action:** Implement workflow DAG execution: workflow submission, dependency-aware task activation, workflow-run lifecycle aggregation, and end-to-end success/failure tests. Then add cooperative cancellation signalling and a bounded shutdown-drain policy. Keep the in-memory adapter explicitly non-durable; PostgreSQL, leases, and distributed coordination remain M04/M05.
+**Next action:** Verify workflow DAG validation in hosted CI. Then add workflow-run orchestration with dependency-aware task activation, workflow lifecycle aggregation, and end-to-end success/failure/cancellation tests. Keep the in-memory adapter explicitly non-durable; PostgreSQL, leases, and distributed coordination remain M04/M05.
 
-**Verification:** M01 run `41353166515`, M03 repository/server run `41353963000`, lockfile resolution run `41354159107`, locked-build run `41354279238`, and async scheduler run `41354805491` all completed successfully. The scheduler run passed locked dependency resolution, formatting, Clippy, 15 core tests, 14 runtime tests, 2 server tests, release build, and documentation build. Total: 31 unit tests passed, zero failed. Local Rust compilation remains unavailable because `rustc` is not installed in the working environment.
+**Verification:** M01 run \`41353166515\`, M03 repository/server run \`41353963000\`, lockfile generation run \`41354159107\`, locked-build run \`41354279238\`, async scheduler run \`41354805491\`, and roadmap synchronization run \`41354923567\` all completed successfully. Scheduler run \`41354805491\` passed locked dependency resolution, formatting, Clippy, 15 core tests, 14 runtime tests, 2 server tests, release build, and documentation build: 31 tests passed, zero failed. Workflow DAG validation has been implemented in this commit and awaits hosted verification. Local Rust compilation remains unavailable because \`rustc\` is not installed in the working environment.
 
 **Known limitations:** The in-memory repository loses state on process exit and has no lease expiry, fencing, or crash recovery. The scheduler is single-process; timeout drops the handler future, while cancellation changes repository state but does not forcibly stop a running handler future. Worker panics stop the scheduler and can leave a task in Running until process exit. There is no workflow DAG execution, durable event log, PostgreSQL adapter, persisted task input/output, external side-effect idempotency API, or retry jitter. Shutdown drains without a deadline, so a non-terminating handler can delay shutdown indefinitely. The bootstrap HTTP server remains sequential and non-production.
 
@@ -120,7 +121,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Verified in-memory repository and server; pinned Tokio `1.54.1` and committed Cargo lockfile; added bounded async scheduler, handler registry, retry/timeout/cancel handling and graceful drain. Hosted run `41354805491` passed formatting, Clippy, 31 unit tests, release build, and docs. Workflow DAG orchestration remains next |
+| 2026-11-02 | M03 | Verified in-memory repository/server and bounded Tokio scheduler; run `41354805491` passed formatting, Clippy, 31 tests, release build, docs. Added deterministic DAG definition validation/topological ordering with cycle and dependency checks; hosted verification pending |
 
 ## Resume instructions
 
