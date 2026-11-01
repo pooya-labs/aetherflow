@@ -27,7 +27,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("build PostgreSQL pool");
     let store = PgStore::from_pool(pool.clone());
 
-    store.check_connection().await.expect("PostgreSQL is reachable");
+    store
+        .check_connection()
+        .await
+        .expect("PostgreSQL is reachable");
 
     // Simultaneous first-start calls must serialize: one applies, the other
     // observes the committed ledger and returns AlreadyCurrent.
@@ -110,7 +113,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("insert future migration marker");
     assert!(matches!(
         store.migrate().await,
-        Err(StorageError::NewerSchema { found: 2, supported: 1 })
+        Err(StorageError::NewerSchema {
+            found: 2,
+            supported: 1
+        })
     ));
     client
         .execute(
