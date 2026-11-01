@@ -37,6 +37,7 @@ define_id!(TaskId, "Identifies a task definition within a workflow.");
 define_id!(TaskRunId, "Identifies one execution of a task definition.");
 define_id!(AttemptId, "Identifies one attempt to execute a task run.");
 define_id!(WorkerId, "Identifies a worker process or worker instance.");
+define_id!(IdempotencyKey, "Identifies one logical side effect across delivery attempts.");
 
 /// Lifecycle state shared by versioned workflow and task executions.
 pub trait Lifecycle: Copy + Eq {
@@ -329,12 +330,32 @@ impl RetryPolicy {
     pub const fn permits_retry(self, attempts_started: u32) -> bool {
         attempts_started < self.max_attempts.get()
     }
+
+    /// Returns the capped exponential delay for a one-based retry number.
+    ///
+    /// Retry number 1 uses the initial delay. Jitter is intentionally left to
+    /// the runtime so it can be injected and tested without hidden randomness.
+    #[must_use]
+    pub const fn backoff_ms(self, retry_number: NonZeroU32) -> u64 {
+        let mut delay = self.initial_backoff_ms;
+        let mut remaining = retry_number.get() - 1;
+
+        while remaining > 0 && delay < self.max_backoff_ms {
+            delay = delay.saturating_mul(2);
+            if delay > self.max_backoff_ms {
+                delay = self.max_backoff_ms;
+            }
+            remaining -= 1;
+        }
+
+        delay
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptId, RetryPolicy, RetryPolicyError, TaskId, TaskRunId, TaskStatus, TransitionError,
+        AttemptId, IdempotencyKey, RetryPolicy, RetryPolicyError, TaskId, TaskRunId, TaskStatus, TransitionError,
         Versioned, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
     };
     use std::num::NonZeroU32;
@@ -347,6 +368,7 @@ mod tests {
         let task_run = TaskRunId::parse("task-run_01").expect("valid task run ID");
         let attempt = AttemptId::parse("attempt_01").expect("valid attempt ID");
         let worker = WorkerId::parse("worker_01").expect("valid worker ID");
+        let key = IdempotencyKey::parse("payment-order-123").expect("valid idempotency key");
 
         assert_eq!(workflow.as_str(), "workflow_01");
         assert_eq!(run.as_str(), "run_01");
@@ -354,6 +376,7 @@ mod tests {
         assert_eq!(task_run.as_str(), "task-run_01");
         assert_eq!(attempt.as_str(), "attempt_01");
         assert_eq!(worker.as_str(), "worker_01");
+        assert_eq!(key.as_str(), "payment-order-123");
         assert!(WorkerId::parse("../worker").is_err());
     }
 
@@ -428,6 +451,10 @@ mod tests {
         assert!(policy.permits_retry(2));
         assert!(!policy.permits_retry(3));
         assert_eq!(policy.max_attempts().get(), 3);
+        assert_eq!(policy.backoff_ms(NonZeroU32::new(1).expect("non-zero")), 100);
+        assert_eq!(policy.backoff_ms(NonZeroU32::new(2).expect("non-zero")), 200);
+        assert_eq!(policy.backoff_ms(NonZeroU32::new(3).expect("non-zero")), 400);
+        assert_eq!(policy.backoff_ms(NonZeroU32::new(8).expect("non-zero")), 1_000);
     }
 
     #[test]
