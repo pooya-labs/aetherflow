@@ -149,7 +149,10 @@ impl PgStore {
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
         transaction
-            .query_one("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_ADVISORY_LOCK])
+            .query_one(
+                "SELECT pg_advisory_xact_lock($1)",
+                &[&MIGRATION_ADVISORY_LOCK],
+            )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
@@ -254,7 +257,7 @@ pub fn initial_migration_checksum() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_migration_checksum, MIGRATION_NAME, MIGRATION_VERSION};
+    use super::{MIGRATION_NAME, MIGRATION_VERSION, initial_migration_checksum};
 
     #[test]
     fn initial_migration_has_stable_name_and_sha256_checksum_shape() {

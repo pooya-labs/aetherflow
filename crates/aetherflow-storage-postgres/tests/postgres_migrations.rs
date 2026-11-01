@@ -9,7 +9,9 @@ async fn postgres_migration_is_atomic_checksummed_and_idempotent() {
         return;
     };
 
-    let config: Config = database_url.parse().expect("valid PostgreSQL connection URL");
+    let config: Config = database_url
+        .parse()
+        .expect("valid PostgreSQL connection URL");
     let manager = Manager::from_config(
         config,
         NoTls,
@@ -23,7 +25,10 @@ async fn postgres_migration_is_atomic_checksummed_and_idempotent() {
         .expect("build PostgreSQL pool");
     let store = PgStore::from_pool(pool);
 
-    store.check_connection().await.expect("PostgreSQL is reachable");
+    store
+        .check_connection()
+        .await
+        .expect("PostgreSQL is reachable");
 
     let first = store.migrate().await.expect("apply initial migration");
     assert!(matches!(
