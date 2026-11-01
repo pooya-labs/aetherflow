@@ -46,20 +46,29 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 - [x] Document failure semantics, versioning invariants, and delivery limitations.
 
 ### M03 — Single-node execution runtime
-- [x] Implement in-memory repository for deterministic tests and verify it with hosted CI (run `41353963000`, commit `54aee8d`).
-- [x] Implement bounded async scheduler and worker loop (hosted CI run `41354805491`).
-- [x] Add typed task-handler registration API with duplicate-registration protection; workflow DAG execution API remains open.
+- [x] Implement in-memory repository for deterministic tests and verify it with hosted CI (run `41353963000`).
+- [x] Implement bounded async scheduler and worker loop (run `41354805491`).
+- [x] Add typed task-handler registration API with duplicate-registration protection.
 - [x] Add bounded concurrency, per-attempt timeout, version-guarded cancellation, and retryable/permanent failure policy.
 - [x] Add async scheduler/repository tests for success, retry, timeout, cancellation race, and concurrency limits.
-- [x] Add validated workflow DAG definitions with deterministic topological ordering, duplicate/missing/self dependency checks, and cycle detection (hosted CI run `41355173212`).
-- [x] Implement workflow-run orchestration API and dependency-aware task activation (hosted CI run `41356396516`).
+- [x] Add validated workflow DAG definitions with deterministic topological ordering, duplicate/missing/self dependency checks, and cycle detection (run `41355173212`).
+- [x] Implement workflow-run orchestration and dependency-aware task activation (run `41356396516`).
+- [x] Add cooperative handler cancellation and verify direct/workflow cancellation propagation (run `41357065422`).
+- [x] Add configurable bounded shutdown: graceful drain, cancellation grace, then force-abort with version-guarded terminal state (run `41357506821`).
+- [x] Add 1 MiB bounded TaskInput/TaskOutput, static workflow input delivery, and output retention (run `41358509174`).
+- [x] Expose successful direct-dependency outputs in TaskContext; verify dataflow integration (run `41359053561`).
 
 ### M04 — Durable persistence
-- [ ] Design PostgreSQL schema and migration strategy.
-- [ ] Implement transactional state transitions.
-- [ ] Implement claim/lease/heartbeat semantics.
-- [ ] Implement recovery after process restart.
-- [ ] Add crash-window and duplicate-delivery tests.
+- [x] Draft PostgreSQL v1 schema and migration strategy for workflow/task runs, ordered dependencies, attempts, fencing leases, and transactional outbox (ADR-0007; real-server validation pending).
+- [ ] Select and pin an async PostgreSQL driver compatible with the declared Rust 1.85 MSRV.
+- [ ] Add PostgreSQL integration service to CI and execute migrations against a real PostgreSQL instance.
+- [ ] Implement transactional migration runner with version/checksum tracking and safe startup behavior.
+- [ ] Implement durable TaskRepository adapter with transaction-guarded lifecycle transitions.
+- [ ] Implement dependency-aware ready promotion and atomic `FOR UPDATE SKIP LOCKED` claims.
+- [ ] Implement lease heartbeat, expiry recovery, and monotonically increasing fencing tokens.
+- [ ] Persist task attempts, dependencies, workflow/task state, and successful outputs.
+- [ ] Write state-change outbox records in the same transaction as each transition.
+- [ ] Add crash-window, stale-worker, lease-expiry, and duplicate-outbox-delivery integration tests.
 
 ### M05 — Distributed coordination and event delivery
 - [ ] Define node membership and worker ownership model.
@@ -100,17 +109,17 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 is verified by hosted run `41353166515`: formatting, Clippy, workspace tests, release build, and documentation build passed. M02 has typed execution identities (including idempotency keys), explicit workflow/task lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive transition matrices, terminal-race and overflow tests, and ADR-0002. Tokio `1.54.1` is pinned, the Cargo-generated lockfile is committed, and CI enforces locked dependency resolution.
+**Completed:** M00 architecture baseline except owner license selection. M01 is hosted-verified by run `41353166515`. M02 includes typed execution identities (including idempotency keys), explicit lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive transition matrices, and ADR-0002. M03 single-node runtime is complete: in-memory repository, bounded Tokio scheduler, deterministic DAG validation, workflow-run coordinator, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and successful direct-dependency output access.
 
-**In progress:** M03 single-node runtime. The in-memory repository, bounded Tokio scheduler, deterministic DAG validation, workflow-run coordinator, cooperative handler cancellation, two-stage bounded shutdown, and task input/output payload boundaries are hosted-verified. Task inputs and outputs are opaque validated byte payloads capped at one mebibyte each. WorkflowTask may carry a static input; handlers read it through TaskContext; successful TaskOutput is committed with the Succeeded transition and returned in TaskRun snapshots.
+**In progress:** M04 durable persistence. A PostgreSQL v1 schema draft and transaction contract are committed in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`, `docs/persistence/postgres-transaction-contract.md`, and ADR-0007. The schema covers workflow runs, task runs, ordered dependency edges, attempt history, lease/fencing state, and an outbox. It has not yet been executed against PostgreSQL; no database driver or durable adapter has been added.
 
-**Next action:** Decide the explicit contract for predecessor-output mapping (or document application-owned mapping as the supported boundary), then close M03. Begin M04 durable persistence design and implementation: PostgreSQL schema and migrations, transactional task claiming, durable retry availability, workflow/task state persistence, crash recovery, and transactional outbox. Design lease ownership and fencing so stale workers cannot commit after a lease changes. Keep in-memory semantics explicitly process-local.
+**Next action:** Select an async PostgreSQL driver after checking Rust 1.85 MSRV and feature footprint. Add a real PostgreSQL service to CI, execute the migration, and test the DDL. Then implement transactional migrations and a PostgreSQL TaskRepository: promote due tasks only after all dependencies succeed, claim ready rows with row locking, heartbeat using owner plus fencing token, reject expired/stale completion, recover expired leases, and write outbox events in the same transaction as state changes.
 
-**Verification:** M01 run \`41353166515\`, M03 repository/server run \`41353963000\`, async scheduler run \`41354805491\`, DAG validation run \`41355173212\`, workflow coordinator run \`41356396516\`, cooperative cancellation run \`41357065422\`, bounded shutdown run \`41357506821\`, and payload I/O run \`41358509174\` all completed successfully. Direct dependency output access was committed in \`88d338d34d0f500f05592471fe38283520d49c00\`; run \`41358877983\` passed locked dependency resolution but failed at rustfmt with four formatting-only diffs in \`scheduler.rs\`. This commit applies the exact formatter output. Clippy, dataflow integration tests, release build, and docs remain pending. Local Rust compilation is unavailable because \`rustc\` is not installed in the working environment.
+**Verification:** M01 run `41353166515`; M03 repository/server run `41353963000`; async scheduler run `41354805491`; DAG validation run `41355173212`; workflow coordinator run `41356396516`; cooperative cancellation run `41357065422`; bounded shutdown run `41357506821`; payload I/O run `41358509174`; and direct-dependency dataflow run `41359053561` all completed successfully. Latest run `41359053561` passed formatting, Clippy, release build, docs, and 52 tests: 15 core, 35 runtime, and 2 server. The PostgreSQL migration is a design artifact only and has not yet been validated by a PostgreSQL server. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
-**Known limitations:** Workflow-run lifecycle state is held in the execution call and returned as a terminal result; it is not persisted. The in-memory repository loses state on process exit and has no lease expiry, fencing, or crash recovery. Task-run IDs use a process-local sequence generator. Task payloads are opaque bytes with a 1 MiB per-input/output limit; application code owns encoding/schema versioning. WorkflowTask inputs are static; automatic predecessor-output mapping, templating, and transformation are not implemented. Cooperative cancellation depends on handler code checking or awaiting its token; forced abort drops the handler future, but independently spawned blocking work or external side effects may continue. There is no durable event log, PostgreSQL adapter, durable idempotency store, or retry jitter. Worker panics can leave a task in Running until process exit. The bootstrap HTTP server remains sequential and non-production.
+**Known limitations:** No PostgreSQL driver/adapter, durable workflow state, transactional outbox publisher, lease renewal/recovery, or cross-process cancellation exists yet. The in-memory repository loses state on process exit. Handler cancellation is cooperative; an aborted future cannot undo external side effects. Task payloads are opaque bytes capped at 1 MiB each; the application owns encoding/schema versions and transforms direct dependency outputs into handler-specific inputs. The bootstrap HTTP server remains sequential and non-production.
 
-**Blockers:** Predecessor output mapping semantics need an explicit decision before claiming full workflow dataflow. M04 persistence must not be presented as durable until transaction, recovery, and fencing tests pass. Property-based tests remain deferred; Tokio is pinned and its generated lockfile is committed. License selection remains with repository owner.
+**Blockers:** PostgreSQL DDL execution and integration testing are required before calling the schema verified. Driver selection must preserve the declared Rust 1.85 MSRV. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -121,7 +130,9 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
-| 2026-11-02 | M03 | Workflow coordinator, cooperative cancellation, bounded two-stage shutdown, and opaque task input/output payloads verified. Payload run `41358509174` passed formatting, Clippy, 51 tests (15 core, 34 runtime, 2 server), release build, and docs. Static WorkflowTask input is delivered to handlers and successful TaskOutput is retained; automatic predecessor-output mapping remains an explicit design decision |
+| 2026-11-02 | M03 | Closed and hosted-verified through run `41359053561`: 15 core, 35 runtime, and 2 server tests passed; workflow DAG activation, cooperative cancellation, bounded shutdown, payload I/O, and direct dependency output access verified |
+
+| 2026-11-02 | M04 | Added PostgreSQL v1 schema draft, lease/fencing and transactional-outbox contract, plus ADR-0007. DDL execution and adapter implementation remain pending. |
 
 ## Resume instructions
 
