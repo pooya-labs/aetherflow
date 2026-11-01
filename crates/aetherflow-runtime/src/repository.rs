@@ -14,12 +14,139 @@ use aetherflow_core::domain::{
 
 type TaskRunMap = BTreeMap<String, TaskRun>;
 
+/// Maximum size for one task input or output payload (one mebibyte).
+pub const MAX_TASK_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+/// Error returned when a task payload exceeds the runtime's size limit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskPayloadError {
+    actual_bytes: usize,
+    maximum_bytes: usize,
+}
+
+impl TaskPayloadError {
+    /// Returns the rejected payload length.
+    #[must_use]
+    pub const fn actual_bytes(&self) -> usize {
+        self.actual_bytes
+    }
+
+    /// Returns the configured maximum payload length.
+    #[must_use]
+    pub const fn maximum_bytes(&self) -> usize {
+        self.maximum_bytes
+    }
+}
+
+impl std::fmt::Display for TaskPayloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "task payload is {} bytes; maximum is {} bytes",
+            self.actual_bytes,
+            self.maximum_bytes
+        )
+    }
+}
+
+impl std::error::Error for TaskPayloadError {}
+
+fn validate_payload(bytes: &[u8]) -> Result<(), TaskPayloadError> {
+    if bytes.len() > MAX_TASK_PAYLOAD_BYTES {
+        return Err(TaskPayloadError {
+            actual_bytes: bytes.len(),
+            maximum_bytes: MAX_TASK_PAYLOAD_BYTES,
+        });
+    }
+
+    Ok(())
+}
+
+/// Opaque input bytes supplied to one task run.
+///
+/// AetherFlow does not prescribe a serialization format. Applications own
+/// payload schemas and their versioning.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TaskInput(Vec<u8>);
+
+impl TaskInput {
+    /// Creates a validated task input payload.
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, TaskPayloadError> {
+        let bytes = bytes.into();
+        validate_payload(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// Creates an empty task input.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Returns the opaque input bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the input size in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether this input is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Opaque output bytes produced by one successful task run.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TaskOutput(Vec<u8>);
+
+impl TaskOutput {
+    /// Creates a validated task output payload.
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, TaskPayloadError> {
+        let bytes = bytes.into();
+        validate_payload(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// Creates an empty task output.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Returns the opaque output bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the output size in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether this output is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// One task execution tracked by the single-node runtime.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskRun {
     task_run_id: TaskRunId,
     workflow_run_id: WorkflowRunId,
     task_id: TaskId,
+    input: TaskInput,
+    output: Option<TaskOutput>,
     lifecycle: Versioned<TaskStatus>,
     attempts_started: u32,
     available_at_ms: u64,
@@ -38,10 +165,32 @@ impl TaskRun {
         created_at_ms: u64,
         available_at_ms: u64,
     ) -> Self {
+        Self::new_with_input(
+            task_run_id,
+            workflow_run_id,
+            task_id,
+            TaskInput::empty(),
+            created_at_ms,
+            available_at_ms,
+        )
+    }
+
+    /// Creates a pending task run with an explicit, validated input payload.
+    #[must_use]
+    pub fn new_with_input(
+        task_run_id: TaskRunId,
+        workflow_run_id: WorkflowRunId,
+        task_id: TaskId,
+        input: TaskInput,
+        created_at_ms: u64,
+        available_at_ms: u64,
+    ) -> Self {
         Self {
             task_run_id,
             workflow_run_id,
             task_id,
+            input,
+            output: None,
             lifecycle: Versioned::new(TaskStatus::Pending),
             attempts_started: 0,
             available_at_ms,
@@ -67,6 +216,18 @@ impl TaskRun {
     #[must_use]
     pub fn task_id(&self) -> &TaskId {
         &self.task_id
+    }
+
+    /// Returns the input payload supplied to this task run.
+    #[must_use]
+    pub fn input(&self) -> &TaskInput {
+        &self.input
+    }
+
+    /// Returns the output payload from a successful completion, if present.
+    #[must_use]
+    pub fn output(&self) -> Option<&TaskOutput> {
+        self.output.as_ref()
     }
 
     /// Returns the current lifecycle state.
@@ -204,6 +365,7 @@ pub trait TaskRepository: Send + Sync {
         task_run_id: &TaskRunId,
         worker_id: &WorkerId,
         expected_version: u64,
+        output: TaskOutput,
         now_ms: u64,
     ) -> Result<Transition<TaskStatus>, RepositoryError>;
 
@@ -383,6 +545,7 @@ impl TaskRepository for InMemoryRepository {
         task_run_id: &TaskRunId,
         worker_id: &WorkerId,
         expected_version: u64,
+        output: TaskOutput,
         now_ms: u64,
     ) -> Result<Transition<TaskStatus>, RepositoryError> {
         let mut tasks = self.lock()?;
@@ -391,6 +554,7 @@ impl TaskRepository for InMemoryRepository {
         verify_worker(task, worker_id)?;
 
         let transition = task.lifecycle.transition(TaskStatus::Succeeded)?;
+        task.output = Some(output);
         task.claimed_by = None;
         task.updated_at_ms = now_ms;
         Ok(transition)
@@ -469,7 +633,10 @@ impl TaskRepository for InMemoryRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::{InMemoryRepository, RepositoryError, TaskRepository, TaskRun};
+    use super::{
+        InMemoryRepository, RepositoryError, TaskInput, TaskOutput, TaskRepository, TaskRun,
+        MAX_TASK_PAYLOAD_BYTES,
+    };
     use aetherflow_core::domain::{TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -486,6 +653,85 @@ mod tests {
 
     fn worker(id: &str) -> WorkerId {
         WorkerId::parse(id).expect("valid worker ID")
+    }
+
+    #[test]
+    fn task_payloads_accept_empty_and_maximum_size_values() {
+        assert!(TaskInput::empty().is_empty());
+        assert!(TaskOutput::empty().is_empty());
+        assert_eq!(
+            TaskInput::new(vec![1; MAX_TASK_PAYLOAD_BYTES])
+                .expect("maximum input size is allowed")
+                .len(),
+            MAX_TASK_PAYLOAD_BYTES
+        );
+        assert_eq!(
+            TaskOutput::new(vec![2; MAX_TASK_PAYLOAD_BYTES])
+                .expect("maximum output size is allowed")
+                .len(),
+            MAX_TASK_PAYLOAD_BYTES
+        );
+    }
+
+    #[test]
+    fn task_payloads_reject_values_larger_than_the_limit() {
+        let input_error = TaskInput::new(vec![0; MAX_TASK_PAYLOAD_BYTES + 1])
+            .expect_err("oversized input is rejected");
+        let output_error = TaskOutput::new(vec![0; MAX_TASK_PAYLOAD_BYTES + 1])
+            .expect_err("oversized output is rejected");
+
+        assert_eq!(input_error.actual_bytes(), MAX_TASK_PAYLOAD_BYTES + 1);
+        assert_eq!(input_error.maximum_bytes(), MAX_TASK_PAYLOAD_BYTES);
+        assert_eq!(output_error.actual_bytes(), MAX_TASK_PAYLOAD_BYTES + 1);
+        assert_eq!(output_error.maximum_bytes(), MAX_TASK_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn successful_completion_persists_task_output() {
+        let repository = InMemoryRepository::new();
+        let task = task_run("task-run-output", 0, 0);
+        let id = task.task_run_id().clone();
+        repository.insert(task).expect("insert task");
+        repository.promote_due(0).expect("promote task");
+        let claim = repository
+            .claim_next(&worker("worker-01"), 1)
+            .expect("claim")
+            .expect("task ready");
+        let output = TaskOutput::new(b"result".to_vec()).expect("valid task output");
+
+        repository
+            .complete(
+                &id,
+                &worker("worker-01"),
+                claim.task_run().version(),
+                output.clone(),
+                2,
+            )
+            .expect("complete task");
+
+        assert_eq!(
+            repository.get(&id).expect("read task").output(),
+            Some(&output)
+        );
+    }
+
+    #[test]
+    fn inserted_task_run_retains_its_input_payload() {
+        let repository = InMemoryRepository::new();
+        let input = TaskInput::new(b"request".to_vec()).expect("valid input");
+        let task = TaskRun::new_with_input(
+            TaskRunId::parse("task-run-input").expect("valid task-run ID"),
+            WorkflowRunId::parse("workflow-run-01").expect("valid workflow-run ID"),
+            TaskId::parse("task-01").expect("valid task ID"),
+            input.clone(),
+            0,
+            0,
+        );
+        let id = task.task_run_id().clone();
+        repository.insert(task).expect("insert task");
+
+        assert_eq!(repository.get(&id).expect("read task").input(), &input);
+        assert!(repository.get(&id).expect("read task").output().is_none());
     }
 
     #[test]
@@ -603,14 +849,32 @@ mod tests {
         let expected_version = claim.task_run().version();
 
         assert_eq!(
-            repository.complete(&id, &worker("worker-02"), expected_version, 2),
+            repository.complete(
+                &id,
+                &worker("worker-02"),
+                expected_version,
+                TaskOutput::empty(),
+                2,
+            ),
             Err(RepositoryError::WorkerMismatch("task-run-01".to_owned()))
         );
         repository
-            .complete(&id, &worker("worker-01"), expected_version, 3)
+            .complete(
+                &id,
+                &worker("worker-01"),
+                expected_version,
+                TaskOutput::empty(),
+                3,
+            )
             .expect("complete");
         assert_eq!(
-            repository.complete(&id, &worker("worker-01"), expected_version, 4),
+            repository.complete(
+                &id,
+                &worker("worker-01"),
+                expected_version,
+                TaskOutput::empty(),
+                4,
+            ),
             Err(RepositoryError::StaleVersion {
                 expected: expected_version,
                 actual: expected_version + 1,
@@ -638,7 +902,13 @@ mod tests {
 
         repository.cancel(&id, version, 2).expect("cancel task");
         assert_eq!(
-            repository.complete(&id, &worker("worker-01"), version, 3),
+            repository.complete(
+                &id,
+                &worker("worker-01"),
+                version,
+                TaskOutput::empty(),
+                3,
+            ),
             Err(RepositoryError::StaleVersion {
                 expected: version,
                 actual: version + 1,
