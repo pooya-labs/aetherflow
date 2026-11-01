@@ -576,7 +576,9 @@ mod tests {
 
         for first in terminal_states {
             let mut state = Versioned::new(WorkflowStatus::Running);
-            state.transition(first).expect("first terminal outcome commits");
+            state
+                .transition(first)
+                .expect("first terminal outcome commits");
 
             for competing in terminal_states {
                 assert!(matches!(
@@ -601,5 +603,4 @@ mod tests {
         assert_eq!(state.status(), WorkflowStatus::Pending);
         assert_eq!(state.version(), u64::MAX);
     }
-
 }

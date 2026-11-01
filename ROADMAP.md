@@ -104,7 +104,7 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 
 **Next action:** Re-run hosted CI after the formatting and test-coverage repair. Inspect every check through documentation build; fix any remaining lint, compile, or test failures. Only after a green M01 run, establish property-based test dependency/lockfile handling and begin M03 design.
 
-**Verification:** Hosted run `41352955804` for commit `6a3e0bd64649c4799ffa501154ccd3859bfd3aa4` completed with failure at `cargo +1.99.1 fmt --all -- --check`. The log identified three formatting diffs in `domain.rs`; Clippy, tests, release build, and documentation build were skipped. This commit applies those exact formatting fixes and adds the previously documented exhaustive matrix, terminal-race, and version-overflow tests. No green run has yet been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
+**Verification:** Hosted run `41352955804` for commit `6a3e0bd64649c4799ffa501154ccd3859bfd3aa4` failed at `cargo +1.99.1 fmt --all -- --check` with three formatting diffs. Commit `35f8ec7001b1ac0d99273933a674418c72ec2ae7` applied those and added the missing exhaustive transition matrices, terminal-outcome race, and version-overflow tests. Follow-up run `41353108165` then found two further formatting-only diffs in those new tests; this commit fixes both. Clippy, tests, release build, and documentation build have not run yet. No green run has been observed. Local Rust compilation is unavailable because `rustc` is not installed in the working environment.
 
 **Known limitations:** No database, scheduler, worker claiming, durable event log, retry timer, clock abstraction, or external side-effect idempotency API exists yet. The bootstrap HTTP server remains sequential and non-production. The retry policy now calculates capped exponential backoff without jitter; the runtime must inject jitter and classify retryable errors.
 
@@ -118,7 +118,7 @@ Overall status: **In progress; formatting repair committed, hosted CI rerun pend
 |---|---|---|
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; verification pending |
-| 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI formatting failure diagnosed and repaired, rerun pending |
+| 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; two successive hosted rustfmt-only failures triaged, final formatting repair committed for rerun |
 
 ## Resume instructions
 
