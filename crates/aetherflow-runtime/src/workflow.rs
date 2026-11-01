@@ -549,6 +549,13 @@ impl From<aetherflow_core::domain::TransitionError> for WorkflowExecutionError {
     }
 }
 
+
+impl From<crate::repository::RepositoryError> for WorkflowExecutionError {
+    fn from(value: crate::repository::RepositoryError) -> Self {
+        Self::Scheduler(crate::scheduler::SchedulerError::Repository(value))
+    }
+}
+
 impl From<crate::scheduler::SchedulerError> for WorkflowExecutionError {
     fn from(value: crate::scheduler::SchedulerError) -> Self {
         Self::Scheduler(value)

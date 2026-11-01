@@ -503,29 +503,31 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                 );
             }
 
-            tokio::select! {
+            let shutdown_requested = tokio::select! {
                 changed = external_shutdown.changed() => {
-                    if changed.is_err() {
-                        workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
-                        cancel_workflow_tasks(
-                            self.repository.as_ref(),
-                            &activated,
-                            &task_run_ids,
-                            self.clock.now_ms(),
-                        )?;
-                        let _ = worker_shutdown_tx.send(true);
-                        join_worker(&mut worker_handle).await?;
-                        return collect_workflow_result(
-                            self.repository.as_ref(),
-                            &definition,
-                            workflow_run_id,
-                            workflow_lifecycle,
-                            &activated,
-                            &task_run_ids,
-                        );
-                    }
+                    changed.is_err() || *external_shutdown.borrow_and_update()
                 }
-                _ = tokio::time::sleep(self.config.poll_interval) => {}
+                _ = tokio::time::sleep(self.config.poll_interval) => false,
+            };
+
+            if shutdown_requested {
+                workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
+                cancel_workflow_tasks(
+                    self.repository.as_ref(),
+                    &activated,
+                    &task_run_ids,
+                    self.clock.now_ms(),
+                )?;
+                let _ = worker_shutdown_tx.send(true);
+                join_worker(&mut worker_handle).await?;
+                return collect_workflow_result(
+                    self.repository.as_ref(),
+                    &definition,
+                    workflow_run_id,
+                    workflow_lifecycle,
+                    &activated,
+                    &task_run_ids,
+                );
             }
         }
     }
@@ -618,7 +620,8 @@ fn cancel_workflow_tasks<R: TaskRepository>(
             }
 
             match repository.cancel(task_run_id, task_run.version(), now_ms) {
-                Ok(_) | Err(RepositoryError::StaleVersion { .. }) => break,
+                Ok(_) => break,
+                Err(RepositoryError::StaleVersion { .. }) => continue,
                 Err(RepositoryError::InvalidTransition(_)) => break,
                 Err(error) => return Err(SchedulerError::Repository(error).into()),
             }
@@ -1007,12 +1010,13 @@ mod tests {
             ],
         )
         .expect("valid workflow DAG");
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let result = scheduler
             .execute_workflow(
                 definition,
                 WorkflowRunId::parse("workflow-run-chain").expect("valid workflow-run ID"),
                 &SequenceTaskRunIdGenerator::new(),
-                watch::channel(false).1,
+                shutdown_rx,
             )
             .await
             .expect("workflow executes");
@@ -1027,6 +1031,7 @@ mod tests {
             *order.lock().expect("read execution order"),
             ["task-a", "task-b", "task-c"]
         );
+        drop(shutdown_tx);
     }
 
     #[tokio::test]
@@ -1080,6 +1085,7 @@ mod tests {
             ],
         )
         .expect("valid workflow DAG");
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let result = scheduler
             .execute_workflow(
                 definition,
@@ -1093,6 +1099,7 @@ mod tests {
         assert_eq!(result.status(), aetherflow_core::domain::WorkflowStatus::Failed);
         assert_eq!(result.task_runs().len(), 1);
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 0);
+        drop(shutdown_tx);
     }
 
     #[tokio::test]
