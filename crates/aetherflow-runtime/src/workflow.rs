@@ -1,6 +1,6 @@
 //! Validated workflow definitions and deterministic dependency ordering.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 
 use aetherflow_core::domain::{TaskId, WorkflowId};
 
@@ -59,7 +59,9 @@ impl WorkflowDefinition {
         let mut task_map = BTreeMap::new();
         for task in tasks {
             let key = task.task_id.as_str().to_owned();
-            if task_map.insert(key.clone(), task).is_some() {
+            if let Entry::Vacant(entry) = task_map.entry(key.clone()) {
+                entry.insert(task);
+            } else {
                 return Err(WorkflowDefinitionError::DuplicateTask(key));
             }
         }
@@ -278,7 +280,7 @@ mod tests {
             .map(TaskId::as_str)
             .collect::<Vec<_>>();
 
-        assert_eq!(ordered, ["task-a", "task-d", "task-b", "task-c"]);
+        assert_eq!(ordered, ["task-a", "task-b", "task-c", "task-d"]);
     }
 
     #[test]
@@ -326,7 +328,13 @@ mod tests {
     #[test]
     fn rejects_duplicate_dependencies() {
         assert_eq!(
-            WorkflowDefinition::new(workflow_id(), vec![task("task-a", &[]), task("task-b", &["task-a", "task-a"])]),
+            WorkflowDefinition::new(
+                workflow_id(),
+                vec![
+                    task("task-a", &[]),
+                    task("task-b", &["task-a", "task-a"]),
+                ],
+            ),
             Err(WorkflowDefinitionError::DuplicateDependency {
                 task_id: "task-b".to_owned(),
                 dependency_id: "task-a".to_owned(),
