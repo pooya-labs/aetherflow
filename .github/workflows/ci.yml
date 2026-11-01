@@ -27,11 +27,16 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
 
-      - name: Refresh Cargo.lock after manifest changes on main
+      - name: Refresh Cargo.lock when dependencies change on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
-          if git show --pretty="" --name-only HEAD | grep -Eq '(^|/)Cargo.toml
+          manifest_changed=false
+          if git show --pretty="" --name-only HEAD | grep -Eq '(^|/)Cargo[.]toml$'; then
+            manifest_changed=true
+          fi
+
+          if [ "$manifest_changed" = true ] || ! cargo +1.99.1 fetch --locked --quiet; then
             cargo +1.99.1 generate-lockfile
             if ! git diff --quiet -- Cargo.lock; then
               git config user.name "github-actions[bot]"
