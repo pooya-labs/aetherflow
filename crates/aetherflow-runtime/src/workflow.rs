@@ -400,12 +400,25 @@ impl TaskRunIdGenerator for SequenceTaskRunIdGenerator {
     fn next_id(&self) -> Result<TaskRunId, TaskRunIdGenerationError> {
         use std::sync::atomic::Ordering;
 
-        let sequence = self
-            .next
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| TaskRunIdGenerationError::SequenceExhausted)?;
+        let sequence = loop {
+            let current = self.next.load(Ordering::Relaxed);
+            let Some(next) = current.checked_add(1) else {
+                return Err(TaskRunIdGenerationError::SequenceExhausted);
+            };
+
+            if self
+                .next
+                .compare_exchange_weak(
+                    current,
+                    next,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                break current;
+            }
+        };
 
         TaskRunId::parse(format!("task-run-{sequence}"))
             .map_err(|error| TaskRunIdGenerationError::InvalidIdentifier(error.to_string()))
