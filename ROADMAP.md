@@ -4,8 +4,8 @@ This file is the **source of truth** for project progress. If a chat or network 
 
 Last updated: 2026-11-02  
 Current branch: `main`  
-Current milestone: **M00 — Project charter and architecture baseline**  
-Overall status: **In progress**
+Current milestone: **M01 — Rust workspace foundation**  
+Overall status: **In progress; hosted CI verification pending**
 
 ## Progress rules
 
@@ -26,15 +26,15 @@ Overall status: **In progress**
 - [x] Record ADR-0001: Rust-first modular core.
 - [x] Add contribution and security guidance.
 - [ ] Select and add an explicit open-source license.
-- [ ] Review scope and first implementation boundary.
+- [x] Review scope and first implementation boundary.
 
 ### M01 — Rust workspace foundation
-- [ ] Add pinned Rust toolchain and workspace manifest.
-- [ ] Establish minimal crate boundaries for domain and runtime.
-- [ ] Add formatting, linting, and test conventions.
-- [ ] Add CI for formatting, Clippy, unit tests, and documentation.
-- [ ] Add minimal executable and health endpoint.
-- [ ] Verify clean build from a fresh checkout.
+- [x] Pin Rust toolchain (1.99.1) and create workspace manifest.
+- [x] Establish initial crate boundaries: infrastructure-independent core and server application.
+- [x] Add formatting, Clippy, and test conventions.
+- [x] Add CI for formatting, Clippy, unit tests, build, and documentation.
+- [x] Add minimal executable and bootstrap HTTP health endpoint.
+- [ ] Verify clean build and all checks from a fresh checkout via hosted CI.
 
 ### M02 — Execution domain and state machine
 - [ ] Define workflow, run, task, attempt, and worker identities.
@@ -96,18 +96,20 @@ Overall status: **In progress**
 
 ## Current checkpoint
 
-**Completed:** README, master roadmap, architecture overview, ADR-0001, CONTRIBUTING, and SECURITY guidance committed to `main`.  
-**In progress:** M00 project baseline.  
-**Next action:** Select license; then establish Rust workspace and CI.  
-**Verification:** GitHub confirmed all listed files are committed. No Rust workspace, build, or tests exist yet.  
-**Blockers:** None known.  
-**Manual action required from owner:** None now. License choice is intentionally left open rather than silently assigning legal terms.
+**Completed:** M00 architecture baseline except owner license selection. M01 workspace, pinned toolchain, core crate, bootstrap server, development guide, and CI workflow are committed to `main`.  
+**In progress:** M01 verification.  
+**Next action:** Inspect hosted CI result; fix any format, lint, build, or test failures before starting M02.  
+**Verification:** CI workflow exists and has been triggered. Latest observed run for commit `583c3538e8253eacc3eacad4685112f5f48ae18a` was pending at the time of this update. Local Rust compilation was not possible in this environment because `rustc` is not installed.  
+**Known limitation:** Bootstrap HTTP server is sequential and intentionally not production-ready.  
+**Blockers:** Hosted CI result pending. License selection remains with repository owner.  
+**Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
 ## Session log
 
 | Date | Milestone | Result |
 |---|---|---|
-| 2026-11-02 | M00 | Repository verified; project charter, architecture baseline, ADR, policies, and recovery roadmap committed |
+| 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
+| 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted verification pending |
 
 ## Resume instructions
 
