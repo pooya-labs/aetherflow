@@ -111,11 +111,7 @@ impl TaskRegistry {
     /// Registers a handler for a task definition.
     ///
     /// Duplicate registration is rejected instead of silently replacing a handler.
-    pub fn register<H>(
-        &mut self,
-        task_id: TaskId,
-        handler: H,
-    ) -> Result<(), TaskRegistryError>
+    pub fn register<H>(&mut self, task_id: TaskId, handler: H) -> Result<(), TaskRegistryError>
     where
         H: TaskHandler,
     {
@@ -384,12 +380,9 @@ async fn execute_claim<R: TaskRepository + 'static>(
 
     let now_ms = clock.now_ms();
     match outcome {
-        Some(Ok(())) => settle(repository.complete(
-            &task_run_id,
-            &worker_id,
-            expected_version,
-            now_ms,
-        )),
+        Some(Ok(())) => {
+            settle(repository.complete(&task_run_id, &worker_id, expected_version, now_ms))
+        }
         Some(Err(error)) => {
             eprintln!("task run {} failed: {error}", task_run_id.as_str());
 
@@ -404,19 +397,10 @@ async fn execute_claim<R: TaskRepository + 'static>(
                     now_ms,
                 ))
             } else {
-                settle(repository.fail(
-                    &task_run_id,
-                    &worker_id,
-                    expected_version,
-                    now_ms,
-                ))
+                settle(repository.fail(&task_run_id, &worker_id, expected_version, now_ms))
             }
         }
-        None => settle(repository.timeout(
-            &task_run_id,
-            expected_version,
-            now_ms,
-        )),
+        None => settle(repository.timeout(&task_run_id, expected_version, now_ms)),
     }
 }
 
@@ -436,8 +420,8 @@ mod tests {
         RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId,
     };
     use std::num::{NonZeroU32, NonZeroUsize};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::watch;
 
@@ -519,7 +503,10 @@ mod tests {
         let handle = tokio::spawn(async move { scheduler.run(shutdown_rx).await });
         wait_for_status(&repository, &id, TaskStatus::Succeeded).await;
         shutdown_tx.send(true).expect("signal shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
     }
 
     #[tokio::test]
@@ -555,10 +542,19 @@ mod tests {
         let handle = tokio::spawn(async move { scheduler.run(shutdown_rx).await });
         wait_for_status(&repository, &id, TaskStatus::Succeeded).await;
         shutdown_tx.send(true).expect("signal shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(repository.get(&id).expect("read task run").attempts_started(), 2);
+        assert_eq!(
+            repository
+                .get(&id)
+                .expect("read task run")
+                .attempts_started(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -586,7 +582,10 @@ mod tests {
         let handle = tokio::spawn(async move { scheduler.run(shutdown_rx).await });
         wait_for_status(&repository, &id, TaskStatus::TimedOut).await;
         shutdown_tx.send(true).expect("signal shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -632,11 +631,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let all_succeeded = ids.iter().all(|id| {
-                    repository
-                        .get(id)
-                        .expect("read task run")
-                        .status()
-                        == TaskStatus::Succeeded
+                    repository.get(id).expect("read task run").status() == TaskStatus::Succeeded
                 });
                 if all_succeeded {
                     break;
@@ -648,7 +643,10 @@ mod tests {
         .expect("all tasks completed");
 
         shutdown_tx.send(true).expect("signal shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
         assert_eq!(maximum.load(Ordering::SeqCst), 2);
     }
 
@@ -686,7 +684,9 @@ mod tests {
         let handle = tokio::spawn(async move { running_scheduler.run(shutdown_rx).await });
         wait_for_status(&repository, &id, TaskStatus::Running).await;
         let version = repository.get(&id).expect("read running task").version();
-        scheduler.cancel_task_run(&id, version).expect("cancel task");
+        scheduler
+            .cancel_task_run(&id, version)
+            .expect("cancel task");
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while finished.load(Ordering::SeqCst) == 0 {
@@ -696,7 +696,13 @@ mod tests {
         .await
         .expect("handler drains after state cancellation");
         shutdown_tx.send(true).expect("signal shutdown");
-        handle.await.expect("join scheduler").expect("scheduler run");
-        assert_eq!(repository.get(&id).expect("read task").status(), TaskStatus::Cancelled);
+        handle
+            .await
+            .expect("join scheduler")
+            .expect("scheduler run");
+        assert_eq!(
+            repository.get(&id).expect("read task").status(),
+            TaskStatus::Cancelled
+        );
     }
 }
