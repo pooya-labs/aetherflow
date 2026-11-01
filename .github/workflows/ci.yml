@@ -1,0 +1,43 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Format, lint, test, and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+
+      - name: Verify formatting
+        run: cargo +1.99.1 fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo +1.99.1 clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo +1.99.1 test --workspace
+
+      - name: Build workspace
+        run: cargo +1.99.1 build --workspace --release
+
+      - name: Build documentation
+        run: cargo +1.99.1 doc --workspace --no-deps
