@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -371,10 +371,7 @@ async fn execute_claim<R: TaskRepository + 'static>(
     };
 
     let outcome = match config.task_timeout {
-        Some(timeout) => match tokio::time::timeout(timeout, future).await {
-            Ok(result) => Some(result),
-            Err(_) => None,
-        },
+        Some(timeout) => tokio::time::timeout(timeout, future).await.ok(),
         None => Some(future.await),
     };
 
@@ -415,7 +412,7 @@ fn settle<T>(result: Result<T, RepositoryError>) -> Result<(), SchedulerError> {
 mod tests {
     use super::{SchedulerConfig, TaskExecutionError, TaskRegistry, TaskScheduler};
     use crate::clock::MonotonicClock;
-    use crate::repository::{InMemoryRepository, TaskRun};
+    use crate::repository::{InMemoryRepository, TaskRepository, TaskRun};
     use aetherflow_core::domain::{
         RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId,
     };
