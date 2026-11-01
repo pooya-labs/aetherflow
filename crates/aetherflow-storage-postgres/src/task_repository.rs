@@ -16,7 +16,7 @@ use deadpool_postgres::Pool;
 use serde_json::json;
 use tokio_postgres::{Row, Transaction};
 
-use crate::{PgStore, StorageError};
+use crate::StorageError;
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
 
@@ -346,7 +346,7 @@ impl PgTaskRepository {
                     ],
                 )
                 .await
-                .map_err(|error| StorageError::Database(error.to_string()))?;
+                .map_err(|error| StorageError::Database(format!("insert task-run row: {error:?}")))?;
         }
 
         for task in tasks {
