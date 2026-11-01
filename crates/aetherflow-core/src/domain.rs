@@ -29,7 +29,10 @@ macro_rules! define_id {
 }
 
 define_id!(WorkflowId, "Identifies a workflow definition.");
-define_id!(WorkflowRunId, "Identifies one execution of a workflow definition.");
+define_id!(
+    WorkflowRunId,
+    "Identifies one execution of a workflow definition."
+);
 define_id!(TaskId, "Identifies a task definition within a workflow.");
 define_id!(TaskRunId, "Identifies one execution of a task definition.");
 define_id!(AttemptId, "Identifies one attempt to execute a task run.");
@@ -68,11 +71,13 @@ impl Lifecycle for WorkflowStatus {
     fn allows(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Pending, Self::Running | Self::Cancelled | Self::TimedOut)
-                | (
-                    Self::Running,
-                    Self::Succeeded | Self::Failed | Self::Cancelled | Self::TimedOut
-                )
+            (
+                Self::Pending,
+                Self::Running | Self::Cancelled | Self::TimedOut
+            ) | (
+                Self::Running,
+                Self::Succeeded | Self::Failed | Self::Cancelled | Self::TimedOut
+            )
         )
     }
 
@@ -120,20 +125,23 @@ impl Lifecycle for TaskStatus {
     fn allows(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Pending, Self::Ready | Self::Cancelled | Self::TimedOut)
-                | (Self::Ready, Self::Running | Self::Cancelled | Self::TimedOut)
-                | (
-                    Self::Running,
-                    Self::Succeeded
-                        | Self::Failed
-                        | Self::RetryWaiting
-                        | Self::Cancelled
-                        | Self::TimedOut
-                )
-                | (
-                    Self::RetryWaiting,
-                    Self::Ready | Self::Cancelled | Self::TimedOut
-                )
+            (
+                Self::Pending,
+                Self::Ready | Self::Cancelled | Self::TimedOut
+            ) | (
+                Self::Ready,
+                Self::Running | Self::Cancelled | Self::TimedOut
+            ) | (
+                Self::Running,
+                Self::Succeeded
+                    | Self::Failed
+                    | Self::RetryWaiting
+                    | Self::Cancelled
+                    | Self::TimedOut
+            ) | (
+                Self::RetryWaiting,
+                Self::Ready | Self::Cancelled | Self::TimedOut
+            )
         )
     }
 
