@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-use aetherflow_core::domain::{TaskId, WorkflowId};
+use aetherflow_core::domain::{TaskId, TaskRunId, WorkflowId, WorkflowRunId, WorkflowStatus};
+
+use crate::repository::TaskRun;
 
 /// One task in a workflow definition and the tasks that must succeed first.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,6 +264,18 @@ mod tests {
         WorkflowId::parse("workflow-01").expect("valid workflow ID")
     }
 
+
+    #[test]
+    fn sequence_generator_returns_unique_valid_task_run_ids() {
+        let generator = super::SequenceTaskRunIdGenerator::new();
+        let first = super::TaskRunIdGenerator::next_id(&generator).expect("first ID");
+        let second = super::TaskRunIdGenerator::next_id(&generator).expect("second ID");
+
+        assert_eq!(first.as_str(), "task-run-1");
+        assert_eq!(second.as_str(), "task-run-2");
+        assert_ne!(first, second);
+    }
+
     #[test]
     fn computes_deterministic_topological_order() {
         let definition = WorkflowDefinition::new(
@@ -348,5 +362,195 @@ mod tests {
                 "task-b".to_owned(),
             ]))
         );
+    }
+}
+
+
+/// Generates task-run identifiers when a workflow execution is materialized.
+pub trait TaskRunIdGenerator: Send + Sync {
+    /// Returns a unique task-run identifier within the generator's namespace.
+    fn next_id(&self) -> Result<TaskRunId, TaskRunIdGenerationError>;
+}
+
+/// A process-local monotonically increasing task-run ID generator.
+///
+/// Reuse one generator across all workflow runs sharing a repository. This
+/// sequence is intentionally not durable; it is appropriate only for the
+/// process-local in-memory runtime.
+#[derive(Debug)]
+pub struct SequenceTaskRunIdGenerator {
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl SequenceTaskRunIdGenerator {
+    /// Creates a generator whose first identifier ends in sequence number one.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            next: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+}
+
+impl Default for SequenceTaskRunIdGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TaskRunIdGenerator for SequenceTaskRunIdGenerator {
+    fn next_id(&self) -> Result<TaskRunId, TaskRunIdGenerationError> {
+        use std::sync::atomic::Ordering;
+
+        let sequence = self
+            .next
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| TaskRunIdGenerationError::SequenceExhausted)?;
+
+        TaskRunId::parse(format!("task-run-{sequence}"))
+            .map_err(|error| TaskRunIdGenerationError::InvalidIdentifier(error.to_string()))
+    }
+}
+
+/// Failures returned by task-run ID generators.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskRunIdGenerationError {
+    /// The generator exhausted its u64 sequence space.
+    SequenceExhausted,
+    /// The generated value does not satisfy the domain ID contract.
+    InvalidIdentifier(String),
+}
+
+impl std::fmt::Display for TaskRunIdGenerationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SequenceExhausted => formatter.write_str("task-run ID sequence exhausted"),
+            Self::InvalidIdentifier(message) => {
+                write!(formatter, "generated task-run identifier is invalid: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TaskRunIdGenerationError {}
+
+/// Final snapshot returned after a workflow execution reaches a terminal state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowExecutionResult {
+    workflow_id: WorkflowId,
+    workflow_run_id: WorkflowRunId,
+    status: WorkflowStatus,
+    version: u64,
+    task_runs: Vec<TaskRun>,
+}
+
+impl WorkflowExecutionResult {
+    pub(crate) fn new(
+        workflow_id: WorkflowId,
+        workflow_run_id: WorkflowRunId,
+        status: WorkflowStatus,
+        version: u64,
+        task_runs: Vec<TaskRun>,
+    ) -> Self {
+        Self {
+            workflow_id,
+            workflow_run_id,
+            status,
+            version,
+            task_runs,
+        }
+    }
+
+    /// Returns the workflow definition identifier.
+    #[must_use]
+    pub fn workflow_id(&self) -> &WorkflowId {
+        &self.workflow_id
+    }
+
+    /// Returns this workflow execution identifier.
+    #[must_use]
+    pub fn workflow_run_id(&self) -> &WorkflowRunId {
+        &self.workflow_run_id
+    }
+
+    /// Returns the terminal workflow lifecycle state.
+    #[must_use]
+    pub const fn status(&self) -> WorkflowStatus {
+        self.status
+    }
+
+    /// Returns the workflow-run optimistic concurrency version.
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Returns snapshots of task runs materialized during this workflow execution.
+    ///
+    /// Tasks whose dependencies never succeeded are not materialized and are
+    /// therefore absent from this collection.
+    #[must_use]
+    pub fn task_runs(&self) -> &[TaskRun] {
+        &self.task_runs
+    }
+}
+
+/// Errors raised while coordinating a workflow run.
+#[derive(Debug)]
+pub enum WorkflowExecutionError {
+    /// The supplied workflow definition is invalid.
+    InvalidDefinition(WorkflowDefinitionError),
+    /// Task-run identifier generation failed.
+    IdGeneration(TaskRunIdGenerationError),
+    /// A domain lifecycle transition was rejected.
+    InvalidTransition(aetherflow_core::domain::TransitionError),
+    /// The task repository or scheduler failed.
+    Scheduler(crate::scheduler::SchedulerError),
+    /// The worker loop exited before the workflow reached a terminal state.
+    WorkerLoopExited,
+    /// The worker loop task failed to join.
+    WorkerJoin(String),
+}
+
+impl std::fmt::Display for WorkflowExecutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidDefinition(error) => error.fmt(formatter),
+            Self::IdGeneration(error) => error.fmt(formatter),
+            Self::InvalidTransition(error) => error.fmt(formatter),
+            Self::Scheduler(error) => error.fmt(formatter),
+            Self::WorkerLoopExited => {
+                formatter.write_str("worker loop exited before workflow completion")
+            }
+            Self::WorkerJoin(message) => write!(formatter, "worker loop join failed: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for WorkflowExecutionError {}
+
+impl From<WorkflowDefinitionError> for WorkflowExecutionError {
+    fn from(value: WorkflowDefinitionError) -> Self {
+        Self::InvalidDefinition(value)
+    }
+}
+
+impl From<TaskRunIdGenerationError> for WorkflowExecutionError {
+    fn from(value: TaskRunIdGenerationError) -> Self {
+        Self::IdGeneration(value)
+    }
+}
+
+impl From<aetherflow_core::domain::TransitionError> for WorkflowExecutionError {
+    fn from(value: aetherflow_core::domain::TransitionError) -> Self {
+        Self::InvalidTransition(value)
+    }
+}
+
+impl From<crate::scheduler::SchedulerError> for WorkflowExecutionError {
+    fn from(value: crate::scheduler::SchedulerError) -> Self {
+        Self::Scheduler(value)
     }
 }

@@ -1,18 +1,24 @@
 //! Bounded asynchronous task scheduler and local worker loop.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aetherflow_core::domain::{RetryPolicy, TaskId, TaskRunId, TaskStatus, Transition, WorkerId};
+use aetherflow_core::domain::{
+    Lifecycle, RetryPolicy, TaskId, TaskRunId, TaskStatus, Transition, Versioned, WorkerId,
+    WorkflowRunId, WorkflowStatus,
+};
 use tokio::sync::watch;
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clock::Clock;
 use crate::repository::{RepositoryError, TaskClaim, TaskRepository, TaskRun};
+use crate::workflow::{
+    TaskRunIdGenerator, WorkflowDefinition, WorkflowExecutionError, WorkflowExecutionResult,
+};
 
 /// Boxed asynchronous task-handler future.
 pub type TaskFuture =
@@ -249,6 +255,19 @@ pub struct TaskScheduler<R: TaskRepository + 'static> {
     config: SchedulerConfig,
 }
 
+
+impl<R: TaskRepository + 'static> Clone for TaskScheduler<R> {
+    fn clone(&self) -> Self {
+        Self {
+            repository: Arc::clone(&self.repository),
+            clock: Arc::clone(&self.clock),
+            worker_id: self.worker_id.clone(),
+            registry: Arc::clone(&self.registry),
+            config: self.config.clone(),
+        }
+    }
+}
+
 impl<R: TaskRepository + 'static> TaskScheduler<R> {
     /// Creates a scheduler using a fixed handler registry and worker identity.
     #[must_use]
@@ -288,6 +307,227 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
         Ok(self
             .repository
             .cancel(task_run_id, expected_version, self.clock.now_ms())?)
+    }
+
+
+    /// Executes a validated workflow definition using dependency-aware task activation.
+    ///
+    /// Only root tasks are inserted initially. A downstream task is inserted
+    /// once every dependency has reached Succeeded. A task failure, timeout, or
+    /// cancellation terminates the workflow and cancels all other active task runs.
+    ///
+    /// Reuse the supplied ID generator across workflow runs sharing this repository.
+    /// The returned workflow state is process-local and is not persisted.
+    pub async fn execute_workflow(
+        &self,
+        definition: WorkflowDefinition,
+        workflow_run_id: WorkflowRunId,
+        id_generator: &dyn TaskRunIdGenerator,
+        mut external_shutdown: watch::Receiver<bool>,
+    ) -> Result<WorkflowExecutionResult, WorkflowExecutionError> {
+        let now_ms = self.clock.now_ms();
+        let mut workflow_lifecycle = Versioned::new(WorkflowStatus::Pending);
+        workflow_lifecycle.transition(WorkflowStatus::Running)?;
+
+        let mut task_run_ids = BTreeMap::new();
+        for task in definition.tasks() {
+            task_run_ids.insert(task.task_id().as_str().to_owned(), id_generator.next_id()?);
+        }
+
+        let mut activated = BTreeSet::new();
+        for task in definition.tasks().filter(|task| task.dependencies().is_empty()) {
+            let task_key = task.task_id().as_str().to_owned();
+            let task_run_id = task_run_ids
+                .get(&task_key)
+                .expect("every definition task has a generated run ID")
+                .clone();
+            self.repository.insert(TaskRun::new(
+                task_run_id,
+                workflow_run_id.clone(),
+                task.task_id().clone(),
+                now_ms,
+                now_ms,
+            ))?;
+            activated.insert(task_key);
+        }
+
+        if *external_shutdown.borrow_and_update() {
+            workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
+            cancel_workflow_tasks(self.repository.as_ref(), &activated, &task_run_ids, self.clock.now_ms())?;
+            return collect_workflow_result(
+                self.repository.as_ref(),
+                &definition,
+                workflow_run_id,
+                workflow_lifecycle,
+                &activated,
+                &task_run_ids,
+            );
+        }
+
+        let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+        let worker_scheduler = self.clone();
+        let mut worker_handle = tokio::spawn(async move {
+            worker_scheduler.run(worker_shutdown_rx).await
+        });
+
+        loop {
+            if worker_handle.is_finished() {
+                return match worker_handle.await {
+                    Ok(Ok(())) => Err(WorkflowExecutionError::WorkerLoopExited),
+                    Ok(Err(error)) => Err(WorkflowExecutionError::Scheduler(error)),
+                    Err(error) => Err(WorkflowExecutionError::WorkerJoin(error.to_string())),
+                };
+            }
+
+            if external_shutdown.has_changed().unwrap_or(true)
+                && *external_shutdown.borrow_and_update()
+            {
+                workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
+                cancel_workflow_tasks(
+                    self.repository.as_ref(),
+                    &activated,
+                    &task_run_ids,
+                    self.clock.now_ms(),
+                )?;
+                let _ = worker_shutdown_tx.send(true);
+                join_worker(&mut worker_handle).await?;
+                return collect_workflow_result(
+                    self.repository.as_ref(),
+                    &definition,
+                    workflow_run_id,
+                    workflow_lifecycle,
+                    &activated,
+                    &task_run_ids,
+                );
+            }
+
+            let mut observed = BTreeMap::new();
+            for task_key in &activated {
+                let task_run_id = task_run_ids
+                    .get(task_key)
+                    .expect("activated task has a generated run ID");
+                let task_run = self.repository.get(task_run_id)?;
+                observed.insert(task_key.clone(), task_run);
+            }
+
+            let terminal_outcome = observed
+                .iter()
+                .filter(|(_, task_run)| {
+                    matches!(
+                        task_run.status(),
+                        TaskStatus::Failed | TaskStatus::TimedOut | TaskStatus::Cancelled
+                    )
+                })
+                .min_by_key(|(task_key, task_run)| {
+                    (task_run.updated_at_ms(), (*task_key).clone())
+                })
+                .map(|(_, task_run)| task_run.status());
+
+            if let Some(task_status) = terminal_outcome {
+                let workflow_status = match task_status {
+                    TaskStatus::Failed => WorkflowStatus::Failed,
+                    TaskStatus::TimedOut => WorkflowStatus::TimedOut,
+                    TaskStatus::Cancelled => WorkflowStatus::Cancelled,
+                    _ => unreachable!("only non-success terminal task states are selected"),
+                };
+                workflow_lifecycle.transition(workflow_status)?;
+                cancel_workflow_tasks(
+                    self.repository.as_ref(),
+                    &activated,
+                    &task_run_ids,
+                    self.clock.now_ms(),
+                )?;
+                let _ = worker_shutdown_tx.send(true);
+                join_worker(&mut worker_handle).await?;
+                return collect_workflow_result(
+                    self.repository.as_ref(),
+                    &definition,
+                    workflow_run_id,
+                    workflow_lifecycle,
+                    &activated,
+                    &task_run_ids,
+                );
+            }
+
+            let dependency_states = observed
+                .iter()
+                .map(|(task_key, task_run)| (task_key.clone(), task_run.status()))
+                .collect::<BTreeMap<_, _>>();
+
+            for task_id in definition.execution_order() {
+                let task_key = task_id.as_str();
+                if activated.contains(task_key) {
+                    continue;
+                }
+
+                let task = definition
+                    .task(task_id)
+                    .expect("execution-order task exists in definition");
+                let dependencies_succeeded = task.dependencies().iter().all(|dependency| {
+                    dependency_states.get(dependency.as_str()) == Some(&TaskStatus::Succeeded)
+                });
+
+                if dependencies_succeeded {
+                    let task_run_id = task_run_ids
+                        .get(task_key)
+                        .expect("every definition task has a generated run ID")
+                        .clone();
+                    self.repository.insert(TaskRun::new(
+                        task_run_id,
+                        workflow_run_id.clone(),
+                        task_id.clone(),
+                        self.clock.now_ms(),
+                        self.clock.now_ms(),
+                    ))?;
+                    activated.insert(task_key.to_owned());
+                }
+            }
+
+            let all_tasks_succeeded = activated.len() == definition.task_count()
+                && observed.len() == definition.task_count()
+                && observed
+                    .values()
+                    .all(|task_run| task_run.status() == TaskStatus::Succeeded);
+
+            if all_tasks_succeeded {
+                workflow_lifecycle.transition(WorkflowStatus::Succeeded)?;
+                let _ = worker_shutdown_tx.send(true);
+                join_worker(&mut worker_handle).await?;
+                return collect_workflow_result(
+                    self.repository.as_ref(),
+                    &definition,
+                    workflow_run_id,
+                    workflow_lifecycle,
+                    &activated,
+                    &task_run_ids,
+                );
+            }
+
+            tokio::select! {
+                changed = external_shutdown.changed() => {
+                    if changed.is_err() {
+                        workflow_lifecycle.transition(WorkflowStatus::Cancelled)?;
+                        cancel_workflow_tasks(
+                            self.repository.as_ref(),
+                            &activated,
+                            &task_run_ids,
+                            self.clock.now_ms(),
+                        )?;
+                        let _ = worker_shutdown_tx.send(true);
+                        join_worker(&mut worker_handle).await?;
+                        return collect_workflow_result(
+                            self.repository.as_ref(),
+                            &definition,
+                            workflow_run_id,
+                            workflow_lifecycle,
+                            &activated,
+                            &task_run_ids,
+                        );
+                    }
+                }
+                _ = tokio::time::sleep(self.config.poll_interval) => {}
+            }
+        }
     }
 
     /// Runs the worker loop until shutdown is signaled.
@@ -347,6 +587,70 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             }
         }
     }
+}
+
+
+async fn join_worker(
+    handle: &mut JoinHandle<Result<(), SchedulerError>>,
+) -> Result<(), WorkflowExecutionError> {
+    match handle.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(WorkflowExecutionError::Scheduler(error)),
+        Err(error) => Err(WorkflowExecutionError::WorkerJoin(error.to_string())),
+    }
+}
+
+fn cancel_workflow_tasks<R: TaskRepository>(
+    repository: &R,
+    activated: &BTreeSet<String>,
+    task_run_ids: &BTreeMap<String, TaskRunId>,
+    now_ms: u64,
+) -> Result<(), WorkflowExecutionError> {
+    for task_key in activated {
+        let task_run_id = task_run_ids
+            .get(task_key)
+            .expect("activated task has a generated run ID");
+
+        loop {
+            let task_run = repository.get(task_run_id)?;
+            if task_run.status().is_terminal() {
+                break;
+            }
+
+            match repository.cancel(task_run_id, task_run.version(), now_ms) {
+                Ok(_) | Err(RepositoryError::StaleVersion { .. }) => break,
+                Err(RepositoryError::InvalidTransition(_)) => break,
+                Err(error) => return Err(SchedulerError::Repository(error).into()),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_workflow_result<R: TaskRepository>(
+    repository: &R,
+    definition: &WorkflowDefinition,
+    workflow_run_id: WorkflowRunId,
+    lifecycle: Versioned<WorkflowStatus>,
+    activated: &BTreeSet<String>,
+    task_run_ids: &BTreeMap<String, TaskRunId>,
+) -> Result<WorkflowExecutionResult, WorkflowExecutionError> {
+    let mut task_runs = Vec::with_capacity(activated.len());
+    for task_key in activated {
+        let task_run_id = task_run_ids
+            .get(task_key)
+            .expect("activated task has a generated run ID");
+        task_runs.push(repository.get(task_run_id)?);
+    }
+
+    Ok(WorkflowExecutionResult::new(
+        definition.workflow_id().clone(),
+        workflow_run_id,
+        lifecycle.status(),
+        lifecycle.version(),
+        task_runs,
+    ))
 }
 
 async fn execute_claim<R: TaskRepository + 'static>(
@@ -645,6 +949,228 @@ mod tests {
             .expect("join scheduler")
             .expect("scheduler run");
         assert_eq!(maximum.load(Ordering::SeqCst), 2);
+    }
+
+
+    #[tokio::test]
+    async fn workflow_activates_tasks_only_after_dependencies_succeed() {
+        use crate::workflow::{
+            SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask,
+        };
+        use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
+        use std::sync::Mutex;
+
+        let repository = Arc::new(InMemoryRepository::new());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = TaskRegistry::new();
+
+        for task_name in ["task-a", "task-b", "task-c"] {
+            let order = Arc::clone(&order);
+            let name = task_name.to_owned();
+            registry
+                .register(
+                    TaskId::parse(task_name).expect("valid task ID"),
+                    move |_claim| {
+                        let order = Arc::clone(&order);
+                        let name = name.clone();
+                        async move {
+                            order.lock().expect("lock order").push(name);
+                            Ok::<(), TaskExecutionError>(())
+                        }
+                    },
+                )
+                .expect("register task handler");
+        }
+
+        let scheduler = TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(3, None, 1),
+        );
+        let definition = WorkflowDefinition::new(
+            WorkflowId::parse("workflow-chain").expect("valid workflow ID"),
+            vec![
+                WorkflowTask::new(
+                    TaskId::parse("task-c").expect("valid task ID"),
+                    vec![TaskId::parse("task-b").expect("valid dependency")],
+                ),
+                WorkflowTask::new(
+                    TaskId::parse("task-b").expect("valid task ID"),
+                    vec![TaskId::parse("task-a").expect("valid dependency")],
+                ),
+                WorkflowTask::new(
+                    TaskId::parse("task-a").expect("valid task ID"),
+                    Vec::new(),
+                ),
+            ],
+        )
+        .expect("valid workflow DAG");
+        let result = scheduler
+            .execute_workflow(
+                definition,
+                WorkflowRunId::parse("workflow-run-chain").expect("valid workflow-run ID"),
+                &SequenceTaskRunIdGenerator::new(),
+                watch::channel(false).1,
+            )
+            .await
+            .expect("workflow executes");
+
+        assert_eq!(result.status(), aetherflow_core::domain::WorkflowStatus::Succeeded);
+        assert_eq!(result.task_runs().len(), 3);
+        assert!(result
+            .task_runs()
+            .iter()
+            .all(|task_run| task_run.status() == TaskStatus::Succeeded));
+        assert_eq!(
+            *order.lock().expect("read execution order"),
+            ["task-a", "task-b", "task-c"]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_task_prevents_dependent_task_activation() {
+        use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
+        use aetherflow_core::domain::{WorkflowId, WorkflowRunId};
+
+        let repository = Arc::new(InMemoryRepository::new());
+        let downstream_calls = Arc::new(AtomicUsize::new(0));
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(
+                TaskId::parse("task-a").expect("valid task ID"),
+                |_claim| async {
+                    Err::<(), TaskExecutionError>(TaskExecutionError::permanent("stop here"))
+                },
+            )
+            .expect("register failing task");
+        let downstream = Arc::clone(&downstream_calls);
+        registry
+            .register(
+                TaskId::parse("task-b").expect("valid task ID"),
+                move |_claim| {
+                    let downstream = Arc::clone(&downstream);
+                    async move {
+                        downstream.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), TaskExecutionError>(())
+                    }
+                },
+            )
+            .expect("register dependent task");
+
+        let scheduler = TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(2, None, 1),
+        );
+        let definition = WorkflowDefinition::new(
+            WorkflowId::parse("workflow-failure").expect("valid workflow ID"),
+            vec![
+                WorkflowTask::new(
+                    TaskId::parse("task-a").expect("valid task ID"),
+                    Vec::new(),
+                ),
+                WorkflowTask::new(
+                    TaskId::parse("task-b").expect("valid task ID"),
+                    vec![TaskId::parse("task-a").expect("valid dependency")],
+                ),
+            ],
+        )
+        .expect("valid workflow DAG");
+        let result = scheduler
+            .execute_workflow(
+                definition,
+                WorkflowRunId::parse("workflow-run-failure").expect("valid workflow-run ID"),
+                &SequenceTaskRunIdGenerator::new(),
+                watch::channel(false).1,
+            )
+            .await
+            .expect("workflow reaches failed state");
+
+        assert_eq!(result.status(), aetherflow_core::domain::WorkflowStatus::Failed);
+        assert_eq!(result.task_runs().len(), 1);
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn external_shutdown_cancels_workflow_and_drains_active_handler() {
+        use crate::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
+        use aetherflow_core::domain::{WorkflowId, WorkflowRunId, WorkflowStatus};
+
+        let repository = Arc::new(InMemoryRepository::new());
+        let finished = Arc::new(AtomicUsize::new(0));
+        let handler_finished = Arc::clone(&finished);
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(
+                TaskId::parse("task-a").expect("valid task ID"),
+                move |_claim| {
+                    let finished = Arc::clone(&handler_finished);
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        finished.store(1, Ordering::SeqCst);
+                        Ok::<(), TaskExecutionError>(())
+                    }
+                },
+            )
+            .expect("register handler");
+        let scheduler = Arc::new(TaskScheduler::new(
+            Arc::clone(&repository),
+            Arc::new(MonotonicClock::new()),
+            worker_id(),
+            registry,
+            config(1, None, 1),
+        ));
+        let definition = WorkflowDefinition::new(
+            WorkflowId::parse("workflow-cancel").expect("valid workflow ID"),
+            vec![WorkflowTask::new(
+                TaskId::parse("task-a").expect("valid task ID"),
+                Vec::new(),
+            )],
+        )
+        .expect("valid workflow");
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let running_scheduler = Arc::clone(&scheduler);
+        let handle = tokio::spawn(async move {
+            running_scheduler
+                .execute_workflow(
+                    definition,
+                    WorkflowRunId::parse("workflow-run-cancel")
+                        .expect("valid workflow-run ID"),
+                    &SequenceTaskRunIdGenerator::new(),
+                    shutdown_rx,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let has_running_task = (1..=1).any(|sequence| {
+                    TaskRunId::parse(format!("task-run-{sequence}"))
+                        .ok()
+                        .and_then(|id| repository.get(&id).ok())
+                        .is_some_and(|task_run| task_run.status() == TaskStatus::Running)
+                });
+                if has_running_task {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("workflow starts its root task");
+        shutdown_tx.send(true).expect("signal external shutdown");
+
+        let result = handle
+            .await
+            .expect("join workflow")
+            .expect("workflow cancellation result");
+        assert_eq!(result.status(), WorkflowStatus::Cancelled);
+        assert_eq!(finished.load(Ordering::SeqCst), 1);
+        assert_eq!(result.task_runs()[0].status(), TaskStatus::Cancelled);
     }
 
     #[tokio::test]
