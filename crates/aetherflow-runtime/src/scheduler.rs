@@ -1089,7 +1089,7 @@ mod tests {
                 definition,
                 WorkflowRunId::parse("workflow-run-failure").expect("valid workflow-run ID"),
                 &SequenceTaskRunIdGenerator::new(),
-                watch::channel(false).1,
+                shutdown_rx,
             )
             .await
             .expect("workflow reaches failed state");
