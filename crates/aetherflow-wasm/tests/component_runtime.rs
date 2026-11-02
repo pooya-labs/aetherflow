@@ -17,14 +17,6 @@ fn replace_once(source: &mut String, needle: &str, replacement: &str) {
 }
 
 fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec<u8> {
-    component_from_checked_in_wit_with_imports(execute_body, data_segments, "")
-}
-
-fn component_from_checked_in_wit_with_imports(
-    execute_body: &str,
-    data_segments: &str,
-    extra_core_imports: &str,
-) -> Vec<u8> {
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
     let mut resolve = wit_parser::Resolve::new();
     let (package, _source_map) = resolve
@@ -40,8 +32,7 @@ fn component_from_checked_in_wit_with_imports(
 
     // Keep the WIT-derived import/export signatures, but replace the dummy
     // module's intentionally trapping Guest and realloc bodies.
-    let memory_declaration = format!("{extra_core_imports}(memory (;0;) 1)");
-    replace_once(&mut core_wat, "(memory (;0;) 0)", &memory_declaration);
+    replace_once(&mut core_wat, "(memory (;0;) 0)", "(memory (;0;) 1)");
     replace_once(
         &mut core_wat,
         "(memory (;0;) 1)",
@@ -143,11 +134,45 @@ fn component_reporting_memory_growth() -> Vec<u8> {
     component_from_checked_in_wit(execute_body, &data_segments)
 }
 
-fn component_with_ungranted_wasi_import() -> Vec<u8> {
+fn ungranted_wasi_componentization_error() -> String {
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+    let mut resolve = wit_parser::Resolve::new();
+    let (package, _source_map) = resolve
+        .push_dir(&wit_dir)
+        .expect("parse checked-in plugin WIT package");
+    let world = resolve
+        .select_world(&[package], None)
+        .expect("select task-plugin WIT world");
+
+    let module =
+        wit_component::dummy_module(&resolve, world, wit_parser::ManglingAndAbi::Standard32);
+    let mut core_wat = wasmprinter::print_bytes(&module).expect("print generated WIT core module");
     let extra_import = r#"  (import "wasi_snapshot_preview1" "fd_write"
     (func $wasi_fd_write (param i32 i32 i32 i32) (result i32)))
   "#;
-    component_from_checked_in_wit_with_imports("    i32.const 0", "", extra_import)
+    let memory_declaration = format!("{extra_import}(memory (;0;) 0)");
+    replace_once(
+        &mut core_wat,
+        "(memory (;0;) 0)",
+        &memory_declaration,
+    );
+
+    let mut module = wat::parse_str(&core_wat).expect("assemble guest module with WASI import");
+    wit_component::embed_component_metadata(
+        &mut module,
+        &resolve,
+        world,
+        wit_component::StringEncoding::UTF8,
+    )
+    .expect("embed component type metadata");
+
+    wit_component::ComponentEncoder::default()
+        .module(&module)
+        .expect("register guest core module")
+        .validate(true)
+        .encode()
+        .expect_err("the v1 WIT world must reject an undeclared WASI core import")
+        .to_string()
 }
 
 fn component_returning_guest_error(code: &str, message: &str) -> Vec<u8> {
@@ -344,26 +369,11 @@ fn component_memory_growth_is_bounded_per_invocation() {
 }
 
 #[test]
-fn component_cannot_import_ungranted_wasi_preview1_functions() {
-    let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
-    let component_bytes = component_with_ungranted_wasi_import();
-    let plugin = runtime
-        .compile_component(&component_bytes)
-        .expect("component binary should validate before import resolution");
-
-    let result = runtime.execute(
-        &plugin,
-        &fixture_context(),
-        b"",
-        CapabilitySet::default(),
-        ExecutionLimits::default(),
-    );
+fn component_encoder_rejects_ungranted_wasi_preview1_imports() {
+    let error = ungranted_wasi_componentization_error();
     assert!(
-        matches!(
-            result,
-            Err(PluginRuntimeError::Instantiation(_)) | Err(PluginRuntimeError::Linker(_))
-        ),
-        "an ungranted WASI import must fail closed, got {result:?}"
+        error.contains("wasi_snapshot_preview1"),
+        "unexpected componentization error: {error}"
     );
 }
 
