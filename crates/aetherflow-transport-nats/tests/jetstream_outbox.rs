@@ -169,8 +169,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("apply PostgreSQL schema"),
-        MigrationOutcome::Applied { version: 2, .. }
-            | MigrationOutcome::AlreadyCurrent { version: 2, .. }
+        MigrationOutcome::Applied { version: 3, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
 
     let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
