@@ -26,7 +26,11 @@ fn pool_from_url(database_url: &str, max_size: usize) -> Pool {
         },
     );
     Pool::builder(manager)
-        .max_size(NonZeroUsize::new(max_size).expect("positive PostgreSQL pool size").get())
+        .max_size(
+            NonZeroUsize::new(max_size)
+                .expect("positive PostgreSQL pool size")
+                .get(),
+        )
         .build()
         .expect("build PostgreSQL pool")
 }
@@ -43,7 +47,10 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
     let pool = pool_from_url(&database_url, 8);
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
-        store.migrate().await.expect("apply current PostgreSQL schema"),
+        store
+            .migrate()
+            .await
+            .expect("apply current PostgreSQL schema"),
         MigrationOutcome::Applied { version: 3, .. }
             | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
@@ -51,12 +58,10 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
     let membership = PgMembershipRepository::from_pool(pool);
     let suffix = unique_suffix();
     let node_id = NodeId::parse(format!("membership-node-{suffix}")).expect("valid node ID");
-    let incarnation_a =
-        NodeIncarnationId::parse(format!("membership-incarnation-a-{suffix}"))
-            .expect("valid first incarnation ID");
-    let incarnation_b =
-        NodeIncarnationId::parse(format!("membership-incarnation-b-{suffix}"))
-            .expect("valid second incarnation ID");
+    let incarnation_a = NodeIncarnationId::parse(format!("membership-incarnation-a-{suffix}"))
+        .expect("valid first incarnation ID");
+    let incarnation_b = NodeIncarnationId::parse(format!("membership-incarnation-b-{suffix}"))
+        .expect("valid second incarnation ID");
     let worker_id =
         WorkerId::parse(format!("membership-worker-a-{suffix}")).expect("valid worker ID");
     let worker_b_id =
@@ -104,7 +109,11 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .active_workers()
         .await
         .expect("list active workers");
-    assert!(workers.iter().any(|worker| worker.worker_id() == &worker_id));
+    assert!(
+        workers
+            .iter()
+            .any(|worker| worker.worker_id() == &worker_id)
+    );
 
     // Worker and node heartbeat operations keep leases bounded by the
     // database-owned parent lease, even if the requested worker lease is longer.
@@ -187,7 +196,11 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .active_workers()
         .await
         .expect("list active workers after takeover");
-    assert!(active.iter().any(|worker| worker.worker_id() == &worker_b_id));
+    assert!(
+        active
+            .iter()
+            .any(|worker| worker.worker_id() == &worker_b_id)
+    );
     assert!(!active.iter().any(|worker| worker.worker_id() == &worker_id));
 
     let node_b_drained = membership
@@ -208,14 +221,12 @@ async fn postgres_concurrent_node_join_has_one_winning_incarnation() {
 
     let membership = PgMembershipRepository::from_pool(pool_from_url(&database_url, 6));
     let suffix = unique_suffix();
-    let node_id = NodeId::parse(format!("membership-race-node-{suffix}"))
-        .expect("valid racing node ID");
-    let incarnation_a =
-        NodeIncarnationId::parse(format!("membership-race-a-{suffix}"))
-            .expect("valid first racing incarnation ID");
-    let incarnation_b =
-        NodeIncarnationId::parse(format!("membership-race-b-{suffix}"))
-            .expect("valid second racing incarnation ID");
+    let node_id =
+        NodeId::parse(format!("membership-race-node-{suffix}")).expect("valid racing node ID");
+    let incarnation_a = NodeIncarnationId::parse(format!("membership-race-a-{suffix}"))
+        .expect("valid first racing incarnation ID");
+    let incarnation_b = NodeIncarnationId::parse(format!("membership-race-b-{suffix}"))
+        .expect("valid second racing incarnation ID");
 
     let (a, b) = tokio::join!(
         membership.join_node(&node_id, &incarnation_a, Duration::from_secs(2)),
