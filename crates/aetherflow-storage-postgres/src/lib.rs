@@ -204,11 +204,13 @@ impl fmt::Display for StorageError {
                 write!(formatter, "worker registration is still owned: {worker_id}")
             }
             Self::WorkerRegistrationLost(worker_id) => {
-                write!(formatter, "worker registration is no longer current: {worker_id}")
+                write!(
+                    formatter,
+                    "worker registration is no longer current: {worker_id}"
+                )
             }
-            Self::InvalidWorkerCapacity => {
-                formatter.write_str("worker concurrency capacity must fit a positive PostgreSQL INTEGER")
-            }
+            Self::InvalidWorkerCapacity => formatter
+                .write_str("worker concurrency capacity must fit a positive PostgreSQL INTEGER"),
             Self::InvalidLeaseDuration => {
                 formatter.write_str("lease duration must be a positive signed millisecond value")
             }

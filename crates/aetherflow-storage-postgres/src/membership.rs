@@ -402,13 +402,13 @@ impl PgMembershipRepository {
         let registration = WorkerRegistration {
             worker_id: worker_id.clone(),
             node: membership.clone(),
-            concurrency_limit: NonZeroU32::new(
-                u32::try_from(row.get::<_, i32>(1)).map_err(|_| {
+            concurrency_limit: NonZeroU32::new(u32::try_from(row.get::<_, i32>(1)).map_err(
+                |_| {
                     StorageError::InvalidStoredValue(
                         "worker concurrency limit is outside the supported range".to_owned(),
                     )
-                })?,
-            )
+                },
+            )?)
             .ok_or_else(|| {
                 StorageError::InvalidStoredValue(
                     "worker concurrency limit must be positive".to_owned(),
@@ -669,6 +669,8 @@ fn lease_millis(duration: Duration) -> Result<i64, StorageError> {
 
 fn sql_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| {
-        StorageError::InvalidStoredValue("node membership epoch is outside PostgreSQL BIGINT range".to_owned())
+        StorageError::InvalidStoredValue(
+            "node membership epoch is outside PostgreSQL BIGINT range".to_owned(),
+        )
     })
 }
