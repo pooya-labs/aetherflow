@@ -1,9 +1,4 @@
-//! Wasmtime engine configuration and safe component compilation.
-//!
-//! Execution and host-call wiring are added in the following M06 slices. This
-//! first runtime layer fixes the engine feature set, compiles untrusted
-//! components through Wasmtime's validating API, and owns the epoch ticker
-//! required for enforceable wall-clock interruption.
+//! Wasmtime component runtime with per-invocation resource and capability limits.
 
 use std::error::Error;
 use std::fmt;
@@ -12,10 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use wasmtime::component::Component;
-use wasmtime::{Config, Engine};
+use wasmtime::component::{Component, HasSelf, Linker};
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 
-use crate::MAX_PLUGIN_ARTIFACT_BYTES;
+use crate::{
+    Capability, CapabilitySet, ExecutionLimits, LimitConfigurationError, PayloadTooLarge,
+    PluginExecutionContext, MAX_PLUGIN_ARTIFACT_BYTES,
+};
 
 #[allow(dead_code)]
 mod bindings {
@@ -46,8 +44,8 @@ impl WasmPluginRuntime {
         config.wasm_memory64(false);
         config.wasm_multi_memory(false);
 
-        let engine =
-            Engine::new(&config).map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
+        let engine = Engine::new(&config)
+            .map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
         let epoch_ticker = EpochTicker::new(engine.clone())?;
 
         Ok(Self {
@@ -61,7 +59,10 @@ impl WasmPluginRuntime {
     /// This deliberately does not use unsafe deserialization of cached native
     /// artifacts. A component must still match the generated v1 WIT bindings
     /// when it is instantiated by the host linker.
-    pub fn compile_component(&self, artifact: &[u8]) -> Result<CompiledPlugin, PluginRuntimeError> {
+    pub fn compile_component(
+        &self,
+        artifact: &[u8],
+    ) -> Result<CompiledPlugin, PluginRuntimeError> {
         if artifact.len() > MAX_PLUGIN_ARTIFACT_BYTES {
             return Err(PluginRuntimeError::ArtifactTooLarge {
                 actual: artifact.len(),
@@ -74,17 +75,168 @@ impl WasmPluginRuntime {
 
         Ok(CompiledPlugin { component })
     }
+
+    /// Executes one task in a fresh Store and component instance.
+    ///
+    /// This method is synchronous and must be called from a blocking worker
+    /// thread, never directly on a Tokio executor thread. Fuel and epoch
+    /// interruption actively stop guest execution when either budget expires.
+    pub fn execute(
+        &self,
+        plugin: &CompiledPlugin,
+        context: &PluginExecutionContext,
+        input: &[u8],
+        capabilities: CapabilitySet,
+        limits: ExecutionLimits,
+    ) -> Result<PluginExecutionResult, PluginRuntimeError> {
+        limits.validate().map_err(PluginRuntimeError::InvalidLimits)?;
+        limits
+            .validate_input(input)
+            .map_err(PluginRuntimeError::InputTooLarge)?;
+
+        let host_state = HostState::new(capabilities, limits);
+        let mut store = Store::new(&self.engine, host_state);
+        store.limiter(|state| &mut state.resource_limits);
+        store
+            .set_fuel(limits.fuel)
+            .map_err(|error| PluginRuntimeError::Wasmtime(error.to_string()))?;
+        store.set_hostcall_fuel(limits.hostcall_fuel);
+        store.set_max_component_handles(limits.max_component_handles);
+        store.set_epoch_deadline(epoch_ticks_for(limits.wall_clock_timeout));
+
+        let mut linker = Linker::new(&self.engine);
+        bindings::TaskPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
+            .map_err(|error| PluginRuntimeError::Linker(error.to_string()))?;
+
+        let bindings = bindings::TaskPlugin::instantiate(&mut store, &plugin.component, &linker)
+            .map_err(map_wasmtime_error)?;
+
+        let wit_context = bindings::aetherflow::plugin::types::TaskContext {
+            workflow_run_id: context.workflow_run_id.as_str().to_owned(),
+            task_run_id: context.task_run_id.as_str().to_owned(),
+            attempt: context.attempt,
+            deadline_unix_ms: context.deadline_unix_ms,
+        };
+
+        let guest_result = bindings
+            .guest()
+            .call_execute(&mut store, wit_context, input.to_vec())
+            .map_err(map_wasmtime_error)?;
+
+        let output = guest_result.map_err(|error| PluginRuntimeError::GuestError {
+            code: error.code,
+            message: error.message,
+        })?;
+        limits
+            .validate_output(&output)
+            .map_err(PluginRuntimeError::OutputTooLarge)?;
+
+        let host_state = store.into_data();
+        Ok(PluginExecutionResult {
+            output,
+            logs: host_state.logs,
+        })
+    }
 }
 
 /// A validated component compiled by one AetherFlow runtime instance.
 pub struct CompiledPlugin {
-    // Kept private so callers cannot bypass host linker policy or create an
-    // unbounded Store. The execution layer consumes this handle internally.
-    #[allow(dead_code)]
     component: Component,
 }
 
-/// Errors produced while creating the engine or validating a component.
+/// The result of a successful plugin invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginExecutionResult {
+    /// Opaque guest output payload.
+    pub output: Vec<u8>,
+    /// Bounded diagnostic messages emitted through the granted host capability.
+    pub logs: Vec<PluginLog>,
+}
+
+/// One accepted plugin log message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginLog {
+    /// Guest-selected diagnostic severity.
+    pub level: PluginLogLevel,
+    /// UTF-8 log message.
+    pub message: String,
+}
+
+/// Stable host-side representation of plugin log severity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PluginLogLevel {
+    /// Trace diagnostic.
+    Trace,
+    /// Debug diagnostic.
+    Debug,
+    /// Informational diagnostic.
+    Info,
+    /// Warning diagnostic.
+    Warn,
+    /// Error diagnostic.
+    Error,
+}
+
+struct HostState {
+    capabilities: CapabilitySet,
+    limits: ExecutionLimits,
+    resource_limits: StoreLimits,
+    logs: Vec<PluginLog>,
+    log_calls: u32,
+}
+
+impl HostState {
+    fn new(capabilities: CapabilitySet, limits: ExecutionLimits) -> Self {
+        let resource_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
+            .table_elements(limits.max_table_elements)
+            .instances(1)
+            .memories(1)
+            .tables(1)
+            .build();
+
+        Self {
+            capabilities,
+            limits,
+            resource_limits,
+            logs: Vec::new(),
+            log_calls: 0,
+        }
+    }
+}
+
+impl bindings::aetherflow::plugin::host::Host for HostState {
+    fn log(
+        &mut self,
+        level: bindings::aetherflow::plugin::types::LogLevel,
+        message: String,
+    ) -> Result<(), bindings::aetherflow::plugin::types::HostError> {
+        use bindings::aetherflow::plugin::types::{HostError, LogLevel};
+
+        if !self.capabilities.allows(Capability::LogWrite) {
+            return Err(HostError::CapabilityDenied);
+        }
+        if message.len() > self.limits.max_log_message_bytes {
+            return Err(HostError::MessageTooLarge);
+        }
+        if self.log_calls >= self.limits.max_log_messages {
+            return Err(HostError::RateLimited);
+        }
+
+        self.log_calls += 1;
+        let level = match level {
+            LogLevel::Trace => PluginLogLevel::Trace,
+            LogLevel::Debug => PluginLogLevel::Debug,
+            LogLevel::Info => PluginLogLevel::Info,
+            LogLevel::Warn => PluginLogLevel::Warn,
+            LogLevel::Error => PluginLogLevel::Error,
+        };
+        self.logs.push(PluginLog { level, message });
+        Ok(())
+    }
+}
+
+/// Errors produced while creating the engine or executing a component.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PluginRuntimeError {
     /// Wasmtime engine configuration failed.
@@ -95,24 +247,46 @@ pub enum PluginRuntimeError {
     ArtifactTooLarge {
         /// Actual artifact size.
         actual: usize,
-        /// Maximum permitted artifact size.
+        /// Maximum permitted size.
         maximum: usize,
     },
     /// Wasmtime rejected the component binary or its validation.
     InvalidComponent(String),
+    /// The component did not match the host's imported/exported WIT world.
+    Linker(String),
+    /// Component instantiation failed.
+    Instantiation(String),
+    /// A host-selected resource budget exceeded the v1 hard ceiling.
+    InvalidLimits(LimitConfigurationError),
+    /// The input payload exceeded its configured limit.
+    InputTooLarge(PayloadTooLarge),
+    /// The output payload exceeded its configured limit.
+    OutputTooLarge(PayloadTooLarge),
+    /// Guest code exhausted its deterministic instruction budget.
+    FuelExhausted,
+    /// Guest code exceeded its wall-clock execution deadline.
+    DeadlineExceeded,
+    /// Guest allocation exceeded a Wasmtime resource ceiling.
+    MemoryLimitExceeded,
+    /// The guest returned its own typed error.
+    GuestError {
+        /// Stable guest error code.
+        code: String,
+        /// Bounded guest error message.
+        message: String,
+    },
+    /// A Wasmtime execution error that is not one of the classified traps.
+    Wasmtime(String),
+    /// A guest trap unrelated to a configured resource budget.
+    Trap(String),
 }
 
 impl fmt::Display for PluginRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Engine(message) => {
-                write!(formatter, "failed to create Wasmtime engine: {message}")
-            }
+            Self::Engine(message) => write!(formatter, "failed to create Wasmtime engine: {message}"),
             Self::EpochTicker(message) => {
-                write!(
-                    formatter,
-                    "failed to start Wasmtime epoch ticker: {message}"
-                )
+                write!(formatter, "failed to start Wasmtime epoch ticker: {message}")
             }
             Self::ArtifactTooLarge { actual, maximum } => write!(
                 formatter,
@@ -121,11 +295,46 @@ impl fmt::Display for PluginRuntimeError {
             Self::InvalidComponent(message) => {
                 write!(formatter, "plugin component validation failed: {message}")
             }
+            Self::Linker(message) => write!(formatter, "plugin ABI linker setup failed: {message}"),
+            Self::Instantiation(message) => {
+                write!(formatter, "plugin component instantiation failed: {message}")
+            }
+            Self::InvalidLimits(error) => write!(formatter, "invalid plugin limits: {error}"),
+            Self::InputTooLarge(error) => write!(formatter, "invalid plugin input: {error}"),
+            Self::OutputTooLarge(error) => write!(formatter, "invalid plugin output: {error}"),
+            Self::FuelExhausted => formatter.write_str("plugin instruction fuel exhausted"),
+            Self::DeadlineExceeded => formatter.write_str("plugin execution deadline exceeded"),
+            Self::MemoryLimitExceeded => formatter.write_str("plugin memory limit exceeded"),
+            Self::GuestError { code, message } => {
+                write!(formatter, "plugin returned error {code}: {message}")
+            }
+            Self::Wasmtime(message) => write!(formatter, "Wasmtime execution failed: {message}"),
+            Self::Trap(message) => write!(formatter, "plugin trapped: {message}"),
         }
     }
 }
 
 impl Error for PluginRuntimeError {}
+
+fn map_wasmtime_error(error: wasmtime::Error) -> PluginRuntimeError {
+    if let Some(trap) = error.downcast_ref::<Trap>() {
+        return match trap {
+            Trap::OutOfFuel => PluginRuntimeError::FuelExhausted,
+            Trap::Interrupt => PluginRuntimeError::DeadlineExceeded,
+            Trap::AllocationTooLarge => PluginRuntimeError::MemoryLimitExceeded,
+            other => PluginRuntimeError::Trap(other.to_string()),
+        };
+    }
+
+    PluginRuntimeError::Wasmtime(error.to_string())
+}
+
+fn epoch_ticks_for(timeout: Duration) -> u64 {
+    let tick_ms = EPOCH_TICK.as_millis();
+    let timeout_ms = timeout.as_millis();
+    let ticks = timeout_ms.div_ceil(tick_ms) + 1;
+    u64::try_from(ticks).unwrap_or(u64::MAX)
+}
 
 struct EpochTicker {
     stop: Arc<AtomicBool>,
@@ -190,5 +399,12 @@ mod tests {
             }) if actual == MAX_PLUGIN_ARTIFACT_BYTES + 1
                 && maximum == MAX_PLUGIN_ARTIFACT_BYTES
         ));
+    }
+
+    #[test]
+    fn deadline_tick_budget_rounds_up_and_adds_scheduling_slack() {
+        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(1)), 2);
+        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(10)), 2);
+        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(11)), 3);
     }
 }
