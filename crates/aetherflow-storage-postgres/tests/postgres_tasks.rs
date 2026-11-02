@@ -441,11 +441,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("create cancellation workflow");
     assert_eq!(
-        repository.promote_due_tasks(10).await.expect("promote cancellation task"),
+        repository
+            .promote_due_tasks(10)
+            .await
+            .expect("promote cancellation task"),
         vec![cancel_task_run.clone()]
     );
-    let cancel_attempt =
-        AttemptId::parse("durable-cancel-attempt-001").expect("valid attempt ID");
+    let cancel_attempt = AttemptId::parse("durable-cancel-attempt-001").expect("valid attempt ID");
     let cancel_claim = repository
         .claim_next(&worker_a, &cancel_attempt, Duration::from_secs(30))
         .await
@@ -506,7 +508,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("create timeout workflow");
     assert_eq!(
-        repository.promote_due_tasks(10).await.expect("promote timeout task"),
+        repository
+            .promote_due_tasks(10)
+            .await
+            .expect("promote timeout task"),
         vec![timeout_task_run.clone()]
     );
     let timeout_attempt =
