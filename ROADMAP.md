@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-02  
 Current branch: `main`  
 Current milestone: **M05 — Distributed coordination and event delivery**  
-Overall status: **M00–M05 complete; membership fencing, component fault tests, UID-scoped packet-level PostgreSQL partition/rejoin, and the two-round combined cross-layer chaos campaign are hosted-verified. M06 is next; owner license selection and deferred property-based transition tests remain open.**
+Overall status: **M00–M05 complete; M06 is in progress. The versioned WIT ABI, Wasmtime 48.0.8 engine, per-invocation execution limits, and capability-gated logging are implemented; hosted verification and adversarial tests remain open. M07–M09 are not started. Owner license selection and deferred property-based transition tests remain open.**
 
 ## Progress rules
 
@@ -176,7 +176,7 @@ For every material regression, record: detection time; affected commit and Actio
 **Last fully hosted-verified implementation source:** `03e023a330947251a0b5caf8a6523ec1d5a95550`.  
 **Hosted verification:** PostgreSQL 18 + NATS [run 41402000557](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000557) passed the full workflow on implementation source `03e023a`, including PostgreSQL storage/migrations, packet-level partition, two-round combined chaos, three-member NATS quorum recovery, outbox convergence, inbox deduplication, and schema invariants. Rust CI [run 41402000570](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000570) passed formatting, Clippy, all workspace tests, release build, docs, and lockfile artifact upload; its rustfmt step produced the formatting-only main tip `9ae2d4c`. GitHub Pages [run 41402037576](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402037576) passed on `9ae2d4c`. The source difference between the tested implementation and current main is formatting-only. Live page: https://pooya16pg-spec.github.io/aetherflow/.
 
-**Current milestone:** M06 — WASM extension runtime. The versioned ABI/capability contract is complete; the Wasmtime host runtime is next.  
+**Current milestone:** M06 — WASM extension runtime. The versioned ABI/capability contract and initial Wasmtime execution path are implemented; hosted verification and adversarial component tests are next.  
 **Next task:** add a minimal valid component fixture generated from the checked-in WIT, then test end-to-end execution, default-deny and granted logging, output limits, guest errors, fuel exhaustion, epoch timeout, memory/table/handle ceilings, and rejection of undeclared imports/WASI. Only after these tests pass should the runtime be wired into `aetherflow-runtime`.
 
 **Completed baseline:** M00 architecture baseline (owner license selection remains open); M01 Rust workspace foundation; M02 execution domain/state machines (property-based transition tests deferred); M03 single-node runtime; M04 durable persistence; M05 distributed coordination, membership fencing, packet partition/takeover, active-worker loss, NATS quorum loss, and combined chaos recovery; M06 versioned WIT ABI and default-deny capability/resource contract. M04 includes PostgreSQL v1/v2 migrations, durable task repository/coordinator/worker, transactional outbox dispatcher, PostgreSQL consumer inbox, real NATS JetStream publisher and pull consumer, durable retries, workflow aggregation, and OS-process crash recovery at publisher/outbox-ack and consumer/inbox-commit/broker-ack windows.
