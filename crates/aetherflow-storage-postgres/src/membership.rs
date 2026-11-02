@@ -23,13 +23,6 @@ pub enum MembershipStatus {
 }
 
 impl MembershipStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Draining => "draining",
-        }
-    }
-
     fn parse(value: &str) -> Result<Self, StorageError> {
         match value {
             "active" => Ok(Self::Active),
@@ -157,7 +150,7 @@ impl PgMembershipRepository {
             .map_err(|error| StorageError::Pool(error.to_string()))?;
         let row = client
             .query_opt(
-                "INSERT INTO cluster_nodes AS current (
+                "INSERT INTO cluster_nodes AS existing (
                      node_id, incarnation_id, membership_epoch, status,
                      lease_expires_at, heartbeat_at, created_at, updated_at
                  )
@@ -169,9 +162,9 @@ impl PgMembershipRepository {
                  ON CONFLICT (node_id) DO UPDATE
                  SET incarnation_id = EXCLUDED.incarnation_id,
                      membership_epoch = CASE
-                         WHEN current.incarnation_id = EXCLUDED.incarnation_id
-                         THEN current.membership_epoch
-                         ELSE current.membership_epoch + 1
+                         WHEN existing.incarnation_id = EXCLUDED.incarnation_id
+                         THEN existing.membership_epoch
+                         ELSE existing.membership_epoch + 1
                      END,
                      status = 'active',
                      lease_expires_at =
@@ -179,11 +172,11 @@ impl PgMembershipRepository {
                      heartbeat_at = clock_timestamp(),
                      updated_at = clock_timestamp()
                  WHERE (
-                     current.incarnation_id = EXCLUDED.incarnation_id
-                     AND current.status = 'active'
+                     existing.incarnation_id = EXCLUDED.incarnation_id
+                     AND existing.status = 'active'
                  ) OR (
-                     current.incarnation_id <> EXCLUDED.incarnation_id
-                     AND current.lease_expires_at <= clock_timestamp()
+                     existing.incarnation_id <> EXCLUDED.incarnation_id
+                     AND existing.lease_expires_at <= clock_timestamp()
                  )
                  RETURNING membership_epoch, status, lease_expires_at",
                 &[&node_id.as_str(), &incarnation_id.as_str(), &lease_millis],
@@ -355,7 +348,7 @@ impl PgMembershipRepository {
         };
         let node_status: String = node.get(0);
         let node_lease_expiry: SystemTime = node.get(1);
-        if node_status != "active" || node_lease_expiry <= SystemTime::now() {
+        if node_status != "active" {
             return Err(StorageError::NodeMembershipLost(
                 membership.node_id.as_str().to_owned(),
             ));
@@ -363,7 +356,7 @@ impl PgMembershipRepository {
 
         let row = transaction
             .query_opt(
-                "INSERT INTO worker_registrations AS current (
+                "INSERT INTO worker_registrations AS existing (
                      worker_id, node_id, membership_epoch, status,
                      concurrency_limit, lease_expires_at, heartbeat_at,
                      created_at, updated_at
@@ -384,11 +377,11 @@ impl PgMembershipRepository {
                      heartbeat_at = clock_timestamp(),
                      updated_at = clock_timestamp()
                  WHERE (
-                     current.node_id = EXCLUDED.node_id
-                     AND current.membership_epoch = EXCLUDED.membership_epoch
-                     AND current.status = 'active'
-                     AND current.lease_expires_at > clock_timestamp()
-                 ) OR current.lease_expires_at <= clock_timestamp()
+                     existing.node_id = EXCLUDED.node_id
+                     AND existing.membership_epoch = EXCLUDED.membership_epoch
+                     AND existing.status = 'active'
+                     AND existing.lease_expires_at > clock_timestamp()
+                 ) OR existing.lease_expires_at <= clock_timestamp()
                  RETURNING status, concurrency_limit, lease_expires_at",
                 &[
                     &worker_id.as_str(),
