@@ -610,7 +610,7 @@ impl PgTaskRepository {
         attempt_id: &AttemptId,
         lease_duration: Duration,
     ) -> Result<Option<PgTaskClaim>, StorageError> {
-        self.claim_next_inner(worker_id, attempt_id, lease_duration, None)
+        self.claim_next_inner(worker_id, attempt_id, lease_duration, None, None)
             .await
     }
 
@@ -627,6 +627,29 @@ impl PgTaskRepository {
             attempt_id,
             lease_duration,
             Some(registration),
+            None,
+        )
+        .await
+    }
+
+    /// Claims a task only when its definition is supported by the worker's registry.
+    ///
+    /// The capability filter is applied in the same claim transaction, so a
+    /// worker cannot lease another worker's task and then fail it for a missing
+    /// handler. An empty supported-task list claims no work.
+    pub async fn claim_next_registered_for_tasks(
+        &self,
+        registration: &WorkerRegistration,
+        supported_task_ids: &[TaskId],
+        attempt_id: &AttemptId,
+        lease_duration: Duration,
+    ) -> Result<Option<PgTaskClaim>, StorageError> {
+        self.claim_next_inner(
+            registration.worker_id(),
+            attempt_id,
+            lease_duration,
+            Some(registration),
+            Some(supported_task_ids),
         )
         .await
     }
@@ -637,6 +660,7 @@ impl PgTaskRepository {
         attempt_id: &AttemptId,
         lease_duration: Duration,
         registration: Option<&WorkerRegistration>,
+        supported_task_ids: Option<&[TaskId]>,
     ) -> Result<Option<PgTaskClaim>, StorageError> {
         let lease_seconds = lease_seconds(lease_duration)?;
         let mut client = self
@@ -656,6 +680,12 @@ impl PgTaskRepository {
             }
             lock_worker_registration(&transaction, registration, true).await?;
         }
+        let supported_task_ids = supported_task_ids.map(|task_ids| {
+            task_ids
+                .iter()
+                .map(|task_id| task_id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        });
         let candidate = transaction
             .query_opt(
                 "SELECT task.task_run_id \
@@ -663,6 +693,7 @@ impl PgTaskRepository {
              WHERE task.status = 'ready' \
                AND task.available_at <= clock_timestamp() \
                AND task.attempts_started < task.max_attempts \
+               AND ($1::text[] IS NULL OR task.task_id = ANY($1)) \
                AND NOT EXISTS ( \
                    SELECT 1 \
                    FROM task_run_dependencies AS edge \
@@ -675,7 +706,7 @@ impl PgTaskRepository {
                ) \
              ORDER BY task.available_at, task.created_at, task.task_run_id \
              LIMIT 1 FOR UPDATE OF task SKIP LOCKED",
-                &[],
+                &[&supported_task_ids],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
