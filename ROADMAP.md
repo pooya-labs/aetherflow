@@ -4,7 +4,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 
 Last updated: 2026-11-02  
 Current branch: `main`  
-Current milestone: **M05 — Distributed coordination and event delivery**  
+Current milestone: **M06 — WASM extension runtime**  
 Overall status: **M00–M05 complete; M06 is in progress. The versioned WIT ABI, Wasmtime 48.0.8 engine, per-invocation execution limits, and capability-gated logging are implemented; hosted verification and adversarial tests remain open. M07–M09 are not started. Owner license selection and deferred property-based transition tests remain open.**
 
 ## Progress rules
@@ -140,7 +140,7 @@ For every material regression, record: detection time; affected commit and Actio
 
 ### M06 — WASM extension runtime
 - [x] Define versioned plugin ABI and capability model. ADR-0009, the WIT package `aetherflow:plugin@1.0.0`, and the `aetherflow-wasm` crate establish same-major/minor compatibility, typed task context, default-deny capabilities, and bounded input/output/resource policies. Unit tests cover ABI compatibility, default-deny grants, and hard resource ceilings.
-- [ ] Hosted-verify the Wasmtime 48.0.8 LTS runtime implementation. The engine, safe component compilation, per-invocation Store, default-deny `log.write` host import, host-call fuel, log size/rate limits, memory/table/component-handle limits, instruction fuel, and epoch-interrupt deadline are implemented. Workspace MSRV is now 1.95.0. CI for source `8df1f4f` is pending; do not mark this item complete until hosted checks pass. Add a valid WIT component fixture and exercise successful execution, denied capabilities, guest errors, fuel exhaustion, deadline interruption, memory/table limits, and unknown/WASI imports.
+- [ ] Hosted-verify the Wasmtime 48.0.8 LTS runtime implementation. The engine, safe component compilation, per-invocation Store, default-deny `log.write` host import, host-call fuel, log size/rate limits, memory/table/component-handle limits, instruction fuel, and epoch-interrupt deadline are implemented. Workspace MSRV is now 1.95.0. The code source is `8df1f4f`; the latest Rust CI on the final documentation head is queued. Do not mark this item complete until a hosted run passes. Add a valid WIT component fixture and exercise successful execution, denied capabilities, guest errors, fuel exhaustion, deadline interruption, memory/table limits, and unknown/WASI imports.
 - [ ] Add host-call authorization and deterministic error mapping.
 - [ ] Test traps, resource exhaustion, and untrusted modules.
 - [ ] Publish a minimal plugin example.
@@ -215,7 +215,7 @@ For every material regression, record: detection time; affected commit and Actio
 |---|---|---|
 | 2026-11-02 | M05 complete | Hosted-verified the two-round combined PostgreSQL partition, active-worker process-group kill, and NATS member-loss campaign. PostgreSQL 18 + NATS `41402000557`, Rust CI `41402000570`, and Pages `41402037576` passed; M06 is next. |
 | 2026-11-02 | M06 ABI foundation | Added `aetherflow-wasm`, WIT ABI `aetherflow:plugin@1.0.0`, default-deny `log.write` capability set, typed execution context, and hard input/output/memory/fuel/host-call/handle/deadline budgets. Accepted ADR-0009; Wasmtime runtime integration remains next. |
-| 2026-11-02 | M06 Wasmtime runtime implementation | Added exact Wasmtime `48.0.8` LTS dependency, raised workspace MSRV to `1.95`, configured Component Model + Cranelift + fuel + epoch interruption, added safe component compilation, fresh bounded Store execution, and capability-gated/rate-limited logging. Rust CI `41404117603` is pending; valid-component and adversarial runtime tests remain open. |
+| 2026-11-02 | M06 Wasmtime runtime implementation | Added exact Wasmtime `48.0.8` LTS dependency, raised workspace MSRV to `1.95`, configured Component Model + Cranelift + fuel + epoch interruption, added safe component compilation, fresh bounded Store execution, and capability-gated/rate-limited logging. Rust CI `41404117603` was cancelled by subsequent main pushes before execution; latest Rust CI `41404325498` and Pages `41404324928` are queued on the final documentation head. Valid-component and adversarial runtime tests remain open. |
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
