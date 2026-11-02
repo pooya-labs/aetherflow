@@ -43,7 +43,6 @@ impl WasmPluginRuntime {
         config.wasm_component_model(true);
         config.consume_fuel(true);
         config.epoch_interruption(true);
-        config.wasm_threads(false);
         config.wasm_memory64(false);
         config.wasm_multi_memory(false);
 
