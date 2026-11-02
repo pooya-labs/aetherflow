@@ -51,6 +51,7 @@ jobs:
       AETHERFLOW_MIGRATION_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_migration_test
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
       AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222
+      AETHERFLOW_TEST_NATS_CONTAINER: aetherflow-nats
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -80,7 +81,8 @@ jobs:
 
       - name: Start NATS with JetStream enabled
         run: |
-          docker run --detach --name aetherflow-nats --publish 4222:4222 nats:2.12-alpine -js
+          docker volume create aetherflow-nats-data
+          docker run --detach --name aetherflow-nats --publish 4222:4222 --volume aetherflow-nats-data:/data nats:2.12-alpine -js -sd /data
           for attempt in $(seq 1 30); do
             if (echo > /dev/tcp/127.0.0.1/4222) >/dev/null 2>&1; then
               exit 0
