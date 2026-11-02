@@ -612,7 +612,6 @@ impl PgMembershipRepository {
     }
 }
 
-
 /// Locks and validates a worker's parent node and registration before any task row.
 ///
 /// The lock order is node → worker → task → attempt/outbox. Claim admission
@@ -672,9 +671,7 @@ pub(crate) async fn lock_worker_registration(
             ],
         )
         .await
-        .map_err(|error| {
-            StorageError::Database(format!("lock worker registration: {error}"))
-        })?;
+        .map_err(|error| StorageError::Database(format!("lock worker registration: {error}")))?;
     let Some(worker) = worker else {
         return Err(StorageError::WorkerRegistrationLost(
             registration.worker_id.as_str().to_owned(),
