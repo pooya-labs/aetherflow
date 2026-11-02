@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
@@ -12,12 +12,70 @@ use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgWorkflowCoordinator,
-    PostgresTaskWorker, PostgresWorkerConfig, StorageError, TaskFailure,
+    MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
+    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
+    PgWorkflowCoordinator, PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig,
+    StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
 use tokio_postgres::{Config, NoTls};
+
+#[derive(Default)]
+struct RecordingPublisher {
+    failures_remaining: std::sync::atomic::AtomicUsize,
+    attempted_event_ids: Mutex<Vec<i64>>,
+    published_event_ids: Mutex<Vec<i64>>,
+}
+
+impl RecordingPublisher {
+    fn failing_once() -> Self {
+        Self {
+            failures_remaining: std::sync::atomic::AtomicUsize::new(1),
+            attempted_event_ids: Mutex::new(Vec::new()),
+            published_event_ids: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn attempts(&self) -> Vec<i64> {
+        self.attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn published(&self) -> Vec<i64> {
+        self.published_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl OutboxPublisher for RecordingPublisher {
+    fn publish<'a>(&'a self, event: &'a OutboxClaim) -> OutboxPublishFuture<'a> {
+        let event_id = event.event_id();
+        self.attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event_id);
+        let should_fail = self
+            .failures_remaining
+            .swap(0, Ordering::SeqCst)
+            > 0;
+        Box::pin(async move {
+            if should_fail {
+                Err(OutboxPublishError::new("simulated broker unavailable"))
+            } else {
+                self.published_event_ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(event_id);
+                Ok(())
+            }
+        })
+    }
+}
 
 #[tokio::test]
 async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced() {
@@ -884,6 +942,85 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             .get(0);
         assert_eq!(event_count, 1, "expected one {event_type} event");
     }
+
+    // Exercise a real PostgreSQL claim -> failed publish -> retry -> publish ->
+    // acknowledgement cycle using a transport adapter that fails exactly once.
+    let dispatch_workflow_run =
+        WorkflowRunId::parse("durable-outbox-dispatch-workflow-run").expect("valid workflow ID");
+    let dispatch_workflow =
+        WorkflowId::parse("durable-outbox-dispatch-workflow").expect("valid workflow ID");
+    let dispatch_task_run =
+        TaskRunId::parse("durable-outbox-dispatch-task-run").expect("valid task-run ID");
+    let dispatch_task_id =
+        TaskId::parse("durable-outbox-dispatch-task").expect("valid task ID");
+    repository
+        .create_workflow(
+            &dispatch_workflow_run,
+            &dispatch_workflow,
+            None,
+            &[NewTaskRun::new(
+                dispatch_task_run,
+                dispatch_task_id,
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create outbox dispatch workflow");
+    let dispatch_event_id: i64 = client
+        .query_one(
+            "SELECT event_id FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'workflow.started'",
+            &[&dispatch_workflow_run.as_str()],
+        )
+        .await
+        .expect("read outbox dispatch event ID")
+        .get(0);
+    let recording_publisher = Arc::new(RecordingPublisher::failing_once());
+    let dispatcher = PostgresOutboxDispatcher::new(
+        Arc::new(PgTaskRepository::from_pool(pool.clone())),
+        WorkerId::parse("durable-outbox-dispatcher").expect("valid dispatcher ID"),
+        Arc::clone(&recording_publisher),
+        OutboxDispatcherConfig::new(
+            10,
+            Duration::from_millis(5),
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+        )
+        .expect("valid outbox dispatcher configuration"),
+    );
+    let first_dispatch = dispatcher
+        .dispatch_once()
+        .await
+        .expect("record failed outbox publication");
+    assert_eq!(first_dispatch.claimed(), 1);
+    assert_eq!(first_dispatch.rescheduled(), 1);
+    assert_eq!(first_dispatch.acknowledged(), 0);
+    assert_eq!(recording_publisher.attempts(), vec![dispatch_event_id]);
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let second_dispatch = dispatcher
+        .dispatch_once()
+        .await
+        .expect("publish retried outbox event");
+    assert_eq!(second_dispatch.claimed(), 1);
+    assert_eq!(second_dispatch.acknowledged(), 1);
+    assert_eq!(
+        recording_publisher.attempts(),
+        vec![dispatch_event_id, dispatch_event_id]
+    );
+    assert_eq!(recording_publisher.published(), vec![dispatch_event_id]);
+    let published_event_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM outbox_events WHERE event_id = $1 AND published_at IS NOT NULL AND claim_owner IS NULL",
+            &[&dispatch_event_id],
+        )
+        .await
+        .expect("verify outbox event acknowledged after publish")
+        .get(0);
+    assert_eq!(published_event_count, 1);
 
     // Force the outbox insert to fail after the task and attempt UPDATEs have
     // executed. PostgreSQL must roll the whole completion transaction back.
