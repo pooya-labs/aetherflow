@@ -910,50 +910,50 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let child_executable = std::env::current_exe().expect("current integration-test executable");
     let mut old_worker_process = KillOnDropChild(
         std::process::Command::new(child_executable)
-        .args([
-            "--exact",
-            "postgres_partition_old_worker_child_process",
-            "--nocapture",
-        ])
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
-            &role_password,
-        )
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
-            database_gate.address.port().to_string(),
-        )
-        .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
-            old_incarnation.as_str(),
-        )
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_WORKER_ID",
-            old_worker_id.as_str(),
-        )
-        .env("AETHERFLOW_PARTITION_CHILD_TASK_ID", task_id.as_str())
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID",
-            task_run_id.as_str(),
-        )
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
-            format!("partition-old-attempt-{suffix}"),
-        )
-        .env("AETHERFLOW_PARTITION_CHILD_READY_PATH", &ready_path)
-        .env("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH", &partition_path)
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH",
-            &partition_ack_path,
-        )
-        .env("AETHERFLOW_PARTITION_CHILD_RESUME_PATH", &resume_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .expect("spawn old worker in a separate OS process"),
+            .args([
+                "--exact",
+                "postgres_partition_old_worker_child_process",
+                "--nocapture",
+            ])
+            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
+                &role_password,
+            )
+            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
+                database_gate.address.port().to_string(),
+            )
+            .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
+                old_incarnation.as_str(),
+            )
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_WORKER_ID",
+                old_worker_id.as_str(),
+            )
+            .env("AETHERFLOW_PARTITION_CHILD_TASK_ID", task_id.as_str())
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID",
+                task_run_id.as_str(),
+            )
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
+                format!("partition-old-attempt-{suffix}"),
+            )
+            .env("AETHERFLOW_PARTITION_CHILD_READY_PATH", &ready_path)
+            .env("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH", &partition_path)
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH",
+                &partition_ack_path,
+            )
+            .env("AETHERFLOW_PARTITION_CHILD_RESUME_PATH", &resume_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("spawn old worker in a separate OS process"),
     );
 
     let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
