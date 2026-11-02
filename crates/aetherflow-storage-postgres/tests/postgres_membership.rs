@@ -996,9 +996,7 @@ async fn postgres_partition_old_worker_child_process() {
         return;
     };
 
-    let mut child_config: Config = database_url
-        .parse()
-        .expect("valid child PostgreSQL URL");
+    let mut child_config: Config = database_url.parse().expect("valid child PostgreSQL URL");
     child_config.user(&database_user);
     child_config.password(&database_password);
     let pool = pool_from_config(child_config, 4);
