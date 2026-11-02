@@ -33,7 +33,7 @@ fn unique_suffix() -> String {
 struct TcpDatabaseGate {
     address: SocketAddr,
     control: mpsc::UnboundedSender<(bool, oneshot::Sender<()>)>,
-    task: tokio::task::JoinHandle<()>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl TcpDatabaseGate {
@@ -92,7 +92,7 @@ impl TcpDatabaseGate {
         Self {
             address,
             control,
-            task,
+            task: Some(task),
         }
     }
 
@@ -106,9 +106,35 @@ impl TcpDatabaseGate {
             .expect("TCP database gate applied requested partition state");
     }
 
-    async fn shutdown(self) {
+    async fn shutdown(mut self) {
         drop(self.control);
-        let _ = self.task.await;
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for TcpDatabaseGate {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+/// Kill and reap the child process if the parent test unwinds before the
+/// child has completed its stale-epoch assertions.
+struct KillOnDropChild(std::process::Child);
+
+impl Drop for KillOnDropChild {
+    fn drop(&mut self) {
+        match self.0.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
     }
 }
 
@@ -882,7 +908,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let _ = std::fs::remove_file(&partition_ack_path);
     let _ = std::fs::remove_file(&resume_path);
     let child_executable = std::env::current_exe().expect("current integration-test executable");
-    let mut old_worker_process = std::process::Command::new(child_executable)
+    let mut old_worker_process = KillOnDropChild(
+        std::process::Command::new(child_executable)
         .args([
             "--exact",
             "postgres_partition_old_worker_child_process",
@@ -926,15 +953,16 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
         .spawn()
-        .expect("spawn old worker in a separate OS process");
+        .expect("spawn old worker in a separate OS process"),
+    );
 
     let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !ready_path.exists() && tokio::time::Instant::now() < ready_deadline {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     if !ready_path.exists() {
-        let _ = old_worker_process.kill();
-        let _ = old_worker_process.wait();
+        let _ = old_worker_process.0.kill();
+        let _ = old_worker_process.0.wait();
         panic!("old worker process did not claim its task before timeout");
     }
     let old_epoch: u64 = std::fs::read_to_string(&ready_path)
@@ -1027,13 +1055,20 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     database_gate.set_available(true).await;
     std::fs::write(&resume_path, "resume")
         .expect("signal old worker process to reconnect while replacement owns task");
-    let child_status = tokio::task::spawn_blocking(move || {
-        old_worker_process
-            .wait()
-            .expect("wait for old worker process after reconnect")
+    let child_status = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(status) = old_worker_process
+                .0
+                .try_wait()
+                .expect("poll old worker process after reconnect")
+            {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     })
     .await
-    .expect("join old worker process wait task");
+    .expect("old worker process should finish stale-epoch assertions after reconnect");
     assert!(
         child_status.success(),
         "old worker process failed to observe stale-epoch fencing: {child_status}"
