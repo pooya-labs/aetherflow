@@ -117,6 +117,12 @@ impl WorkerRegistration {
     pub const fn lease_expires_at(&self) -> SystemTime {
         self.lease_expires_at
     }
+
+    /// Replaces the parent node snapshot after a successful node heartbeat.
+    pub(crate) fn with_node_membership(mut self, node: NodeMembership) -> Self {
+        self.node = node;
+        self
+    }
 }
 
 /// PostgreSQL repository for node and worker membership leases.
