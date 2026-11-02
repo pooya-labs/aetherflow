@@ -16,6 +16,9 @@ pub const PLUGIN_ABI_V1: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 
 /// Maximum input or output payload accepted by the v1 ABI (1 MiB).
 pub const MAX_PLUGIN_PAYLOAD_BYTES: usize = 1024 * 1024;
 
+/// Maximum original component artifact accepted by the host (16 MiB).
+pub const MAX_PLUGIN_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Maximum guest-provided log message accepted by the v1 host interface (4 KiB).
 pub const MAX_LOG_MESSAGE_BYTES: usize = 4 * 1024;
 
@@ -461,3 +464,7 @@ mod tests {
         );
     }
 }
+
+mod runtime;
+
+pub use runtime::{CompiledPlugin, PluginRuntimeError, WasmPluginRuntime};
