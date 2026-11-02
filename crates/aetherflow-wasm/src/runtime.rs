@@ -391,6 +391,145 @@ mod tests {
     use super::{HostState, PluginRuntimeError, WasmPluginRuntime, bindings};
     use crate::{Capability, CapabilitySet, ExecutionLimits, MAX_PLUGIN_ARTIFACT_BYTES};
 
+    // A minimal Component Model resource fixture with two component instances.
+    // Each has its own resource table; the Store-wide counter must still cap
+    // their combined live handles. The core guest allocates via resource.new
+    // and releases via resource.drop.
+    const HANDLE_STRESS_COMPONENT: &str = r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (core func $new (canon resource.new $r))
+    (core func $drop (canon resource.drop $r))
+    (core module $m
+      (import "" "new" (func $new (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "spray") (param $n i32) (result i32)
+        (local $i i32)
+        (loop $l
+          (if (i32.lt_u (local.get $i) (local.get $n))
+            (then
+              (drop (call $new (local.get $i)))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $l))))
+        (local.get $i))
+      (func (export "churn") (param $n i32) (result i32)
+        (local $i i32)
+        (loop $l
+          (if (i32.lt_u (local.get $i) (local.get $n))
+            (then
+              (call $drop (call $new (local.get $i)))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $l))))
+        (local.get $i)))
+    (core instance $i (instantiate $m
+      (with "" (instance
+        (export "new" (func $new))
+        (export "drop" (func $drop))))))
+    (func (export "spray") (param "n" u32) (result u32)
+      (canon lift (core func $i "spray")))
+    (func (export "churn") (param "n" u32) (result u32)
+      (canon lift (core func $i "churn"))))
+
+  (instance $i0 (instantiate $C))
+  (export "spray0" (func $i0 "spray"))
+  (export "churn0" (func $i0 "churn"))
+  (instance $i1 (instantiate $C))
+  (export "spray1" (func $i1 "spray"))
+  (export "churn1" (func $i1 "churn"))
+)
+"#;
+
+    fn store_with_component_handle_limit(
+        runtime: &WasmPluginRuntime,
+        maximum: usize,
+    ) -> wasmtime::Store<HostState> {
+        let limits = ExecutionLimits {
+            max_component_handles: maximum,
+            ..ExecutionLimits::default()
+        };
+        let state = HostState::new(CapabilitySet::default(), limits);
+        let mut store = wasmtime::Store::new(&runtime.engine, state);
+        store.limiter(|state| &mut state.resource_limits);
+        store
+            .set_fuel(limits.fuel)
+            .expect("set handle-stress fixture fuel");
+        store.set_epoch_deadline(1_000);
+        store.set_max_component_handles(limits.max_component_handles);
+        store
+    }
+
+    #[test]
+    fn component_handle_limit_is_shared_across_guest_resource_tables() {
+        let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
+        let component_bytes =
+            wat::parse_str(HANDLE_STRESS_COMPONENT).expect("assemble handle-stress component");
+        let component = wasmtime::component::Component::new(&runtime.engine, &component_bytes)
+            .expect("compile handle-stress component");
+        let linker = wasmtime::component::Linker::<HostState>::new(&runtime.engine);
+        let mut store = store_with_component_handle_limit(&runtime, 20);
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .expect("instantiate handle-stress component");
+
+        let spray0 = instance
+            .get_typed_func::<(u32,), (u32,)>(&mut store, "spray0")
+            .expect("get first resource-table spray function");
+        let spray1 = instance
+            .get_typed_func::<(u32,), (u32,)>(&mut store, "spray1")
+            .expect("get second resource-table spray function");
+
+        assert_eq!(
+            spray0
+                .call(&mut store, (12,))
+                .expect("first resource table is below the Store-wide limit"),
+            (12,)
+        );
+
+        let error = spray1
+            .call(&mut store, (12,))
+            .expect_err("combined allocations across both component instances must hit the Store cap");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("store handle limit exceeded"),
+            "unexpected error when exhausting component handles: {message}"
+        );
+    }
+
+    #[test]
+    fn dropping_guest_resources_returns_component_handle_budget() {
+        let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
+        let component_bytes =
+            wat::parse_str(HANDLE_STRESS_COMPONENT).expect("assemble handle-stress component");
+        let component = wasmtime::component::Component::new(&runtime.engine, &component_bytes)
+            .expect("compile handle-stress component");
+        let linker = wasmtime::component::Linker::<HostState>::new(&runtime.engine);
+        let mut store = store_with_component_handle_limit(&runtime, 10);
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .expect("instantiate handle-stress component");
+
+        let churn = instance
+            .get_typed_func::<(u32,), (u32,)>(&mut store, "churn0")
+            .expect("get resource churn function");
+        assert_eq!(
+            churn
+                .call(&mut store, (1_000,))
+                .expect("each dropped resource should return one handle slot"),
+            (1_000,)
+        );
+
+        let spray = instance
+            .get_typed_func::<(u32,), (u32,)>(&mut store, "spray0")
+            .expect("get resource spray function");
+        assert_eq!(
+            spray
+                .call(&mut store, (10,))
+                .expect("freed handles should make the full budget available again"),
+            (10,)
+        );
+    }
+
     #[test]
     fn runtime_rejects_invalid_component_bytes() {
         let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
