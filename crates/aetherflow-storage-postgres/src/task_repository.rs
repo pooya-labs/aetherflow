@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
     AttemptId, IdempotencyKey, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowId,
-    WorkflowRunId,
+    WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use deadpool_postgres::Pool;
@@ -1464,6 +1464,261 @@ impl PgTaskRepository {
         Ok(())
     }
 
+    /// Reconciles task outcomes into the durable workflow-run terminal state.
+    ///
+    /// The earliest persisted non-success terminal task outcome wins. A workflow
+    /// succeeds only when every task run has succeeded. On failure, cancellation,
+    /// or timeout, remaining non-terminal tasks and their active attempts are
+    /// cancelled in the same transaction as the workflow terminal event.
+    pub async fn aggregate_workflow_run(
+        &self,
+        workflow_run_id: &WorkflowRunId,
+    ) -> Result<WorkflowStatus, StorageError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        let workflow_row = transaction
+            .query_opt(
+                "SELECT status FROM workflow_runs WHERE workflow_run_id = $1 FOR UPDATE",
+                &[&workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| {
+                StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned())
+            })?;
+        let current_status_text: String = workflow_row.get(0);
+        let current_status = parse_workflow_status(&current_status_text)?;
+        if workflow_status_is_terminal(current_status) {
+            transaction
+                .commit()
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+            return Ok(current_status);
+        }
+
+        // Lock task rows in a stable order before deciding and applying the
+        // aggregate result. A worker cannot commit against a row while it is
+        // being reconciled here.
+        let rows = transaction
+            .query(
+                "SELECT task_run_id, status, version, attempts_started, claimed_by, fencing_token, updated_at \\
+                 FROM task_runs WHERE workflow_run_id = $1 ORDER BY task_run_id FOR UPDATE",
+                &[&workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        if rows.is_empty() {
+            return Err(StorageError::InconsistentState(format!(
+                "workflow run {} contains no task runs",
+                workflow_run_id.as_str()
+            )));
+        }
+
+        let mut task_runs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let task_run_id: String = row.get(0);
+            let status: String = row.get(1);
+            let version: i64 = row.get(2);
+            let attempts_started: i32 = row.get(3);
+            let claimed_by: Option<String> = row.get(4);
+            let fencing_token: i64 = row.get(5);
+            let updated_at: SystemTime = row.get(6);
+            if !matches!(
+                status.as_str(),
+                "pending"
+                    | "ready"
+                    | "running"
+                    | "retry_waiting"
+                    | "succeeded"
+                    | "failed"
+                    | "cancelled"
+                    | "timed_out"
+            ) {
+                return Err(StorageError::InvalidStoredValue(format!(
+                    "unknown task status while aggregating workflow: {status}"
+                )));
+            }
+            task_runs.push((
+                task_run_id,
+                status,
+                version,
+                attempts_started,
+                claimed_by,
+                fencing_token,
+                updated_at,
+            ));
+        }
+
+        let first_terminal_failure = task_runs
+            .iter()
+            .filter(|(_, status, ..)| {
+                matches!(status.as_str(), "failed" | "cancelled" | "timed_out")
+            })
+            .min_by_key(|(task_run_id, _, _, _, _, _, updated_at)| {
+                (*updated_at, task_run_id.as_str())
+            });
+
+        let next_status = if let Some((_, status, ..)) = first_terminal_failure {
+            match status.as_str() {
+                "failed" => WorkflowStatus::Failed,
+                "cancelled" => WorkflowStatus::Cancelled,
+                "timed_out" => WorkflowStatus::TimedOut,
+                _ => unreachable!("filtered terminal failure status"),
+            }
+        } else if task_runs.iter().all(|(_, status, ..)| status == "succeeded") {
+            WorkflowStatus::Succeeded
+        } else {
+            transaction
+                .commit()
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+            return Ok(current_status);
+        };
+
+        let next_status_text = workflow_status_name(next_status);
+        if next_status != WorkflowStatus::Succeeded {
+            // Stop all remaining work after the first terminal non-success
+            // result. Stale worker writes then fail their status/version guards.
+            for (
+                task_run_id,
+                status,
+                version,
+                attempts_started,
+                claimed_by,
+                fencing_token,
+                _,
+            ) in &task_runs
+            {
+                if !matches!(
+                    status.as_str(),
+                    "pending" | "ready" | "running" | "retry_waiting"
+                ) {
+                    continue;
+                }
+
+                if status == "running" {
+                    if *attempts_started <= 0 || *fencing_token <= 0 {
+                        return Err(StorageError::InconsistentState(format!(
+                            "running task {task_run_id} has invalid attempt or fencing metadata"
+                        )));
+                    }
+                    let worker_id = claimed_by.as_deref().ok_or_else(|| {
+                        StorageError::InconsistentState(format!(
+                            "running task {task_run_id} has no lease owner"
+                        ))
+                    })?;
+                    let updated_attempts = transaction
+                        .execute(
+                            "UPDATE task_attempts \\
+                             SET outcome = 'cancelled', finished_at = clock_timestamp(), \\
+                                 error_kind = 'workflow_terminal', error_message = $5 \\
+                             WHERE task_run_id = $1 AND attempt_number = $2 \\
+                               AND worker_id = $3 AND fencing_token = $4 AND outcome = 'running'",
+                            &[
+                                task_run_id,
+                                attempts_started,
+                                &worker_id,
+                                fencing_token,
+                                &format!("workflow ended as {next_status_text}"),
+                            ],
+                        )
+                        .await
+                        .map_err(|error| StorageError::Database(error.to_string()))?;
+                    if updated_attempts != 1 {
+                        return Err(StorageError::InconsistentState(format!(
+                            "workflow termination did not match one active attempt for task {task_run_id}"
+                        )));
+                    }
+                }
+
+                let updated = transaction
+                    .query_opt(
+                        "UPDATE task_runs \\
+                         SET status = 'cancelled', claimed_by = NULL, lease_expires_at = NULL, \\
+                             version = version + 1, updated_at = clock_timestamp(), \\
+                             finished_at = clock_timestamp() \\
+                         WHERE task_run_id = $1 AND version = $2 AND status = $3 \\
+                         RETURNING version",
+                        &[task_run_id, version, status],
+                    )
+                    .await
+                    .map_err(|error| StorageError::Database(error.to_string()))?
+                    .ok_or_else(|| {
+                        StorageError::InconsistentState(format!(
+                            "task {task_run_id} changed while its workflow was locked"
+                        ))
+                    })?;
+                let task_version: i64 = updated.get(0);
+                append_outbox(
+                    &transaction,
+                    "task_run",
+                    task_run_id,
+                    task_version,
+                    "task.cancelled",
+                    json!({
+                        "task_run_id": task_run_id,
+                        "status": "cancelled",
+                        "reason": "workflow_terminal",
+                        "workflow_status": next_status_text,
+                        "version": task_version
+                    }),
+                )
+                .await?;
+            }
+        }
+
+        let updated_workflow = transaction
+            .query_opt(
+                "UPDATE workflow_runs \\
+                 SET status = $2, version = version + 1, updated_at = clock_timestamp(), \\
+                     finished_at = clock_timestamp() \\
+                 WHERE workflow_run_id = $1 AND status = $3 \\
+                 RETURNING version",
+                &[
+                    &workflow_run_id.as_str(),
+                    &next_status_text,
+                    &current_status_text,
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| {
+                StorageError::InconsistentState(format!(
+                    "workflow run {} changed during aggregation",
+                    workflow_run_id.as_str()
+                ))
+            })?;
+        let workflow_version: i64 = updated_workflow.get(0);
+        append_outbox(
+            &transaction,
+            "workflow_run",
+            workflow_run_id.as_str(),
+            workflow_version,
+            &format!("workflow.{next_status_text}"),
+            json!({
+                "workflow_run_id": workflow_run_id.as_str(),
+                "status": next_status_text,
+                "version": workflow_version
+            }),
+        )
+        .await?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(next_status)
+    }
+
     /// Loads a durable task-run snapshot, including direct dependency references.
     pub async fn get_task_run(
         &self,
@@ -1476,6 +1731,41 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Pool(error.to_string()))?;
         load_snapshot_from_client(&client, task_run_id.as_str()).await
     }
+}
+
+fn parse_workflow_status(value: &str) -> Result<WorkflowStatus, StorageError> {
+    match value {
+        "pending" => Ok(WorkflowStatus::Pending),
+        "running" => Ok(WorkflowStatus::Running),
+        "succeeded" => Ok(WorkflowStatus::Succeeded),
+        "failed" => Ok(WorkflowStatus::Failed),
+        "cancelled" => Ok(WorkflowStatus::Cancelled),
+        "timed_out" => Ok(WorkflowStatus::TimedOut),
+        other => Err(StorageError::InvalidStoredValue(format!(
+            "unknown workflow status: {other}"
+        ))),
+    }
+}
+
+fn workflow_status_name(status: WorkflowStatus) -> &'static str {
+    match status {
+        WorkflowStatus::Pending => "pending",
+        WorkflowStatus::Running => "running",
+        WorkflowStatus::Succeeded => "succeeded",
+        WorkflowStatus::Failed => "failed",
+        WorkflowStatus::Cancelled => "cancelled",
+        WorkflowStatus::TimedOut => "timed_out",
+    }
+}
+
+fn workflow_status_is_terminal(status: WorkflowStatus) -> bool {
+    matches!(
+        status,
+        WorkflowStatus::Succeeded
+            | WorkflowStatus::Failed
+            | WorkflowStatus::Cancelled
+            | WorkflowStatus::TimedOut
+    )
 }
 
 fn validate_retry_policy(policy: RetryPolicy) -> Result<(), StorageError> {
