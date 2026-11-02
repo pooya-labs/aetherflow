@@ -1237,7 +1237,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
 
         let ready = timeout(Duration::from_secs(15), async {
             loop {
-                if let Ok(Ok(client)) =
+                if let Ok(client) =
                     timeout(Duration::from_millis(300), connect_to_nats(&nats_url)).await
                 {
                     drop(client);
