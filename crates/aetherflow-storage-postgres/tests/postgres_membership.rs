@@ -1,9 +1,14 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aetherflow_core::domain::{NodeId, NodeIncarnationId, WorkerId};
+use aetherflow_core::domain::{
+    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, WorkerId, WorkflowId,
+    WorkflowRunId,
+};
+use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_storage_postgres::{
-    MembershipStatus, MigrationOutcome, PgMembershipRepository, PgStore, StorageError,
+    MembershipStatus, MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore,
+    PgTaskRepository, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio_postgres::{Config, NoTls};
@@ -267,3 +272,199 @@ async fn postgres_concurrent_node_join_has_one_winning_incarnation() {
         .await
         .expect("drain winning incarnation");
 }
+#[tokio::test]
+async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_TEST_DATABASE_URL is not set; skipping stale task-worker epoch integration test"
+        );
+        return;
+    };
+
+    let pool = pool_from_url(&database_url, 8);
+    let store = PgStore::from_pool(pool.clone());
+    assert!(matches!(
+        store.migrate().await.expect("ensure current PostgreSQL schema"),
+        MigrationOutcome::Applied { version: 3, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 3, .. }
+    ));
+    let membership = PgMembershipRepository::from_pool(pool.clone());
+    let tasks = PgTaskRepository::from_pool(pool);
+    let suffix = unique_suffix();
+
+    let node_id = NodeId::parse(format!("stale-task-node-{suffix}")).expect("valid node ID");
+    let old_incarnation = NodeIncarnationId::parse(format!("stale-task-old-{suffix}"))
+        .expect("valid old node incarnation");
+    let new_incarnation = NodeIncarnationId::parse(format!("stale-task-new-{suffix}"))
+        .expect("valid new node incarnation");
+    let old_worker_id =
+        WorkerId::parse(format!("stale-task-worker-old-{suffix}")).expect("valid old worker ID");
+    let new_worker_id =
+        WorkerId::parse(format!("stale-task-worker-new-{suffix}")).expect("valid new worker ID");
+
+    // Keep the node lease short, but the task lease long. The old task lease is
+    // still valid when the new process takes the node's next membership epoch.
+    let old_node = membership
+        .join_node(&node_id, &old_incarnation, Duration::from_millis(350))
+        .await
+        .expect("old node incarnation joins");
+    let old_registration = membership
+        .register_worker(
+            &old_node,
+            &old_worker_id,
+            NonZeroU32::new(2).expect("positive worker capacity"),
+            Duration::from_millis(300),
+        )
+        .await
+        .expect("old worker registration succeeds");
+
+    let workflow_id = WorkflowId::parse(format!("stale-task-wf-{suffix}"))
+        .expect("valid workflow ID");
+    let workflow_run_id = WorkflowRunId::parse(format!("stale-task-run-{suffix}"))
+        .expect("valid workflow-run ID");
+    let task_id = TaskId::parse(format!("stale-task-def-{suffix}")).expect("valid task ID");
+    let task_run_id =
+        TaskRunId::parse(format!("stale-task-exec-{suffix}")).expect("valid task-run ID");
+    let retry_policy = RetryPolicy::new(
+        NonZeroU32::new(2).expect("positive retry budget"),
+        0,
+        0,
+    )
+    .expect("valid retry policy");
+    tasks
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id.clone(),
+                task_id,
+                TaskInput::new(b"membership-fenced-input".to_vec()).expect("valid task input"),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() - Duration::from_secs(1),
+            )],
+        )
+        .await
+        .expect("create task for stale-worker fencing test");
+    tasks
+        .promote_due_tasks(8)
+        .await
+        .expect("promote ready task");
+
+    let attempt_id =
+        AttemptId::parse(format!("stale-task-attempt-{suffix}")).expect("valid attempt ID");
+    let claim = tasks
+        .claim_next_registered(&old_registration, &attempt_id, Duration::from_secs(15))
+        .await
+        .expect("registered worker may claim while its epoch is active")
+        .expect("ready task is claimed");
+    assert_eq!(claim.task_run().status(), aetherflow_core::domain::TaskStatus::Running);
+
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    let new_node = membership
+        .join_node(&node_id, &new_incarnation, Duration::from_secs(3))
+        .await
+        .expect("new process takes over the expired node lease");
+    assert_eq!(new_node.epoch(), old_node.epoch() + 1);
+    let new_registration = membership
+        .register_worker(
+            &new_node,
+            &new_worker_id,
+            NonZeroU32::new(2).expect("positive worker capacity"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("new worker registers under the replacement epoch");
+
+    assert!(matches!(
+        tasks
+            .heartbeat_registered(
+                &task_run_id,
+                &old_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                Duration::from_secs(15),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .complete_registered(
+                &task_run_id,
+                &old_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                TaskOutput::new(b"stale-output".to_vec()).expect("valid output"),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .record_failure_registered(
+                &task_run_id,
+                &old_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                TaskFailure::permanent("stale-worker", "must not settle after takeover"),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .timeout_task_run_registered(
+                &task_run_id,
+                &old_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .recover_expired_leases_registered(&old_registration, 8)
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .promote_due_tasks_registered(&old_registration, 8)
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .aggregate_workflow_run_registered(&workflow_run_id, &old_registration)
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+
+    let unchanged = tasks
+        .get_task_run(&task_run_id)
+        .await
+        .expect("read task after stale write attempts");
+    assert_eq!(unchanged.status(), aetherflow_core::domain::TaskStatus::Running);
+    assert_eq!(unchanged.version(), claim.task_run().version());
+    assert_eq!(unchanged.fencing_token(), claim.fencing_token());
+    assert_eq!(
+        unchanged.claimed_by().map(WorkerId::as_str),
+        Some(old_worker_id.as_str())
+    );
+
+    // A control-plane cancellation is still allowed to clean up the fixture;
+    // it does not impersonate the stale worker.
+    tasks
+        .cancel_task_run(&task_run_id, unchanged.version())
+        .await
+        .expect("administrative cancellation settles the test task");
+    membership
+        .drain_node(&new_node)
+        .await
+        .expect("drain replacement test node");
+    assert_eq!(new_registration.node().epoch(), new_node.epoch());
+}
+
