@@ -1609,10 +1609,24 @@ impl CombinedChaosChild {
             .expect("poll combined-chaos child")
     }
 
+    fn kill_process_group(child: &mut Child) {
+        // The direct child is sudo, which may supervise a separate target
+        // process. Kill its dedicated process group so the unprivileged worker
+        // cannot survive, renew its lease, or outlive the marker directory.
+        let process_group = format!("-{}", child.id());
+        let result = Command::new("sudo")
+            .args(["-n", "kill", "-KILL", "--", process_group.as_str()])
+            .output()
+            .expect("kill combined-chaos worker process group");
+        if !result.status.success() {
+            let _ = child.kill();
+        }
+    }
+
     fn kill_and_wait(&mut self) -> ExitStatus {
         let mut child = self.0.take().expect("combined-chaos child exists");
-        let _ = child.kill();
-        child.wait().expect("wait for killed combined-chaos child")
+        Self::kill_process_group(&mut child);
+        child.wait().expect("wait for killed combined-chaos process group")
     }
 }
 
@@ -1620,7 +1634,7 @@ impl Drop for CombinedChaosChild {
     fn drop(&mut self) {
         if let Some(mut child) = self.0.take() {
             if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
+                Self::kill_process_group(&mut child);
                 let _ = child.wait();
             }
         }
@@ -1862,6 +1876,11 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             ),
         ];
         let mut command = Command::new("sudo");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command.args(["-n", "-u", "nobody", "--", "/usr/bin/env"]);
         for (key, value) in &envs {
             command.arg(format!("{key}={value}"));
@@ -2046,8 +2065,30 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         .expect("NATS cluster should recover after member restart");
 
         // Node lease (16 s), worker lease (12 s), and task lease (12 s)
-        // are separate durable clocks; wait out the longest before takeover.
-        tokio::time::sleep(Duration::from_millis(16_500)).await;
+        // are separate durable clocks. Wait for PostgreSQL's authoritative
+        // node lease expiry instead of relying on a wall-clock sleep margin.
+        timeout(Duration::from_secs(20), async {
+            loop {
+                let expired: bool = pool
+                    .get()
+                    .await
+                    .expect("get node-lease expiry connection")
+                    .query_one(
+                        "SELECT lease_expires_at <= clock_timestamp()
+                         FROM cluster_nodes WHERE node_id = $1",
+                        &[&node_id.as_str()],
+                    )
+                    .await
+                    .expect("read authoritative node lease expiry")
+                    .get(0);
+                if expired {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("old node membership lease should expire after worker process-group kill");
         let replacement_node = membership
             .join_node(&node_id, &new_incarnation, Duration::from_secs(30))
             .await
