@@ -100,7 +100,6 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     ));
 
     let repository = Arc::new(PgTaskRepository::from_pool(pool));
-    let coordinator = PgWorkflowCoordinator::new(Arc::clone(&repository));
     let workflow_run_id =
         WorkflowRunId::parse(format!("nats-workflow-run-{suffix}")).expect("valid workflow-run ID");
     let workflow_id =
