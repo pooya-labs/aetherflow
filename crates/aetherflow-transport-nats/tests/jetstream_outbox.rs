@@ -1219,10 +1219,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             tokio::time::sleep(Duration::from_millis(850)).await;
             timeout(Duration::from_secs(10), async {
                 loop {
-                    if let Ok(report) = restart_dispatcher.dispatch_once().await {
-                        if report.acknowledged() == 1 {
-                            break true;
-                        }
+                    if let Ok(report) = restart_dispatcher.dispatch_once().await
+                        && report.acknowledged() == 1
+                    {
+                        break true;
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
