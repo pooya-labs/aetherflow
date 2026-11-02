@@ -250,6 +250,21 @@ impl TaskRegistry {
     pub fn handler_for(&self, task_id: &TaskId) -> Option<Arc<dyn TaskHandler>> {
         self.handlers.get(task_id.as_str()).cloned()
     }
+
+    /// Returns the task identifiers this registry can execute, in stable order.
+    #[must_use]
+    pub fn registered_task_ids(&self) -> Vec<TaskId> {
+        let mut task_ids = self
+            .handlers
+            .keys()
+            .map(|task_id| {
+                TaskId::parse(task_id.clone())
+                    .expect("registry keys originate from validated task identifiers")
+            })
+            .collect::<Vec<_>>();
+        task_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        task_ids
+    }
 }
 
 /// Configuration validation errors for the scheduler.
@@ -1186,6 +1201,33 @@ mod tests {
             retry_policy(attempts),
         )
         .expect("valid scheduler config")
+    }
+
+    #[test]
+    fn task_registry_lists_supported_task_ids_in_stable_order() {
+        let mut registry = TaskRegistry::new();
+        registry
+            .register(
+                TaskId::parse("task-z").expect("valid task ID"),
+                |_context: super::TaskContext| async { Ok(TaskOutput::empty()) },
+            )
+            .expect("register task z");
+        registry
+            .register(
+                TaskId::parse("task-a").expect("valid task ID"),
+                |_context: super::TaskContext| async { Ok(TaskOutput::empty()) },
+            )
+            .expect("register task a");
+
+        assert_eq!(
+            registry
+                .registered_task_ids()
+                .iter()
+                .map(TaskId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["task-a", "task-z"]
+        );
+        assert!(TaskRegistry::new().registered_task_ids().is_empty());
     }
 
     #[test]
