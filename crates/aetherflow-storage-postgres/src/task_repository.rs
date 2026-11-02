@@ -1221,6 +1221,26 @@ impl PgTaskRepository {
             .await
     }
 
+    /// Cancels a running task only while the registered worker still owns
+    /// its task fencing token and its parent node epoch remains live.
+    /// Draining workers may cancel work already assigned to them.
+    pub async fn cancel_task_run_registered(
+        &self,
+        task_run_id: &TaskRunId,
+        registration: &WorkerRegistration,
+        expected_version: u64,
+        fencing_token: u64,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run(
+            task_run_id,
+            expected_version,
+            "cancelled",
+            Some(registration),
+            Some(fencing_token),
+        )
+        .await
+    }
+
     /// Commits a task timeout, attempt completion, and its outbox event atomically.
     ///
     /// The runtime decides when a timeout deadline elapses; PostgreSQL serializes
