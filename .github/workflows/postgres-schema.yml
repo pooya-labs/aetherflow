@@ -50,8 +50,8 @@ jobs:
       AETHERFLOW_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_test
       AETHERFLOW_MIGRATION_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_migration_test
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
-      AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222
-      AETHERFLOW_TEST_NATS_CONTAINER: aetherflow-nats
+      AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224
+      AETHERFLOW_TEST_NATS_CONTAINER: aetherflow-nats-1
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -79,17 +79,50 @@ jobs:
       - name: Run PostgreSQL storage integration tests
         run: cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
 
-      - name: Start NATS with JetStream enabled
+      - name: Start three-node NATS JetStream cluster
         run: |
-          docker volume create aetherflow-nats-data
-          docker run --detach --name aetherflow-nats --publish 4222:4222 --volume aetherflow-nats-data:/data nats:2.12-alpine -js -sd /data
-          for attempt in $(seq 1 30); do
-            if (echo > /dev/tcp/127.0.0.1/4222) >/dev/null 2>&1; then
+          docker network create aetherflow-nats-cluster
+          for node in 1 2 3; do
+            docker volume create "aetherflow-nats-${node}-data"
+          done
+
+          docker run --detach --name aetherflow-nats-1 --network aetherflow-nats-cluster \
+            --publish 4222:4222 --publish 8222:8222 \
+            --volume aetherflow-nats-1-data:/data nats:2.12-alpine \
+            -js -sd /data -m 8222 -name aetherflow-nats-1 -cluster nats://0.0.0.0:6222 \
+            -routes nats://aetherflow-nats-2:6222,nats://aetherflow-nats-3:6222 \
+            -cluster_name aetherflow
+          docker run --detach --name aetherflow-nats-2 --network aetherflow-nats-cluster \
+            --publish 4223:4222 --publish 8223:8222 \
+            --volume aetherflow-nats-2-data:/data nats:2.12-alpine \
+            -js -sd /data -m 8222 -name aetherflow-nats-2 -cluster nats://0.0.0.0:6222 \
+            -routes nats://aetherflow-nats-1:6222,nats://aetherflow-nats-3:6222 \
+            -cluster_name aetherflow
+          docker run --detach --name aetherflow-nats-3 --network aetherflow-nats-cluster \
+            --publish 4224:4222 --publish 8224:8222 \
+            --volume aetherflow-nats-3-data:/data nats:2.12-alpine \
+            -js -sd /data -m 8222 -name aetherflow-nats-3 -cluster nats://0.0.0.0:6222 \
+            -routes nats://aetherflow-nats-1:6222,nats://aetherflow-nats-2:6222 \
+            -cluster_name aetherflow
+
+          for attempt in $(seq 1 60); do
+            ready=true
+            for port in 8222 8223 8224; do
+              routes="$(curl --silent --show-error --fail "http://127.0.0.1:${port}/routez" | jq -r '.num_routes // 0' 2>/dev/null || echo 0)"
+              if [[ "${routes}" -lt 2 ]]; then
+                ready=false
+              fi
+            done
+            if [[ "${ready}" == "true" ]]; then
+              echo "All three NATS servers have two cluster routes."
+              sleep 3
               exit 0
             fi
             sleep 1
           done
-          docker logs aetherflow-nats
+          for node in 1 2 3; do
+            docker logs "aetherflow-nats-${node}"
+          done
           exit 1
 
       - name: Verify migration ledger, tables, and indexes

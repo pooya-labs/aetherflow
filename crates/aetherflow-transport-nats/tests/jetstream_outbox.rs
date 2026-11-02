@@ -1081,10 +1081,11 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
                 name: restart_stream_name.clone(),
                 subjects: vec![restart_subject.clone()],
                 duplicate_window: Duration::from_secs(120),
+                replicas: 3,
                 ..Default::default()
             })
             .await
-            .expect("create NATS server-restart stream");
+            .expect("create three-replica NATS server-restart stream");
         let restart_consumer = restart_stream
             .create_consumer(PullConsumerConfig {
                 durable_name: Some(restart_durable_name),
@@ -1156,35 +1157,59 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             .expect("valid server-restart dispatcher config"),
         );
 
+        // Stop the first JetStream member while PostgreSQL remains healthy.
+        // The stream has three replicas, so the two surviving members must
+        // retain quorum and accept a publication without node 1.
         let stop = Command::new("docker")
             .args(["stop", &container_name])
             .output()
-            .expect("stop the CI NATS container");
+            .expect("stop the first CI NATS cluster member");
         assert!(
             stop.status.success(),
             "docker stop failed: {}",
             String::from_utf8_lossy(&stop.stderr)
         );
 
-        // The PostgreSQL outbox claim is durable even if this in-flight
-        // publisher future is cancelled while NATS is unavailable. Its lease
-        // is allowed to expire before the replacement dispatch attempt.
-        let interrupted_publish =
+        let first_attempt =
             timeout(Duration::from_secs(2), restart_dispatcher.dispatch_once()).await;
+        let acknowledged_on_first_attempt =
+            matches!(&first_attempt, Ok(Ok(report)) if report.acknowledged() == 1);
 
+        // If the first attempt was interrupted, wait for its durable outbox
+        // lease to expire and retry while node 1 remains down. This proves
+        // publication through the remaining JetStream quorum.
+        let failover_recovered = if acknowledged_on_first_attempt {
+            true
+        } else {
+            tokio::time::sleep(Duration::from_millis(850)).await;
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let report = restart_dispatcher
+                        .dispatch_once()
+                        .await
+                        .expect("retry outbox against surviving JetStream quorum");
+                    if report.acknowledged() == 1 {
+                        break report;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .is_ok()
+        };
+
+        // Restore node 1 before assertions and cleanup, even if quorum failed.
         let start = Command::new("docker")
             .args(["start", &container_name])
             .output()
-            .expect("restart the CI NATS container");
+            .expect("restart the first CI NATS cluster member");
         assert!(
             start.status.success(),
             "docker start failed: {}",
             String::from_utf8_lossy(&start.stderr)
         );
 
-        // Wait for a fresh NATS handshake before asking the original
-        // reconnecting JetStream context to retry the durable event.
-        let ready = timeout(Duration::from_secs(10), async {
+        let ready = timeout(Duration::from_secs(15), async {
             loop {
                 if let Ok(Ok(client)) = timeout(
                     Duration::from_millis(300),
@@ -1201,34 +1226,12 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await;
         assert!(
             ready.is_ok(),
-            "NATS did not become ready after docker restart"
+            "NATS cluster did not become reachable after node restart"
         );
         assert!(
-            !matches!(
-                interrupted_publish,
-                Ok(Ok(report)) if report.acknowledged() > 0
-            ),
-            "publisher unexpectedly acknowledged an event while NATS was stopped"
+            failover_recovered,
+            "two surviving JetStream members did not recover the outbox event while node 1 was down"
         );
-
-        tokio::time::sleep(Duration::from_millis(850)).await;
-        let recovered_report = timeout(Duration::from_secs(10), async {
-            loop {
-                let report = restart_dispatcher
-                    .dispatch_once()
-                    .await
-                    .expect("retry the outbox event after NATS restart");
-                if report.acknowledged() == 1 {
-                    break report;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect("outbox should recover after the NATS server restart");
-        assert_eq!(recovered_report.claimed(), 1);
-        assert_eq!(recovered_report.acknowledged(), 1);
-        assert_eq!(recovered_report.rescheduled(), 0);
 
         let restart_outbox_state = pool
             .get()
@@ -1242,8 +1245,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             .await
             .expect("inspect server-restart outbox event");
         assert!(restart_outbox_state.get::<_, bool>(0));
-        assert!(restart_outbox_state.get::<_, i32>(1) >= 2);
-        assert!(restart_outbox_state.get::<_, i64>(2) >= 2);
+        assert!(restart_outbox_state.get::<_, i32>(1) >= 1);
+        assert!(restart_outbox_state.get::<_, i64>(2) >= 1);
 
         let mut restart_messages = restart_consumer
             .messages()
