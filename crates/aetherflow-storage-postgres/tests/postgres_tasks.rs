@@ -94,9 +94,12 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     let child_execution_count = Arc::new(AtomicUsize::new(0));
     let mut durable_registry = TaskRegistry::new();
     durable_registry
-        .register(durable_root_task_id.clone(), |_context: TaskContext| async {
-            Ok(TaskOutput::new(b"durable-root-output".to_vec()).expect("valid output"))
-        })
+        .register(
+            durable_root_task_id.clone(),
+            |_context: TaskContext| async {
+                Ok(TaskOutput::new(b"durable-root-output".to_vec()).expect("valid output"))
+            },
+        )
         .expect("register durable root handler");
     let expected_dependency_task_id = durable_root_task_id.clone();
     let child_execution_count_for_handler = Arc::clone(&child_execution_count);
@@ -107,11 +110,12 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
                 let dependency_task_id = expected_dependency_task_id.clone();
                 let executions = Arc::clone(&child_execution_count_for_handler);
                 async move {
-                    let dependency = context
-                        .dependency_output(&dependency_task_id)
-                        .ok_or_else(|| {
-                            TaskExecutionError::permanent("root dependency output missing")
-                        })?;
+                    let dependency =
+                        context
+                            .dependency_output(&dependency_task_id)
+                            .ok_or_else(|| {
+                                TaskExecutionError::permanent("root dependency output missing")
+                            })?;
                     if dependency.output().as_bytes() != b"durable-root-output" {
                         return Err(TaskExecutionError::permanent(
                             "root dependency output did not match",
@@ -123,8 +127,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             },
         )
         .expect("register durable child handler");
-    let durable_worker_id =
-        WorkerId::parse("durable-worker-integration").expect("valid worker ID");
+    let durable_worker_id = WorkerId::parse("durable-worker-integration").expect("valid worker ID");
     let durable_worker_config = PostgresWorkerConfig::new(
         NonZeroUsize::new(2).expect("non-zero concurrency"),
         Duration::from_millis(5),
