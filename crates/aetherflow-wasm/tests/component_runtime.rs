@@ -3,9 +3,7 @@
 use std::path::PathBuf;
 
 use aetherflow_core::EntityId;
-use aetherflow_wasm::{
-    CapabilitySet, ExecutionLimits, PluginExecutionContext, WasmPluginRuntime,
-};
+use aetherflow_wasm::{CapabilitySet, ExecutionLimits, PluginExecutionContext, WasmPluginRuntime};
 
 fn valid_component_from_checked_in_wit() -> Vec<u8> {
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
@@ -17,11 +15,8 @@ fn valid_component_from_checked_in_wit() -> Vec<u8> {
         .select_world(&[package], None)
         .expect("select task-plugin WIT world");
 
-    let mut module = wit_component::dummy_module(
-        &resolve,
-        world,
-        wit_parser::ManglingAndAbi::Standard32,
-    );
+    let mut module =
+        wit_component::dummy_module(&resolve, world, wit_parser::ManglingAndAbi::Standard32);
     wit_component::embed_component_metadata(
         &mut module,
         &resolve,
