@@ -357,6 +357,10 @@ pub struct TaskExecutionSnapshot {
 
 impl TaskExecutionSnapshot {
     /// Creates a handler-visible snapshot from any execution backend.
+    ///
+    /// The explicit fields mirror the durable task-run projection and keep the
+    /// runtime independent from the PostgreSQL crate's storage types.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         task_run_id: TaskRunId,
