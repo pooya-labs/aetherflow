@@ -2012,10 +2012,10 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
 
         let quorum_ack = timeout(Duration::from_secs(12), async {
             loop {
-                if let Ok(report) = dispatcher.dispatch_once().await {
-                    if report.acknowledged() == 1 {
-                        break true;
-                    }
+                if let Ok(report) = dispatcher.dispatch_once().await
+                    && report.acknowledged() == 1
+                {
+                    break true;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
