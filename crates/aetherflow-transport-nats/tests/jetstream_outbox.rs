@@ -1882,7 +1882,16 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         assert_eq!(running.get::<_, i32>(2), 1);
 
         let mut packet_filter = CombinedPacketFilter::new(uid, pg_port);
-        packet_filter.install();
+        if round == 0 {
+            // First failure order: cut the worker's database path, then lose
+            // one JetStream member.
+            packet_filter.install();
+        } else {
+            // Second failure order: lose the JetStream member first, then
+            // partition the worker's PostgreSQL egress path.
+            nats_node.stop();
+            packet_filter.install();
+        }
 
         // A live worker renews a three-second node lease every 200 ms. Once
         // its PostgreSQL egress is blocked, the remaining lease must decay.
@@ -1935,7 +1944,9 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             .expect("valid outbox dispatcher config"),
         );
 
-        nats_node.stop();
+        if round == 0 {
+            nats_node.stop();
+        }
         let quorum_ack = timeout(Duration::from_secs(12), async {
             loop {
                 if let Ok(report) = dispatcher.dispatch_once().await {
@@ -2066,7 +2077,7 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
 
         let recovered_nats = connect_to_nats(&nats_url).await.expect("reconnect to NATS");
         let recovered_jetstream = jetstream::new(recovered_nats);
-        let mut recovery_dispatcher = PostgresOutboxDispatcher::new(
+        let recovery_dispatcher = PostgresOutboxDispatcher::new(
             Arc::clone(&repository),
             WorkerId::parse(format!("combined-chaos-recovery-{suffix}")).expect("publisher ID"),
             Arc::new(NatsJetStreamPublisher::new(
