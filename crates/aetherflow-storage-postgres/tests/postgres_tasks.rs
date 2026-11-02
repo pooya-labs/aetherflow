@@ -1530,7 +1530,10 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
         .build()
         .expect("build PostgreSQL pool");
     let store = PgStore::from_pool(pool.clone());
-    store.migrate().await.expect("apply current PostgreSQL schema");
+    store
+        .migrate()
+        .await
+        .expect("apply current PostgreSQL schema");
 
     let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
     let membership = Arc::new(PgMembershipRepository::from_pool(pool));
@@ -1557,12 +1560,8 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
         WorkflowRunId::parse("drain-worker-workflow-run").expect("valid workflow-run ID");
     let task_id = TaskId::parse("drain-worker-task").expect("valid task ID");
     let task_run_id = TaskRunId::parse("drain-worker-task-run").expect("valid task-run ID");
-    let retry_policy = RetryPolicy::new(
-        NonZeroU32::new(1).expect("positive attempt budget"),
-        0,
-        0,
-    )
-    .expect("valid retry policy");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(1).expect("positive attempt budget"), 0, 0)
+        .expect("valid retry policy");
     repository
         .create_workflow(
             &workflow_run_id,
@@ -1591,8 +1590,10 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
                 // Longer than the initial node/worker membership lease. The
                 // worker must continue renewing membership after it starts draining.
                 tokio::time::sleep(Duration::from_millis(900)).await;
-                Ok(TaskOutput::new(b"finished-while-draining".to_vec())
-                    .expect("valid task output"))
+                Ok(
+                    TaskOutput::new(b"finished-while-draining".to_vec())
+                        .expect("valid task output"),
+                )
             }
         })
         .expect("register slow task handler");
@@ -1657,4 +1658,3 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
         .await
         .expect("drain integration-test node");
 }
-
