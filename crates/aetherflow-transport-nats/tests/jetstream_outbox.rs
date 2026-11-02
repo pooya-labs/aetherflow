@@ -1069,6 +1069,211 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     drop(partition_messages);
     let _ = jetstream.delete_stream(partition_stream_name).await;
 
+    // Exercise an actual NATS server stop/start in CI. This is gated so a
+    // developer running the integration test against a remote/local NATS
+    // server does not need Docker access or permission to stop that server.
+    if let Ok(container_name) = std::env::var("AETHERFLOW_TEST_NATS_CONTAINER") {
+        let restart_subject = format!("aetherflow.integration.{suffix}.server-restart");
+        let restart_stream_name = format!("AFLOW_RESTART_{}", suffix.replace('_', ""));
+        let restart_durable_name = format!("aflow_restart_{}", suffix.replace('_', ""));
+        let restart_stream = jetstream
+            .create_stream(jetstream::stream::Config {
+                name: restart_stream_name.clone(),
+                subjects: vec![restart_subject.clone()],
+                duplicate_window: Duration::from_secs(120),
+                ..Default::default()
+            })
+            .await
+            .expect("create NATS server-restart stream");
+        let restart_consumer = restart_stream
+            .create_consumer(PullConsumerConfig {
+                durable_name: Some(restart_durable_name),
+                filter_subject: restart_subject.clone(),
+                ack_wait: Duration::from_millis(500),
+                max_ack_pending: 1,
+                ..Default::default()
+            })
+            .await
+            .expect("create NATS server-restart consumer");
+
+        let restart_workflow_run_id =
+            WorkflowRunId::parse(format!("nats-restart-run-{suffix}"))
+                .expect("valid server-restart workflow-run ID");
+        let restart_workflow_id =
+            WorkflowId::parse(format!("nats-restart-workflow-{suffix}"))
+                .expect("valid server-restart workflow ID");
+        let restart_task_run_id =
+            TaskRunId::parse(format!("nats-restart-task-run-{suffix}"))
+                .expect("valid server-restart task-run ID");
+        let restart_task_id =
+            TaskId::parse(format!("nats-restart-task-{suffix}"))
+                .expect("valid server-restart task ID");
+        repository
+            .create_workflow(
+                &restart_workflow_run_id,
+                &restart_workflow_id,
+                None,
+                &[NewTaskRun::new(
+                    restart_task_run_id,
+                    restart_task_id,
+                    TaskInput::empty(),
+                    Vec::new(),
+                    RetryPolicy::new(NonZeroU32::new(1).expect("non-zero attempts"), 0, 0)
+                        .expect("valid server-restart retry policy"),
+                    SystemTime::now() + Duration::from_secs(300),
+                )],
+            )
+            .await
+            .expect("create workflow before stopping NATS");
+
+        let restart_event_id: i64 = pool
+            .get()
+            .await
+            .expect("get server-restart outbox connection")
+            .query_one(
+                "SELECT event_id FROM outbox_events
+                 WHERE aggregate_type = 'workflow_run'
+                   AND aggregate_id = $1
+                   AND event_type = 'workflow.started'
+                   AND published_at IS NULL",
+                &[&restart_workflow_run_id.as_str()],
+            )
+            .await
+            .expect("find server-restart outbox event")
+            .get(0);
+
+        let restart_dispatcher = PostgresOutboxDispatcher::new(
+            Arc::clone(&repository),
+            WorkerId::parse(format!("nats-restart-publisher-{suffix}"))
+                .expect("valid server-restart publisher ID"),
+            Arc::new(NatsJetStreamPublisher::new(
+                jetstream.clone(),
+                restart_subject,
+            )),
+            OutboxDispatcherConfig::new(
+                1,
+                Duration::from_millis(10),
+                Duration::from_millis(700),
+                Duration::from_millis(50),
+                Duration::from_millis(250),
+            )
+            .expect("valid server-restart dispatcher config"),
+        );
+
+        let stop = Command::new("docker")
+            .args(["stop", &container_name])
+            .output()
+            .expect("stop the CI NATS container");
+        assert!(
+            stop.status.success(),
+            "docker stop failed: {}",
+            String::from_utf8_lossy(&stop.stderr)
+        );
+
+        // The PostgreSQL outbox claim is durable even if this in-flight
+        // publisher future is cancelled while NATS is unavailable. Its lease
+        // is allowed to expire before the replacement dispatch attempt.
+        let interrupted_publish =
+            timeout(Duration::from_secs(2), restart_dispatcher.dispatch_once()).await;
+
+        let start = Command::new("docker")
+            .args(["start", &container_name])
+            .output()
+            .expect("restart the CI NATS container");
+        assert!(
+            start.status.success(),
+            "docker start failed: {}",
+            String::from_utf8_lossy(&start.stderr)
+        );
+
+        // Wait for a fresh NATS handshake before asking the original
+        // reconnecting JetStream context to retry the durable event.
+        let ready = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(Ok(client)) = timeout(
+                    Duration::from_millis(300),
+                    async_nats::connect(nats_url.clone()),
+                )
+                .await
+                {
+                    drop(client);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        assert!(ready.is_ok(), "NATS did not become ready after docker restart");
+        assert!(
+            !matches!(
+                interrupted_publish,
+                Ok(Ok(report)) if report.acknowledged() > 0
+            ),
+            "publisher unexpectedly acknowledged an event while NATS was stopped"
+        );
+
+        tokio::time::sleep(Duration::from_millis(850)).await;
+        let recovered_report = timeout(Duration::from_secs(10), async {
+            loop {
+                let report = restart_dispatcher
+                    .dispatch_once()
+                    .await
+                    .expect("retry the outbox event after NATS restart");
+                if report.acknowledged() == 1 {
+                    break report;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("outbox should recover after the NATS server restart");
+        assert_eq!(recovered_report.claimed(), 1);
+        assert_eq!(recovered_report.acknowledged(), 1);
+        assert_eq!(recovered_report.rescheduled(), 0);
+
+        let restart_outbox_state = pool
+            .get()
+            .await
+            .expect("get server-restart outbox verification connection")
+            .query_one(
+                "SELECT published_at IS NOT NULL, publish_attempts, claim_token
+                 FROM outbox_events WHERE event_id = $1",
+                &[&restart_event_id],
+            )
+            .await
+            .expect("inspect server-restart outbox event");
+        assert!(restart_outbox_state.get::<_, bool>(0));
+        assert!(restart_outbox_state.get::<_, i32>(1) >= 2);
+        assert!(restart_outbox_state.get::<_, i64>(2) >= 2);
+
+        let mut restart_messages = restart_consumer
+            .messages()
+            .await
+            .expect("open messages after NATS server restart");
+        let delivered = timeout(Duration::from_secs(5), restart_messages.next())
+            .await
+            .expect("event should be delivered after NATS restart")
+            .expect("server-restart consumer stream should remain open")
+            .expect("read event after NATS restart");
+        let delivered_envelope: serde_json::Value =
+            serde_json::from_slice(&delivered.payload)
+                .expect("decode event delivered after NATS restart");
+        assert_eq!(delivered_envelope["event_id"], restart_event_id.to_string());
+        delivered
+            .double_ack()
+            .await
+            .expect("acknowledge event delivered after NATS restart");
+        match timeout(Duration::from_millis(250), restart_messages.next()).await {
+            Err(_) | Ok(None) => {}
+            Ok(Some(Err(error))) => panic!("NATS restart consumer failed: {error}"),
+            Ok(Some(Ok(message))) => {
+                panic!("NATS restart created a duplicate message: {:?}", message.subject)
+            }
+        }
+        drop(restart_messages);
+        let _ = jetstream.delete_stream(restart_stream_name).await;
+    }
+
     let _ = jetstream.delete_stream(stream_name).await;
 }
 
