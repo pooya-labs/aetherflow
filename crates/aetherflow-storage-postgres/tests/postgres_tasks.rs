@@ -1071,7 +1071,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await;
     assert!(
         matches!(failed_commit, Err(StorageError::Database(_))),
-        "outbox constraint should reject the completion event"
+        "outbox constraint should reject the completion event; got {failed_commit:?}"
     );
     let rolled_back_task = repository
         .get_task_run(&rollback_task_run)
