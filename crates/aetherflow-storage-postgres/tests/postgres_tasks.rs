@@ -1537,24 +1537,6 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
 
     let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
     let membership = Arc::new(PgMembershipRepository::from_pool(pool));
-    let node_id = NodeId::parse("drain-worker-node").expect("valid node ID");
-    let incarnation_id =
-        NodeIncarnationId::parse("drain-worker-incarnation").expect("valid incarnation ID");
-    let worker_id = WorkerId::parse("drain-worker-instance").expect("valid worker ID");
-    let node = membership
-        .join_node(&node_id, &incarnation_id, Duration::from_millis(600))
-        .await
-        .expect("join node before worker startup");
-    let registration = membership
-        .register_worker(
-            &node,
-            &worker_id,
-            NonZeroU32::new(1).expect("positive worker capacity"),
-            Duration::from_millis(600),
-        )
-        .await
-        .expect("register worker before startup");
-
     let workflow_id = WorkflowId::parse("drain-worker-workflow").expect("valid workflow ID");
     let workflow_run_id =
         WorkflowRunId::parse("drain-worker-workflow-run").expect("valid workflow-run ID");
@@ -1608,6 +1590,24 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
     .expect("valid short-lease worker config")
     .with_shutdown_timeouts(Duration::from_secs(2), Duration::from_secs(1))
     .expect("valid graceful drain policy");
+    let node_id = NodeId::parse("drain-worker-node").expect("valid node ID");
+    let incarnation_id =
+        NodeIncarnationId::parse("drain-worker-incarnation").expect("valid incarnation ID");
+    let worker_id = WorkerId::parse("drain-worker-instance").expect("valid worker ID");
+    let node = membership
+        .join_node(&node_id, &incarnation_id, Duration::from_millis(600))
+        .await
+        .expect("join node before worker startup");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_millis(600),
+        )
+        .await
+        .expect("register worker before startup");
+
     let worker = PostgresTaskWorker::new(
         Arc::clone(&repository),
         Arc::clone(&membership),
