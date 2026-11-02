@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aetherflow_core::domain::{
-    NewTaskRun as _, RetryPolicy, TaskId, TaskRunId, WorkerId, WorkflowId, WorkflowRunId,
+    RetryPolicy, TaskId, TaskRunId, WorkerId, WorkflowId, WorkflowRunId,
 };
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
     OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
-    PgWorkflowCoordinator, PostgresOutboxDispatcher,
+    PostgresOutboxDispatcher,
 };
 use aetherflow_transport_nats::NatsJetStreamPublisher;
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
@@ -119,7 +119,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             &[NewTaskRun::new(
                 task_run_id,
                 task_id,
-                TaskInput::empty(),
+                TaskInput::new(Vec::new()).expect("valid empty task input"),
                 Vec::new(),
                 retry_policy,
                 SystemTime::now() + Duration::from_secs(300),
