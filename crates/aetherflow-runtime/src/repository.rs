@@ -147,7 +147,9 @@ pub struct TaskDependencyOutput {
 }
 
 impl TaskDependencyOutput {
-    pub(crate) fn new(task_id: TaskId, task_run_id: TaskRunId, output: TaskOutput) -> Self {
+    /// Creates a dependency output for a task handler context.
+    #[must_use]
+    pub fn new(task_id: TaskId, task_run_id: TaskRunId, output: TaskOutput) -> Self {
         Self {
             task_id,
             task_run_id,
@@ -339,6 +341,147 @@ pub struct TaskClaim {
     attempt_number: NonZeroU32,
 }
 
+/// Backend-independent task-run data exposed to a task handler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskExecutionSnapshot {
+    task_run_id: TaskRunId,
+    workflow_run_id: WorkflowRunId,
+    task_id: TaskId,
+    input: TaskInput,
+    dependencies: Vec<TaskRunId>,
+    output: Option<TaskOutput>,
+    status: TaskStatus,
+    version: u64,
+    attempts_started: u32,
+}
+
+impl TaskExecutionSnapshot {
+    /// Creates a handler-visible snapshot from any execution backend.
+    #[must_use]
+    pub fn new(
+        task_run_id: TaskRunId,
+        workflow_run_id: WorkflowRunId,
+        task_id: TaskId,
+        input: TaskInput,
+        dependencies: Vec<TaskRunId>,
+        output: Option<TaskOutput>,
+        status: TaskStatus,
+        version: u64,
+        attempts_started: u32,
+    ) -> Self {
+        Self {
+            task_run_id,
+            workflow_run_id,
+            task_id,
+            input,
+            dependencies,
+            output,
+            status,
+            version,
+            attempts_started,
+        }
+    }
+
+    /// Returns this task execution's identifier.
+    #[must_use]
+    pub fn task_run_id(&self) -> &TaskRunId {
+        &self.task_run_id
+    }
+
+    /// Returns the parent workflow execution identifier.
+    #[must_use]
+    pub fn workflow_run_id(&self) -> &WorkflowRunId {
+        &self.workflow_run_id
+    }
+
+    /// Returns the task definition identifier.
+    #[must_use]
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+
+    /// Returns the validated opaque task input.
+    #[must_use]
+    pub fn input(&self) -> &TaskInput {
+        &self.input
+    }
+
+    /// Returns direct predecessor task-run identifiers.
+    #[must_use]
+    pub fn dependencies(&self) -> &[TaskRunId] {
+        &self.dependencies
+    }
+
+    /// Returns successful output, when available.
+    #[must_use]
+    pub fn output(&self) -> Option<&TaskOutput> {
+        self.output.as_ref()
+    }
+
+    /// Returns the persisted lifecycle state captured by the claim.
+    #[must_use]
+    pub fn status(&self) -> TaskStatus {
+        self.status
+    }
+
+    /// Returns the optimistic lifecycle version captured by the claim.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Returns the number of attempts started before or including this claim.
+    #[must_use]
+    pub fn attempts_started(&self) -> u32 {
+        self.attempts_started
+    }
+}
+
+/// Backend-independent claim metadata shared by local and durable workers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskExecutionClaim {
+    task_run: TaskExecutionSnapshot,
+    attempt_number: NonZeroU32,
+    fencing_token: Option<u64>,
+}
+
+impl TaskExecutionClaim {
+    /// Creates a handler-visible claim.
+    ///
+    /// Local in-memory claims use no fencing token. Durable backends supply the
+    /// database-issued token so it remains available for diagnostics and tracing.
+    #[must_use]
+    pub fn new(
+        task_run: TaskExecutionSnapshot,
+        attempt_number: NonZeroU32,
+        fencing_token: Option<u64>,
+    ) -> Self {
+        Self {
+            task_run,
+            attempt_number,
+            fencing_token,
+        }
+    }
+
+    /// Returns the claimed task-run snapshot.
+    #[must_use]
+    pub fn task_run(&self) -> &TaskExecutionSnapshot {
+        &self.task_run
+    }
+
+    /// Returns the one-based attempt number for this claim.
+    #[must_use]
+    pub const fn attempt_number(&self) -> NonZeroU32 {
+        self.attempt_number
+    }
+
+    /// Returns the durable fencing token, when the backend uses leases.
+    #[must_use]
+    pub const fn fencing_token(&self) -> Option<u64> {
+        self.fencing_token
+    }
+}
+
 impl TaskClaim {
     /// Returns a snapshot of the claimed task run.
     #[must_use]
@@ -350,6 +493,27 @@ impl TaskClaim {
     #[must_use]
     pub const fn attempt_number(&self) -> NonZeroU32 {
         self.attempt_number
+    }
+
+    /// Converts this local claim to the backend-independent handler snapshot.
+    #[must_use]
+    pub fn execution_claim(&self) -> TaskExecutionClaim {
+        let task_run = &self.task_run;
+        TaskExecutionClaim::new(
+            TaskExecutionSnapshot::new(
+                task_run.task_run_id.clone(),
+                task_run.workflow_run_id.clone(),
+                task_run.task_id.clone(),
+                task_run.input.clone(),
+                task_run.dependencies.clone(),
+                task_run.output.clone(),
+                task_run.status(),
+                task_run.version(),
+                task_run.attempts_started,
+            ),
+            self.attempt_number,
+            None,
+        )
     }
 }
 
