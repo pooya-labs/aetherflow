@@ -15,8 +15,8 @@ use aetherflow_runtime::scheduler::{TaskContext, TaskRegistry};
 use aetherflow_storage_postgres::{
     InboxClaimResult, MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport,
     OutboxDispatcherConfig, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
-    PgInboxRepository, PgMembershipRepository, PgStore, PgTaskRepository,
-    PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig,
+    PgInboxRepository, PgMembershipRepository, PgStore, PgTaskRepository, PostgresOutboxDispatcher,
+    PostgresTaskWorker, PostgresWorkerConfig,
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
@@ -27,7 +27,7 @@ use async_nats::jetstream::{
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use futures_util::StreamExt;
-use tokio::sync::{watch, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, watch};
 use tokio::time::timeout;
 use tokio_postgres::{Config, NoTls};
 
@@ -1480,7 +1480,6 @@ async fn jetstream_child_process_exits_after_inbox_commit_before_broker_ack() {
     std::process::exit(87);
 }
 
-
 /// UID-scoped host-firewall rule for a single worker process's PostgreSQL path.
 struct CombinedPacketFilter {
     uid: String,
@@ -1490,17 +1489,33 @@ struct CombinedPacketFilter {
 
 impl CombinedPacketFilter {
     fn new(uid: String, port: u16) -> Self {
-        Self { uid, port, installed: false }
+        Self {
+            uid,
+            port,
+            installed: false,
+        }
     }
 
     fn command(&self, operation: &str) -> std::process::Output {
         let port = self.port.to_string();
         Command::new("sudo")
             .args([
-                "-n", "iptables", operation, "OUTPUT",
-                "-m", "owner", "--uid-owner", self.uid.as_str(),
-                "-p", "tcp", "--dport", port.as_str(),
-                "-j", "REJECT", "--reject-with", "tcp-reset",
+                "-n",
+                "iptables",
+                operation,
+                "OUTPUT",
+                "-m",
+                "owner",
+                "--uid-owner",
+                self.uid.as_str(),
+                "-p",
+                "tcp",
+                "--dport",
+                port.as_str(),
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
             ])
             .output()
             .expect("run combined-chaos iptables rule")
@@ -1518,7 +1533,9 @@ impl CombinedPacketFilter {
     }
 
     fn remove(&mut self) {
-        if !self.installed { return; }
+        if !self.installed {
+            return;
+        }
         let result = self.command("-D");
         assert!(
             result.status.success(),
@@ -1553,18 +1570,23 @@ impl CombinedChaosDirectory {
         Self(path)
     }
 
-    fn join(&self, name: &str) -> PathBuf { self.0.join(name) }
+    fn join(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
 }
 
 impl Drop for CombinedChaosDirectory {
-    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 struct CombinedChaosChild(Option<Child>);
 
 impl CombinedChaosChild {
     fn try_wait(&mut self) -> Option<ExitStatus> {
-        self.0.as_mut()
+        self.0
+            .as_mut()
             .expect("combined-chaos child exists")
             .try_wait()
             .expect("poll combined-chaos child")
@@ -1594,7 +1616,12 @@ struct RestartNatsContainer {
 }
 
 impl RestartNatsContainer {
-    fn new(name: String) -> Self { Self { name, stopped: false } }
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            stopped: false,
+        }
+    }
 
     fn stop(&mut self) {
         assert!(!self.stopped);
@@ -1611,7 +1638,9 @@ impl RestartNatsContainer {
     }
 
     fn restore(&mut self) {
-        if !self.stopped { return; }
+        if !self.stopped {
+            return;
+        }
         let result = Command::new("docker")
             .args(["start", self.name.as_str()])
             .output()
@@ -1665,13 +1694,20 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
 
         let pg_config: Config = database_url.parse().expect("valid PostgreSQL URL");
         let pg_port = pg_config.get_ports().first().copied().unwrap_or(5432);
-        assert!(!pg_config.get_hosts().is_empty(), "combined chaos needs a TCP database");
+        assert!(
+            !pg_config.get_hosts().is_empty(),
+            "combined chaos needs a TCP database"
+        );
         let manager = Manager::from_config(
             pg_config,
             NoTls,
-            ManagerConfig { recycling_method: RecyclingMethod::Fast },
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
         );
-        let pool = Pool::builder(manager).max_size(8).build()
+        let pool = Pool::builder(manager)
+            .max_size(8)
+            .build()
             .expect("build combined-chaos PostgreSQL pool");
         let store = PgStore::from_pool(pool.clone());
         store.migrate().await.expect("ensure combined-chaos schema");
@@ -1682,12 +1718,12 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             .expect("valid workflow ID");
         let workflow_run_id = WorkflowRunId::parse(format!("combined-chaos-run-{suffix}"))
             .expect("valid workflow-run ID");
-        let task_id = TaskId::parse(format!("combined-chaos-task-{suffix}"))
-            .expect("valid task ID");
+        let task_id =
+            TaskId::parse(format!("combined-chaos-task-{suffix}")).expect("valid task ID");
         let task_run_id = TaskRunId::parse(format!("combined-chaos-task-run-{suffix}"))
             .expect("valid task-run ID");
-        let node_id = NodeId::parse(format!("combined-chaos-node-{suffix}"))
-            .expect("valid node ID");
+        let node_id =
+            NodeId::parse(format!("combined-chaos-node-{suffix}")).expect("valid node ID");
         let old_incarnation = NodeIncarnationId::parse(format!("combined-chaos-old-{suffix}"))
             .expect("valid old incarnation");
         let new_incarnation = NodeIncarnationId::parse(format!("combined-chaos-new-{suffix}"))
@@ -1699,37 +1735,48 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         let retry_policy = RetryPolicy::new(NonZeroU32::new(2).expect("two attempts"), 0, 0)
             .expect("valid retry policy");
 
-        repository.create_workflow(
-            &workflow_run_id,
-            &workflow_id,
-            None,
-            &[NewTaskRun::new(
-                task_run_id.clone(),
-                task_id.clone(),
-                TaskInput::empty(),
-                Vec::new(),
-                retry_policy,
-                SystemTime::now() - Duration::from_secs(1),
-            )],
-        ).await.expect("create workflow and durable started event");
+        repository
+            .create_workflow(
+                &workflow_run_id,
+                &workflow_id,
+                None,
+                &[NewTaskRun::new(
+                    task_run_id.clone(),
+                    task_id.clone(),
+                    TaskInput::empty(),
+                    Vec::new(),
+                    retry_policy,
+                    SystemTime::now() - Duration::from_secs(1),
+                )],
+            )
+            .await
+            .expect("create workflow and durable started event");
         repository.promote_due_tasks(8).await.expect("promote task");
 
-        let client = connect_to_nats(&nats_url).await.expect("connect NATS seed pool");
+        let client = connect_to_nats(&nats_url)
+            .await
+            .expect("connect NATS seed pool");
         let jetstream = jetstream::new(client);
-        let stream = jetstream.create_stream(jetstream::stream::Config {
-            name: stream_name.clone(),
-            subjects: vec![subject.clone()],
-            duplicate_window: Duration::from_secs(120),
-            num_replicas: 3,
-            ..Default::default()
-        }).await.expect("create three-replica chaos stream");
-        stream.create_consumer(PullConsumerConfig {
-            durable_name: Some(durable_name.clone()),
-            filter_subject: subject.clone(),
-            ack_wait: Duration::from_millis(500),
-            max_ack_pending: 16,
-            ..Default::default()
-        }).await.expect("create durable chaos consumer");
+        let stream = jetstream
+            .create_stream(jetstream::stream::Config {
+                name: stream_name.clone(),
+                subjects: vec![subject.clone()],
+                duplicate_window: Duration::from_secs(120),
+                num_replicas: 3,
+                ..Default::default()
+            })
+            .await
+            .expect("create three-replica chaos stream");
+        stream
+            .create_consumer(PullConsumerConfig {
+                durable_name: Some(durable_name.clone()),
+                filter_subject: subject.clone(),
+                ack_wait: Duration::from_millis(500),
+                max_ack_pending: 16,
+                ..Default::default()
+            })
+            .await
+            .expect("create durable chaos consumer");
 
         // Declare these guards before activating faults. Rust drops them in
         // reverse order: child, firewall, NATS node, then marker directory.
@@ -1740,7 +1787,8 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         std::fs::copy(
             std::env::current_exe().expect("current NATS integration executable"),
             &child_executable,
-        ).expect("copy child test binary into shared directory");
+        )
+        .expect("copy child test binary into shared directory");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1748,43 +1796,81 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
                 .expect("make copied test executable accessible to nobody");
         }
 
-        let uid_output = Command::new("id").args(["-u", "nobody"]).output()
+        let uid_output = Command::new("id")
+            .args(["-u", "nobody"])
+            .output()
             .expect("read nobody UID");
         assert!(uid_output.status.success(), "nobody user is required");
-        let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_owned();
-        let sudo_check = Command::new("sudo").args(["-n", "-u", "nobody", "--", "id", "-u"])
-            .output().expect("check passwordless sudo");
-        assert!(sudo_check.status.success(), "passwordless sudo required: {}",
-            String::from_utf8_lossy(&sudo_check.stderr));
+        let uid = String::from_utf8_lossy(&uid_output.stdout)
+            .trim()
+            .to_owned();
+        let sudo_check = Command::new("sudo")
+            .args(["-n", "-u", "nobody", "--", "id", "-u"])
+            .output()
+            .expect("check passwordless sudo");
+        assert!(
+            sudo_check.status.success(),
+            "passwordless sudo required: {}",
+            String::from_utf8_lossy(&sudo_check.stderr)
+        );
         assert_eq!(String::from_utf8_lossy(&sudo_check.stdout).trim(), uid);
 
         let envs = [
-            ("AETHERFLOW_COMBINED_CHAOS_DATABASE_URL", database_url.clone()),
-            ("AETHERFLOW_COMBINED_CHAOS_NODE_ID", node_id.as_str().to_owned()),
-            ("AETHERFLOW_COMBINED_CHAOS_INCARNATION_ID", old_incarnation.as_str().to_owned()),
-            ("AETHERFLOW_COMBINED_CHAOS_WORKER_ID", old_worker_id.as_str().to_owned()),
-            ("AETHERFLOW_COMBINED_CHAOS_TASK_ID", task_id.as_str().to_owned()),
-            ("AETHERFLOW_COMBINED_CHAOS_MARKER", marker.to_string_lossy().into_owned()),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_DATABASE_URL",
+                database_url.clone(),
+            ),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_NODE_ID",
+                node_id.as_str().to_owned(),
+            ),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_INCARNATION_ID",
+                old_incarnation.as_str().to_owned(),
+            ),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_WORKER_ID",
+                old_worker_id.as_str().to_owned(),
+            ),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_TASK_ID",
+                task_id.as_str().to_owned(),
+            ),
+            (
+                "AETHERFLOW_COMBINED_CHAOS_MARKER",
+                marker.to_string_lossy().into_owned(),
+            ),
         ];
         let mut command = Command::new("sudo");
         command.args(["-n", "-u", "nobody", "--", "/usr/bin/env"]);
-        for (key, value) in &envs { command.arg(format!("{key}={value}")); }
-        command.arg(&child_executable).args([
-            "--exact", "jetstream_combined_chaos_worker_child_process", "--nocapture",
-        ]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::inherit());
-        let mut old_worker = CombinedChaosChild(Some(
-            command.spawn().expect("spawn worker child as nobody"),
-        ));
+        for (key, value) in &envs {
+            command.arg(format!("{key}={value}"));
+        }
+        command
+            .arg(&child_executable)
+            .args([
+                "--exact",
+                "jetstream_combined_chaos_worker_child_process",
+                "--nocapture",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit());
+        let mut old_worker =
+            CombinedChaosChild(Some(command.spawn().expect("spawn worker child as nobody")));
 
         timeout(Duration::from_secs(15), async {
             loop {
-                if marker.exists() { break; }
+                if marker.exists() {
+                    break;
+                }
                 if let Some(status) = old_worker.try_wait() {
                     panic!("worker child exited before handler start: {status}");
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.expect("child worker should enter its active handler");
+        })
+        .await
+        .expect("child worker should enter its active handler");
 
         let running = pool.get().await.expect("get task diagnostic connection")
             .query_one(
@@ -1801,140 +1887,227 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         // A live worker renews a three-second node lease every 200 ms. Once
         // its PostgreSQL egress is blocked, the remaining lease must decay.
         tokio::time::sleep(Duration::from_millis(850)).await;
-        let remaining_lease: f64 = pool.get().await
+        let remaining_lease: f64 = pool
+            .get()
+            .await
             .expect("get lease diagnostic connection")
             .query_one(
                 "SELECT extract(epoch FROM lease_expires_at - clock_timestamp())::double precision
                  FROM cluster_nodes WHERE node_id = $1",
                 &[&node_id.as_str()],
-            ).await.expect("read partitioned worker lease").get(0);
+            )
+            .await
+            .expect("read partitioned worker lease")
+            .get(0);
         assert!(
             remaining_lease < 2.5,
             "partitioned worker unexpectedly renewed membership lease: {remaining_lease:.3}s remain"
         );
 
-        let workflow_event_id: i64 = pool.get().await
+        let workflow_event_id: i64 = pool
+            .get()
+            .await
             .expect("get workflow event connection")
             .query_one(
                 "SELECT event_id FROM outbox_events
                  WHERE aggregate_id = $1 AND event_type = 'workflow.started'
                    AND published_at IS NULL",
                 &[&workflow_run_id.as_str()],
-            ).await.expect("find workflow.started event").get(0);
+            )
+            .await
+            .expect("find workflow.started event")
+            .get(0);
         let dispatcher = PostgresOutboxDispatcher::new(
             Arc::clone(&repository),
             WorkerId::parse(format!("combined-chaos-publisher-{suffix}"))
                 .expect("valid publisher ID"),
-            Arc::new(NatsJetStreamPublisher::new(jetstream.clone(), subject.clone())),
+            Arc::new(NatsJetStreamPublisher::new(
+                jetstream.clone(),
+                subject.clone(),
+            )),
             OutboxDispatcherConfig::new(
-                1, Duration::from_millis(10), Duration::from_millis(700),
-                Duration::from_millis(50), Duration::from_millis(250),
-            ).expect("valid outbox dispatcher config"),
+                1,
+                Duration::from_millis(10),
+                Duration::from_millis(700),
+                Duration::from_millis(50),
+                Duration::from_millis(250),
+            )
+            .expect("valid outbox dispatcher config"),
         );
 
         nats_node.stop();
         let quorum_ack = timeout(Duration::from_secs(12), async {
             loop {
                 if let Ok(report) = dispatcher.dispatch_once().await {
-                    if report.acknowledged() == 1 { break true; }
+                    if report.acknowledged() == 1 {
+                        break true;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.unwrap_or(false);
-        assert!(quorum_ack, "JetStream quorum did not acknowledge while one member was down");
+        })
+        .await
+        .unwrap_or(false);
+        assert!(
+            quorum_ack,
+            "JetStream quorum did not acknowledge while one member was down"
+        );
         let stopped = Command::new("docker")
-            .args(["inspect", "--format", "{{.State.Running}}", nats_node.name.as_str()])
-            .output().expect("inspect stopped JetStream member");
+            .args([
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                nats_node.name.as_str(),
+            ])
+            .output()
+            .expect("inspect stopped JetStream member");
         assert!(stopped.status.success());
         assert_eq!(String::from_utf8_lossy(&stopped.stdout).trim(), "false");
-        assert!(pool.get().await.expect("get event status connection")
-            .query_one(
-                "SELECT published_at IS NOT NULL FROM outbox_events WHERE event_id = $1",
-                &[&workflow_event_id],
-            ).await.expect("verify started event acknowledgement").get::<_, bool>(0));
+        assert!(
+            pool.get()
+                .await
+                .expect("get event status connection")
+                .query_one(
+                    "SELECT published_at IS NOT NULL FROM outbox_events WHERE event_id = $1",
+                    &[&workflow_event_id],
+                )
+                .await
+                .expect("verify started event acknowledgement")
+                .get::<_, bool>(0)
+        );
 
         // All fault conditions overlap here: DB egress is blocked, one NATS
         // member is down, and the active task handler is killed without drain.
         let child_status = old_worker.kill_and_wait();
-        assert!(!child_status.success(), "worker process must be abruptly killed");
+        assert!(
+            !child_status.success(),
+            "worker process must be abruptly killed"
+        );
         packet_filter.remove();
         nats_node.restore();
 
         timeout(Duration::from_secs(20), async {
             loop {
-                if let Ok(Ok(nats)) = timeout(Duration::from_millis(500), connect_to_nats(&nats_url)).await {
+                if let Ok(Ok(nats)) =
+                    timeout(Duration::from_millis(500), connect_to_nats(&nats_url)).await
+                {
                     drop(nats);
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }).await.expect("NATS cluster should recover after member restart");
+        })
+        .await
+        .expect("NATS cluster should recover after member restart");
 
         // Node lease (3 s), worker lease (2 s), and task lease (3 s) are
         // separate durable clocks; wait out the longest before takeover.
         tokio::time::sleep(Duration::from_millis(3_700)).await;
-        let replacement_node = membership.join_node(
-            &node_id, &new_incarnation, Duration::from_secs(30),
-        ).await.expect("replacement takes over expired node");
-        let replacement_registration = membership.register_worker(
-            &replacement_node,
-            &new_worker_id,
-            NonZeroU32::new(1).expect("one worker slot"),
-            Duration::from_secs(20),
-        ).await.expect("register replacement worker");
-        let recovered = repository.recover_expired_leases_registered(&replacement_registration, 8)
-            .await.expect("recover abandoned task");
+        let replacement_node = membership
+            .join_node(&node_id, &new_incarnation, Duration::from_secs(30))
+            .await
+            .expect("replacement takes over expired node");
+        let replacement_registration = membership
+            .register_worker(
+                &replacement_node,
+                &new_worker_id,
+                NonZeroU32::new(1).expect("one worker slot"),
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("register replacement worker");
+        let recovered = repository
+            .recover_expired_leases_registered(&replacement_registration, 8)
+            .await
+            .expect("recover abandoned task");
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].task_run().status(), TaskStatus::RetryWaiting);
-        repository.promote_due_tasks_registered(&replacement_registration, 8)
-            .await.expect("promote recovered task");
+        repository
+            .promote_due_tasks_registered(&replacement_registration, 8)
+            .await
+            .expect("promote recovered task");
         let replacement_attempt = AttemptId::parse(format!("combined-chaos-attempt-{suffix}"))
             .expect("valid replacement attempt ID");
-        let claim = repository.claim_next_registered_for_tasks(
-            &replacement_registration, std::slice::from_ref(&task_id),
-            &replacement_attempt, Duration::from_secs(3),
-        ).await.expect("claim recovered task").expect("recovered task is ready");
+        let claim = repository
+            .claim_next_registered_for_tasks(
+                &replacement_registration,
+                std::slice::from_ref(&task_id),
+                &replacement_attempt,
+                Duration::from_secs(3),
+            )
+            .await
+            .expect("claim recovered task")
+            .expect("recovered task is ready");
         assert_eq!(claim.attempt_number().get(), 2);
         assert!(claim.fencing_token() > old_fencing_token as u64);
-        let completed = repository.complete_registered(
-            &task_run_id, &replacement_registration, claim.task_run().version(),
-            claim.fencing_token(),
-            TaskOutput::new(b"combined-chaos-replacement-complete".to_vec())
-                .expect("valid output"),
-        ).await.expect("complete recovered task");
+        let completed = repository
+            .complete_registered(
+                &task_run_id,
+                &replacement_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                TaskOutput::new(b"combined-chaos-replacement-complete".to_vec())
+                    .expect("valid output"),
+            )
+            .await
+            .expect("complete recovered task");
         assert_eq!(completed.status(), TaskStatus::Succeeded);
         assert_eq!(
-            repository.aggregate_workflow_run_registered(&workflow_run_id, &replacement_registration)
-                .await.expect("aggregate recovered workflow"),
+            repository
+                .aggregate_workflow_run_registered(&workflow_run_id, &replacement_registration)
+                .await
+                .expect("aggregate recovered workflow"),
             WorkflowStatus::Succeeded
         );
-        membership.drain_node(&replacement_node).await.expect("drain replacement node");
+        membership
+            .drain_node(&replacement_node)
+            .await
+            .expect("drain replacement node");
 
         let recovered_nats = connect_to_nats(&nats_url).await.expect("reconnect to NATS");
         let recovered_jetstream = jetstream::new(recovered_nats);
         let mut recovery_dispatcher = PostgresOutboxDispatcher::new(
             Arc::clone(&repository),
             WorkerId::parse(format!("combined-chaos-recovery-{suffix}")).expect("publisher ID"),
-            Arc::new(NatsJetStreamPublisher::new(recovered_jetstream.clone(), subject.clone())),
+            Arc::new(NatsJetStreamPublisher::new(
+                recovered_jetstream.clone(),
+                subject.clone(),
+            )),
             OutboxDispatcherConfig::new(
-                16, Duration::from_millis(10), Duration::from_secs(2),
-                Duration::from_millis(50), Duration::from_millis(250),
-            ).expect("valid recovery dispatcher config"),
+                16,
+                Duration::from_millis(10),
+                Duration::from_secs(2),
+                Duration::from_millis(50),
+                Duration::from_millis(250),
+            )
+            .expect("valid recovery dispatcher config"),
         );
         timeout(Duration::from_secs(15), async {
             loop {
-                let pending: i64 = pool.get().await.expect("outbox diagnostic connection")
+                let pending: i64 = pool
+                    .get()
+                    .await
+                    .expect("outbox diagnostic connection")
                     .query_one(
                         "SELECT count(*) FROM outbox_events
                          WHERE aggregate_id IN ($1, $2) AND published_at IS NULL",
                         &[&workflow_run_id.as_str(), &task_run_id.as_str()],
-                    ).await.expect("count pending outbox rows").get(0);
-                if pending == 0 { break; }
-                let _ = recovery_dispatcher.dispatch_once().await
+                    )
+                    .await
+                    .expect("count pending outbox rows")
+                    .get(0);
+                if pending == 0 {
+                    break;
+                }
+                let _ = recovery_dispatcher
+                    .dispatch_once()
+                    .await
                     .expect("dispatch pending outbox rows after recovery");
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-        }).await.expect("outbox rows should all converge");
+        })
+        .await
+        .expect("outbox rows should all converge");
 
         let diagnostic = pool.get().await.expect("get final verification connection");
         let task_state = diagnostic.query_one(
@@ -1944,33 +2117,50 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         assert_eq!(task_state.get::<_, String>(0), "succeeded");
         assert_eq!(task_state.get::<_, i32>(1), 2);
         assert!(task_state.get::<_, i64>(2) > old_fencing_token);
-        let workflow_status: String = diagnostic.query_one(
-            "SELECT status FROM workflow_runs WHERE workflow_run_id = $1",
-            &[&workflow_run_id.as_str()],
-        ).await.expect("read final workflow status").get(0);
+        let workflow_status: String = diagnostic
+            .query_one(
+                "SELECT status FROM workflow_runs WHERE workflow_run_id = $1",
+                &[&workflow_run_id.as_str()],
+            )
+            .await
+            .expect("read final workflow status")
+            .get(0);
         assert_eq!(workflow_status, "succeeded");
-        let attempt_count: i64 = diagnostic.query_one(
-            "SELECT count(*) FROM task_attempts WHERE task_run_id = $1",
-            &[&task_run_id.as_str()],
-        ).await.expect("count task attempt history").get(0);
+        let attempt_count: i64 = diagnostic
+            .query_one(
+                "SELECT count(*) FROM task_attempts WHERE task_run_id = $1",
+                &[&task_run_id.as_str()],
+            )
+            .await
+            .expect("count task attempt history")
+            .get(0);
         assert_eq!(attempt_count, 2);
 
-        let events = diagnostic.query(
-            "SELECT event_id, published_at IS NOT NULL FROM outbox_events
+        let events = diagnostic
+            .query(
+                "SELECT event_id, published_at IS NOT NULL FROM outbox_events
              WHERE aggregate_id IN ($1, $2) ORDER BY event_id",
-            &[&workflow_run_id.as_str(), &task_run_id.as_str()],
-        ).await.expect("read workflow outbox history");
-        let event_ids = events.iter().map(|row| {
-            assert!(row.get::<_, bool>(1), "outbox event was not published");
-            row.get::<_, i64>(0)
-        }).collect::<Vec<_>>();
+                &[&workflow_run_id.as_str(), &task_run_id.as_str()],
+            )
+            .await
+            .expect("read workflow outbox history");
+        let event_ids = events
+            .iter()
+            .map(|row| {
+                assert!(row.get::<_, bool>(1), "outbox event was not published");
+                row.get::<_, i64>(0)
+            })
+            .collect::<Vec<_>>();
         assert!(event_ids.len() >= 2);
 
-        let source_event = diagnostic.query_one(
-            "SELECT aggregate_type, aggregate_id, aggregate_version, event_type, payload
+        let source_event = diagnostic
+            .query_one(
+                "SELECT aggregate_type, aggregate_id, aggregate_version, event_type, payload
              FROM outbox_events WHERE event_id = $1",
-            &[&event_ids[0]],
-        ).await.expect("read event for intentional duplicate");
+                &[&event_ids[0]],
+            )
+            .await
+            .expect("read event for intentional duplicate");
         let duplicate_envelope = serde_json::json!({
             "schema_version": 1,
             "event_id": event_ids[0].to_string(),
@@ -1982,24 +2172,41 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         });
         let mut duplicate_headers = async_nats::HeaderMap::new();
         duplicate_headers.append("Nats-Msg-Id", format!("combined-chaos-redelivery-{suffix}"));
-        let ack = recovered_jetstream.publish_with_headers(
-            subject.clone(), duplicate_headers,
-            serde_json::to_vec(&duplicate_envelope).expect("encode replay event").into(),
-        ).await.expect("publish logical duplicate with a new broker ID");
+        let ack = recovered_jetstream
+            .publish_with_headers(
+                subject.clone(),
+                duplicate_headers,
+                serde_json::to_vec(&duplicate_envelope)
+                    .expect("encode replay event")
+                    .into(),
+            )
+            .await
+            .expect("publish logical duplicate with a new broker ID");
         ack.await.expect("store logical duplicate in JetStream");
 
-        let durable_stream = recovered_jetstream.get_stream(stream_name.clone())
-            .await.expect("reopen combined-chaos stream");
-        let durable_consumer: PullConsumer = durable_stream.get_consumer(&durable_name)
-            .await.expect("reopen combined-chaos durable consumer");
+        let durable_stream = recovered_jetstream
+            .get_stream(stream_name.clone())
+            .await
+            .expect("reopen combined-chaos stream");
+        let durable_consumer: PullConsumer = durable_stream
+            .get_consumer(&durable_name)
+            .await
+            .expect("reopen combined-chaos durable consumer");
         let inbox = PgInboxRepository::from_pool(pool.clone());
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler = Arc::new(CountingHandler { calls: Arc::clone(&calls), delay: Duration::ZERO });
+        let handler = Arc::new(CountingHandler {
+            calls: Arc::clone(&calls),
+            delay: Duration::ZERO,
+        });
         let consumer = NatsJetStreamConsumer::new(
-            durable_consumer, inbox, logical_consumer.clone(),
+            durable_consumer,
+            inbox,
+            logical_consumer.clone(),
             WorkerId::parse(format!("combined-chaos-consumer-{suffix}")).expect("consumer ID"),
-            Duration::from_millis(300), handler,
-        ).expect("create inbox-backed recovery consumer");
+            Duration::from_millis(300),
+            handler,
+        )
+        .expect("create inbox-backed recovery consumer");
         let metrics = consumer.metrics();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let consumer_task = tokio::spawn(async move { consumer.run(shutdown_rx).await });
@@ -2007,28 +2214,45 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         timeout(Duration::from_secs(15), async {
             loop {
                 let snapshot = metrics.snapshot();
-                if snapshot.processed == unique_events && snapshot.duplicates >= 1 { break; }
+                if snapshot.processed == unique_events && snapshot.duplicates >= 1 {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
-        }).await.expect("consume each unique event and suppress duplicate");
+        })
+        .await
+        .expect("consume each unique event and suppress duplicate");
         shutdown_tx.send(true).expect("signal consumer shutdown");
-        consumer_task.await.expect("join recovery consumer")
+        consumer_task
+            .await
+            .expect("join recovery consumer")
             .expect("recovery consumer should stop cleanly");
         assert_eq!(calls.load(Ordering::SeqCst), unique_events);
         assert_eq!(metrics.snapshot().duplicates, 1);
 
-        let expected_ids = event_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let inbox_count: i64 = diagnostic.query_one(
-            "SELECT count(*) FROM consumer_inbox
+        let expected_ids = event_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let inbox_count: i64 = diagnostic
+            .query_one(
+                "SELECT count(*) FROM consumer_inbox
              WHERE consumer_name = $1 AND status = 'processed' AND event_id = ANY($2)",
-            &[&logical_consumer, &expected_ids],
-        ).await.expect("count processed inbox events").get(0);
+                &[&logical_consumer, &expected_ids],
+            )
+            .await
+            .expect("count processed inbox events")
+            .get(0);
         assert_eq!(inbox_count, unique_events as i64);
-        let pending: i64 = diagnostic.query_one(
-            "SELECT count(*) FROM outbox_events
+        let pending: i64 = diagnostic
+            .query_one(
+                "SELECT count(*) FROM outbox_events
              WHERE aggregate_id IN ($1, $2) AND published_at IS NULL",
-            &[&workflow_run_id.as_str(), &task_run_id.as_str()],
-        ).await.expect("count pending outbox events").get(0);
+                &[&workflow_run_id.as_str(), &task_run_id.as_str()],
+            )
+            .await
+            .expect("count pending outbox events")
+            .get(0);
         assert_eq!(pending, 0);
 
         let _ = recovered_jetstream.delete_stream(stream_name).await;
@@ -2041,8 +2265,12 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
 #[tokio::test]
 async fn jetstream_combined_chaos_worker_child_process() {
     let (
-        Ok(database_url), Ok(node_id), Ok(incarnation_id), Ok(worker_id),
-        Ok(task_id), Ok(marker_path),
+        Ok(database_url),
+        Ok(node_id),
+        Ok(incarnation_id),
+        Ok(worker_id),
+        Ok(task_id),
+        Ok(marker_path),
     ) = (
         std::env::var("AETHERFLOW_COMBINED_CHAOS_DATABASE_URL"),
         std::env::var("AETHERFLOW_COMBINED_CHAOS_NODE_ID"),
@@ -2050,15 +2278,23 @@ async fn jetstream_combined_chaos_worker_child_process() {
         std::env::var("AETHERFLOW_COMBINED_CHAOS_WORKER_ID"),
         std::env::var("AETHERFLOW_COMBINED_CHAOS_TASK_ID"),
         std::env::var("AETHERFLOW_COMBINED_CHAOS_MARKER"),
-    ) else {
+    )
+    else {
         return;
     };
 
     let config: Config = database_url.parse().expect("valid child PostgreSQL URL");
-    let manager = Manager::from_config(config, NoTls, ManagerConfig {
-        recycling_method: RecyclingMethod::Fast,
-    });
-    let pool = Pool::builder(manager).max_size(6).build().expect("build child pool");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(6)
+        .build()
+        .expect("build child pool");
     let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
     let membership = Arc::new(PgMembershipRepository::from_pool(pool));
     let node_id = NodeId::parse(node_id).expect("valid node ID");
@@ -2068,38 +2304,59 @@ async fn jetstream_combined_chaos_worker_child_process() {
     let marker = PathBuf::from(marker_path);
     let handler_marker = marker.clone();
     let mut registry = TaskRegistry::new();
-    registry.register(task_id, move |_context: TaskContext| {
-        let marker = handler_marker.clone();
-        async move {
-            std::fs::write(marker, "handler-started").expect("write handler marker");
-            std::future::pending::<()>().await;
-            Ok(TaskOutput::empty())
-        }
-    }).expect("register long-running handler");
+    registry
+        .register(task_id, move |_context: TaskContext| {
+            let marker = handler_marker.clone();
+            async move {
+                std::fs::write(marker, "handler-started").expect("write handler marker");
+                std::future::pending::<()>().await;
+                Ok(TaskOutput::empty())
+            }
+        })
+        .expect("register long-running handler");
 
-    let node = membership.join_node(&node_id, &incarnation_id, Duration::from_secs(3))
-        .await.expect("join old node incarnation");
-    let registration = membership.register_worker(
-        &node, &worker_id, NonZeroU32::new(1).expect("one worker"), Duration::from_secs(2),
-    ).await.expect("register old worker");
+    let node = membership
+        .join_node(&node_id, &incarnation_id, Duration::from_secs(3))
+        .await
+        .expect("join old node incarnation");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("one worker"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("register old worker");
     let config = PostgresWorkerConfig::new(
         NonZeroUsize::new(1).expect("one worker slot"),
         Duration::from_millis(10),
         Duration::from_secs(3),
         Duration::from_millis(200),
         None,
-    ).expect("valid worker configuration");
+    )
+    .expect("valid worker configuration");
     let worker = PostgresTaskWorker::new(
-        Arc::clone(&repository), Arc::clone(&membership), registration, registry, config,
+        Arc::clone(&repository),
+        Arc::clone(&membership),
+        registration,
+        registry,
+        config,
     );
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
     timeout(Duration::from_secs(15), async {
         loop {
-            if marker.exists() { break; }
-            if handle.is_finished() { panic!("worker terminated before task handler started"); }
+            if marker.exists() {
+                break;
+            }
+            if handle.is_finished() {
+                panic!("worker terminated before task handler started");
+            }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-    }).await.expect("child worker enters active task handler");
+    })
+    .await
+    .expect("child worker enters active task handler");
     std::future::pending::<()>().await;
 }
