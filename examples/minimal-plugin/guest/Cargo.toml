@@ -13,5 +13,12 @@ wit-bindgen = "=0.60.0"
 [lib]
 crate-type = ["cdylib"]
 
-[lints]
-workspace = true
+# wit-bindgen generates Component Model ABI export shims that necessarily use
+# unsafe FFI declarations/blocks. This generated-code-only package therefore
+# does not inherit the workspace's forbid(unsafe_code) lint; its own guest
+# implementation contains no hand-written unsafe code.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

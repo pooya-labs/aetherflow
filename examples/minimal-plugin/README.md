@@ -51,6 +51,10 @@ The exact output length is derived from the input string in the host harness.
   ABI definition.
 - `wit-bindgen` is pinned to 0.60.0. The host-side `wit-component` encoder is
   pinned to 0.254.2 to match the repository's locked WIT tooling.
+- The guest package does not inherit the workspace's `forbid(unsafe_code)`
+  lint because `wit-bindgen` must generate unsafe FFI export shims. The guest
+  implementation itself contains no hand-written unsafe code; the rest of the
+  workspace retains its existing forbid policy.
 - A component must match the generated `task-plugin` world. Componentization
   validates the WIT metadata before the runtime accepts the artifact.
 - `log.write` is default-deny. The plugin's attempt to log is harmless when

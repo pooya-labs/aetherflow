@@ -12,7 +12,7 @@ impl exports::aetherflow::plugin::guest::Guest for EchoPlugin {
         input: Vec<u8>,
     ) -> Result<Vec<u8>, aetherflow::plugin::types::PluginError> {
         let message = format!("attempt {} echoed {} bytes", context.attempt, input.len());
-        let _ = aetherflow::plugin::host::log(aetherflow::plugin::types::LogLevel::Info, message);
+        let _ = aetherflow::plugin::host::log(aetherflow::plugin::types::LogLevel::Info, &message);
 
         Ok(input)
     }
