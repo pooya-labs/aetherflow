@@ -130,7 +130,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let stream_name = format!("AFLOW_TEST_{}", suffix.replace('_', ""));
     let consumer_name = format!("aflow_test_{}", suffix.replace('_', ""));
 
-    let client = async_nats::connect(nats_url)
+    let client = async_nats::connect(nats_url.clone())
         .await
         .expect("connect to NATS");
     let jetstream = jetstream::new(client);
@@ -693,7 +693,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         })
         .await
         .expect("create consumer crash-window stream");
-    let consumer_crash_pull = consumer_crash_stream
+    let _consumer_crash_pull = consumer_crash_stream
         .create_consumer(PullConsumerConfig {
             durable_name: Some(consumer_crash_durable.clone()),
             filter_subject: consumer_crash_subject.clone(),
