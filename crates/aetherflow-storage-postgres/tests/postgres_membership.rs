@@ -787,15 +787,24 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "postgres_partition_old_worker_child_process",
             "--nocapture",
         ])
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", child_database_url)
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_URL",
+            child_database_url,
+        )
         .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
         .env(
             "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
             old_incarnation.as_str(),
         )
-        .env("AETHERFLOW_PARTITION_CHILD_WORKER_ID", old_worker_id.as_str())
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_WORKER_ID",
+            old_worker_id.as_str(),
+        )
         .env("AETHERFLOW_PARTITION_CHILD_TASK_ID", task_id.as_str())
-        .env("AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID", task_run_id.as_str())
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID",
+            task_run_id.as_str(),
+        )
         .env(
             "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
             format!("partition-old-attempt-{suffix}"),
@@ -1061,4 +1070,3 @@ async fn postgres_partition_old_worker_child_process() {
     drop(membership);
     drop(pool);
 }
-
