@@ -261,8 +261,7 @@ impl PgStore {
         let rows = if metadata_exists {
             transaction
                 .query(
-                    "SELECT version, migration_name, checksum_sha256 \\
-                     FROM aetherflow_schema_migrations ORDER BY version",
+                    "SELECT version, migration_name, checksum_sha256 FROM aetherflow_schema_migrations ORDER BY version",
                     &[],
                 )
                 .await
@@ -318,8 +317,7 @@ impl PgStore {
                 .map_err(|error| StorageError::Database(error.to_string()))?;
             transaction
                 .execute(
-                    "INSERT INTO aetherflow_schema_migrations \\
-                     (version, migration_name, checksum_sha256) VALUES ($1, $2, $3)",
+                    "INSERT INTO aetherflow_schema_migrations (version, migration_name, checksum_sha256) VALUES ($1, $2, $3)",
                     &[&migration.version, &migration.name, &checksum],
                 )
                 .await
