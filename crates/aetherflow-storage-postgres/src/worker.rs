@@ -307,6 +307,9 @@ impl PostgresTaskWorker {
         &self,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), PostgresWorkerError> {
+        // A worker may only claim task definitions for which it has a handler.
+        // Keep the supported set fixed for this worker process lifetime.
+        let supported_task_ids = self.registry.registered_task_ids();
         let mut active_tasks: JoinSet<Result<(), PostgresWorkerError>> = JoinSet::new();
         let active_task_runs = Arc::new(Mutex::new(HashMap::<String, TaskRunId>::new()));
         let mut registration = self.renew_membership(&self.registration).await?;
@@ -347,8 +350,9 @@ impl PostgresTaskWorker {
                     let attempt_id = self.attempt_ids.next_id()?;
                     let Some(claim) = self
                         .repository
-                        .claim_next_registered(
+                        .claim_next_registered_for_tasks(
                             &registration,
+                            &supported_task_ids,
                             &attempt_id,
                             self.config.lease_duration,
                         )
