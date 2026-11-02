@@ -201,12 +201,16 @@ impl PgMembershipRepository {
     ) -> Result<NodeMembership, StorageError> {
         let lease_millis = lease_millis(lease_duration)?;
         let epoch = sql_i64(membership.epoch)?;
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let row = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let row = transaction
             .query_opt(
                 "UPDATE cluster_nodes
                  SET lease_expires_at =
@@ -231,12 +235,35 @@ impl PgMembershipRepository {
         let row = row.ok_or_else(|| {
             StorageError::NodeMembershipLost(membership.node_id.as_str().to_owned())
         })?;
+        let status = MembershipStatus::parse(row.get(0))?;
+        let lease_expires_at: SystemTime = row.get(1);
+
+        // A node lease is the upper bound for every worker lease it owns. If
+        // an operator or heartbeat shortens that parent lease, descendants are
+        // capped in the same transaction using PostgreSQL-owned time.
+        transaction
+            .execute(
+                "UPDATE worker_registrations
+                 SET lease_expires_at = LEAST(lease_expires_at, $3::TIMESTAMPTZ),
+                     updated_at = clock_timestamp()
+                 WHERE node_id = $1
+                   AND membership_epoch = $2
+                   AND lease_expires_at > $3::TIMESTAMPTZ",
+                &[&membership.node_id.as_str(), &epoch, &lease_expires_at],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
         Ok(NodeMembership {
             node_id: membership.node_id.clone(),
             incarnation_id: membership.incarnation_id.clone(),
             epoch: membership.epoch,
-            status: MembershipStatus::parse(row.get(0))?,
-            lease_expires_at: row.get(1),
+            status,
+            lease_expires_at,
         })
     }
 
