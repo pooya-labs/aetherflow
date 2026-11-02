@@ -727,6 +727,8 @@ impl PgTaskRepository {
     }
 
     /// Extends a live lease if owner, version, and fencing token still match.
+    /// Extends a live lease if owner, version, and fencing token still match.
+    /// This low-level API does not validate cluster membership.
     pub async fn heartbeat(
         &self,
         task_run_id: &TaskRunId,
@@ -734,6 +736,31 @@ impl PgTaskRepository {
         expected_version: u64,
         fencing_token: u64,
         lease_duration: Duration,
+    ) -> Result<SystemTime, StorageError> {
+        self.heartbeat_inner(task_run_id, worker_id, expected_version, fencing_token, lease_duration, None).await
+    }
+
+    /// Heartbeats an existing attempt while its worker registration remains current.
+    /// Draining registrations may finish in-flight work, but stale epochs are rejected.
+    pub async fn heartbeat_registered(
+        &self,
+        task_run_id: &TaskRunId,
+        registration: &WorkerRegistration,
+        expected_version: u64,
+        fencing_token: u64,
+        lease_duration: Duration,
+    ) -> Result<SystemTime, StorageError> {
+        self.heartbeat_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, lease_duration, Some(registration)).await
+    }
+
+    async fn heartbeat_inner(
+        &self,
+        task_run_id: &TaskRunId,
+        worker_id: &WorkerId,
+        expected_version: u64,
+        fencing_token: u64,
+        lease_duration: Duration,
+        registration: Option<&WorkerRegistration>,
     ) -> Result<SystemTime, StorageError> {
         let lease_seconds = lease_seconds(lease_duration)?;
         let expected_version = sql_i64(expected_version)?;
@@ -747,6 +774,15 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            if registration.worker_id() != worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    worker_id.as_str().to_owned(),
+                ));
+            }
+            // Existing work may settle while draining, but a stale epoch cannot write.
+            lock_worker_registration(&transaction, registration, false).await?;
+        }
         let row = transaction
             .query_opt(
                 "UPDATE task_runs \
@@ -793,6 +829,8 @@ impl PgTaskRepository {
     }
 
     /// Atomically stores successful output, completes the attempt, and appends the outbox event.
+    /// Atomically stores successful output and appends the outbox event.
+    /// This low-level API does not validate cluster membership.
     pub async fn complete(
         &self,
         task_run_id: &TaskRunId,
@@ -800,6 +838,31 @@ impl PgTaskRepository {
         expected_version: u64,
         fencing_token: u64,
         output: TaskOutput,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.complete_inner(task_run_id, worker_id, expected_version, fencing_token, output, None).await
+    }
+
+    /// Completes an attempt only while the worker and parent node epoch remain current.
+    /// A draining registration may settle a task that it already owns.
+    pub async fn complete_registered(
+        &self,
+        task_run_id: &TaskRunId,
+        registration: &WorkerRegistration,
+        expected_version: u64,
+        fencing_token: u64,
+        output: TaskOutput,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.complete_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, output, Some(registration)).await
+    }
+
+    async fn complete_inner(
+        &self,
+        task_run_id: &TaskRunId,
+        worker_id: &WorkerId,
+        expected_version: u64,
+        fencing_token: u64,
+        output: TaskOutput,
+        registration: Option<&WorkerRegistration>,
     ) -> Result<DurableTaskRun, StorageError> {
         let expected_version = sql_i64(expected_version)?;
         let fencing_token = sql_i64(fencing_token)?;
@@ -812,6 +875,15 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            if registration.worker_id() != worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    worker_id.as_str().to_owned(),
+                ));
+            }
+            // Existing work may settle while draining, but a stale epoch cannot write.
+            lock_worker_registration(&transaction, registration, false).await?;
+        }
         let row = transaction
             .query_opt(
                 "UPDATE task_runs \
@@ -877,6 +949,7 @@ impl PgTaskRepository {
     /// The task state, attempt outcome, and outbox event commit atomically. A
     /// retryable error only schedules another attempt while the persisted budget
     /// permits it; otherwise the task becomes failed.
+    /// Records a worker-reported failure through the low-level membership-free API.
     pub async fn record_failure(
         &self,
         task_run_id: &TaskRunId,
@@ -884,6 +957,31 @@ impl PgTaskRepository {
         expected_version: u64,
         fencing_token: u64,
         failure: TaskFailure,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.record_failure_inner(task_run_id, worker_id, expected_version, fencing_token, failure, None).await
+    }
+
+    /// Records a handler failure while validating its worker and node epoch.
+    /// A draining registration may settle a task that it already owns.
+    pub async fn record_failure_registered(
+        &self,
+        task_run_id: &TaskRunId,
+        registration: &WorkerRegistration,
+        expected_version: u64,
+        fencing_token: u64,
+        failure: TaskFailure,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.record_failure_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, failure, Some(registration)).await
+    }
+
+    async fn record_failure_inner(
+        &self,
+        task_run_id: &TaskRunId,
+        worker_id: &WorkerId,
+        expected_version: u64,
+        fencing_token: u64,
+        failure: TaskFailure,
+        registration: Option<&WorkerRegistration>,
     ) -> Result<DurableTaskRun, StorageError> {
         let expected_version = sql_i64(expected_version)?;
         let fencing_token = sql_i64(fencing_token)?;
@@ -896,6 +994,15 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            if registration.worker_id() != worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    worker_id.as_str().to_owned(),
+                ));
+            }
+            // Existing work may settle while draining, but a stale epoch cannot write.
+            lock_worker_registration(&transaction, registration, false).await?;
+        }
 
         let row = transaction
             .query_opt(
