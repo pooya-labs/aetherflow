@@ -20,7 +20,10 @@ use sha2::Digest;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use crate::{PgTaskClaim, PgTaskRepository, StorageError, TaskFailure};
+use crate::{
+    MembershipStatus, PgMembershipRepository, PgTaskClaim, PgTaskRepository, StorageError,
+    TaskFailure, WorkerRegistration,
+};
 
 /// Configuration validation failures for a PostgreSQL worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +250,8 @@ impl From<StorageError> for PostgresWorkerError {
 /// by the next worker through the expired-lease reaper.
 pub struct PostgresTaskWorker {
     repository: Arc<PgTaskRepository>,
+    membership_repository: Arc<PgMembershipRepository>,
+    registration: WorkerRegistration,
     worker_id: WorkerId,
     registry: Arc<TaskRegistry>,
     config: PostgresWorkerConfig,
@@ -258,6 +263,8 @@ impl Clone for PostgresTaskWorker {
     fn clone(&self) -> Self {
         Self {
             repository: Arc::clone(&self.repository),
+            membership_repository: Arc::clone(&self.membership_repository),
+            registration: self.registration.clone(),
             worker_id: self.worker_id.clone(),
             registry: Arc::clone(&self.registry),
             config: self.config.clone(),
@@ -268,16 +275,22 @@ impl Clone for PostgresTaskWorker {
 }
 
 impl PostgresTaskWorker {
-    /// Creates a PostgreSQL worker using the shared runtime handler registry.
+    /// Creates a cluster worker bound to a live PostgreSQL node incarnation
+    /// and worker registration. All task claims and writes use this registration
+    /// in the same transaction as the durable task transition.
     #[must_use]
     pub fn new(
         repository: Arc<PgTaskRepository>,
-        worker_id: WorkerId,
+        membership_repository: Arc<PgMembershipRepository>,
+        registration: WorkerRegistration,
         registry: TaskRegistry,
         config: PostgresWorkerConfig,
     ) -> Self {
+        let worker_id = registration.worker_id().clone();
         Self {
             repository,
+            membership_repository,
+            registration,
             attempt_ids: AttemptIdGenerator::new(&worker_id),
             worker_id,
             registry: Arc::new(registry),
@@ -296,15 +309,24 @@ impl PostgresTaskWorker {
     ) -> Result<(), PostgresWorkerError> {
         let mut active_tasks: JoinSet<Result<(), PostgresWorkerError>> = JoinSet::new();
         let active_task_runs = Arc::new(Mutex::new(HashMap::<String, TaskRunId>::new()));
-        let mut stop_claiming = *shutdown.borrow_and_update();
+        let mut registration = self.renew_membership(&self.registration).await?;
+        let mut stop_claiming = *shutdown.borrow_and_update()
+            || registration.status() != MembershipStatus::Active
+            || registration.node().status() != MembershipStatus::Active;
         let mut shutdown_started_at = stop_claiming.then(tokio::time::Instant::now);
         let mut cancellation_started_at = None;
+        let mut membership_heartbeat = tokio::time::interval(self.config.heartbeat_interval);
+        membership_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        membership_heartbeat.tick().await;
 
         loop {
             if !stop_claiming {
-                self.recover_expired_work().await?;
+                self.recover_expired_work(&registration).await?;
                 self.repository
-                    .promote_due_tasks(self.config.promotion_batch_size)
+                    .promote_due_tasks_registered(
+                        &registration,
+                        self.config.promotion_batch_size,
+                    )
                     .await?;
 
                 while active_tasks.len() < self.config.max_concurrency.get() {
@@ -316,7 +338,11 @@ impl PostgresTaskWorker {
                     let attempt_id = self.attempt_ids.next_id()?;
                     let Some(claim) = self
                         .repository
-                        .claim_next(&self.worker_id, &attempt_id, self.config.lease_duration)
+                        .claim_next_registered(
+                            &registration,
+                            &attempt_id,
+                            self.config.lease_duration,
+                        )
                         .await?
                     else {
                         break;
@@ -332,7 +358,7 @@ impl PostgresTaskWorker {
 
                     let handler = self.registry.handler_for(task_run.task_id());
                     let repository = Arc::clone(&self.repository);
-                    let worker_id = self.worker_id.clone();
+                    let registration_for_task = registration.clone();
                     let config = self.config.clone();
                     let cancellations = Arc::clone(&self.cancellations);
                     let active_for_cleanup = Arc::clone(&active_task_runs);
@@ -345,7 +371,7 @@ impl PostgresTaskWorker {
                     active_tasks.spawn(async move {
                         let result = execute_pg_claim(
                             repository,
-                            worker_id,
+                            registration_for_task,
                             claim,
                             handler,
                             context,
@@ -409,6 +435,18 @@ impl PostgresTaskWorker {
                 changed = shutdown.changed(), if !stop_claiming => {
                     let requested = changed.is_err() || *shutdown.borrow_and_update();
                     if requested {
+                        registration = self.membership_repository
+                            .drain_worker(&registration)
+                            .await?;
+                        stop_claiming = true;
+                        shutdown_started_at = Some(tokio::time::Instant::now());
+                    }
+                }
+                _ = membership_heartbeat.tick(), if !stop_claiming => {
+                    registration = self.renew_membership(&registration).await?;
+                    if registration.status() != MembershipStatus::Active
+                        || registration.node().status() != MembershipStatus::Active
+                    {
                         stop_claiming = true;
                         shutdown_started_at = Some(tokio::time::Instant::now());
                     }
@@ -432,10 +470,31 @@ impl PostgresTaskWorker {
         }
     }
 
-    async fn recover_expired_work(&self) -> Result<(), PostgresWorkerError> {
+    async fn renew_membership(
+        &self,
+        registration: &WorkerRegistration,
+    ) -> Result<WorkerRegistration, PostgresWorkerError> {
+        let node = self
+            .membership_repository
+            .heartbeat_node(registration.node(), self.config.lease_duration)
+            .await?;
+        let worker = self
+            .membership_repository
+            .heartbeat_worker(registration, self.config.lease_duration)
+            .await?;
+        Ok(worker.with_node_membership(node))
+    }
+
+    async fn recover_expired_work(
+        &self,
+        registration: &WorkerRegistration,
+    ) -> Result<(), PostgresWorkerError> {
         let recovered = self
             .repository
-            .recover_expired_leases(self.config.recovery_batch_size)
+            .recover_expired_leases_registered(
+                registration,
+                self.config.recovery_batch_size,
+            )
             .await?;
         let mut workflow_ids = recovered
             .iter()
@@ -445,7 +504,7 @@ impl PostgresTaskWorker {
         workflow_ids.dedup();
         for workflow_run_id in workflow_ids {
             self.repository
-                .aggregate_workflow_run(&workflow_run_id)
+                .aggregate_workflow_run_registered(&workflow_run_id, registration)
                 .await?;
         }
         Ok(())
@@ -604,7 +663,7 @@ impl AttemptIdGenerator {
 
 async fn execute_pg_claim(
     repository: Arc<PgTaskRepository>,
-    worker_id: WorkerId,
+    registration: WorkerRegistration,
     claim: PgTaskClaim,
     handler: Option<Arc<dyn TaskHandler>>,
     context: TaskContext,
@@ -615,8 +674,29 @@ async fn execute_pg_claim(
     let task_run_id = task_run.task_run_id().clone();
     let workflow_run_id = task_run.workflow_run_id().clone();
     let task_id = task_run.task_id().clone();
+    let worker_id = registration.worker_id().clone();
     let expected_version = task_run.version();
     let fencing_token = claim.fencing_token();
+
+    match repository
+        .heartbeat_registered(
+            &task_run_id,
+            &registration,
+            expected_version,
+            fencing_token,
+            config.lease_duration,
+        )
+        .await
+    {
+        Ok(_) => {}
+        Err(StorageError::ClaimLost(_)
+            | StorageError::NodeMembershipLost(_)
+            | StorageError::WorkerRegistrationLost(_)) => {
+            cancellation_trigger.cancel();
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    }
 
     let future: TaskFuture = match handler {
         Some(handler) => handler.execute(context),
@@ -643,15 +723,17 @@ async fn execute_pg_claim(
         tokio::select! {
             result = &mut future => break Some(result),
             _ = heartbeat.tick() => {
-                match repository.heartbeat(
+                match repository.heartbeat_registered(
                     &task_run_id,
-                    &worker_id,
+                    &registration,
                     expected_version,
                     fencing_token,
                     config.lease_duration,
                 ).await {
                     Ok(_) => {}
-                    Err(StorageError::ClaimLost(_)) => {
+                    Err(StorageError::ClaimLost(_)
+                        | StorageError::NodeMembershipLost(_)
+                        | StorageError::WorkerRegistrationLost(_)) => {
                         cancellation_trigger.cancel();
                         return Ok(());
                     }
@@ -660,12 +742,24 @@ async fn execute_pg_claim(
             }
             _ = &mut timeout_wait => {
                 cancellation_trigger.cancel();
-                match repository.timeout_task_run(&task_run_id, expected_version).await {
+                match repository
+                    .timeout_task_run_registered(
+                        &task_run_id,
+                        &registration,
+                        expected_version,
+                        fencing_token,
+                    )
+                    .await
+                {
                     Ok(_) => {
-                        repository.aggregate_workflow_run(&workflow_run_id).await?;
+                        repository
+                            .aggregate_workflow_run_registered(&workflow_run_id, &registration)
+                            .await?;
                         return Ok(());
                     }
-                    Err(StorageError::ClaimLost(_)) => return Ok(()),
+                    Err(StorageError::ClaimLost(_)
+                        | StorageError::NodeMembershipLost(_)
+                        | StorageError::WorkerRegistrationLost(_)) => return Ok(()),
                     Err(error) => return Err(error.into()),
                 }
             }
@@ -674,9 +768,9 @@ async fn execute_pg_claim(
 
     match outcome {
         Some(Ok(output)) => match repository
-            .complete(
+            .complete_registered(
                 &task_run_id,
-                &worker_id,
+                &registration,
                 expected_version,
                 fencing_token,
                 output,
@@ -684,10 +778,14 @@ async fn execute_pg_claim(
             .await
         {
             Ok(_) => {
-                repository.aggregate_workflow_run(&workflow_run_id).await?;
+                repository
+                    .aggregate_workflow_run_registered(&workflow_run_id, &registration)
+                    .await?;
                 Ok(())
             }
-            Err(StorageError::ClaimLost(_)) => Ok(()),
+            Err(StorageError::ClaimLost(_)
+                | StorageError::NodeMembershipLost(_)
+                | StorageError::WorkerRegistrationLost(_)) => Ok(()),
             Err(error) => Err(error.into()),
         },
         Some(Err(error)) => {
@@ -700,9 +798,9 @@ async fn execute_pg_claim(
                 }
             };
             match repository
-                .record_failure(
+                .record_failure_registered(
                     &task_run_id,
-                    &worker_id,
+                    &registration,
                     expected_version,
                     fencing_token,
                     failure,
@@ -710,10 +808,14 @@ async fn execute_pg_claim(
                 .await
             {
                 Ok(_) => {
-                    repository.aggregate_workflow_run(&workflow_run_id).await?;
+                    repository
+                        .aggregate_workflow_run_registered(&workflow_run_id, &registration)
+                        .await?;
                     Ok(())
                 }
-                Err(StorageError::ClaimLost(_)) => Ok(()),
+                Err(StorageError::ClaimLost(_)
+                    | StorageError::NodeMembershipLost(_)
+                    | StorageError::WorkerRegistrationLost(_)) => Ok(()),
                 Err(error) => Err(error.into()),
             }
         }
