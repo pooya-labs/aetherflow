@@ -9,12 +9,16 @@ use std::fmt;
 
 mod coordinator;
 mod inbox;
+mod membership;
 mod outbox;
 mod task_repository;
 mod worker;
 
 pub use coordinator::{PgWorkflowCoordinator, PgWorkflowSubmission};
 pub use inbox::{InboxClaim, InboxClaimResult, PgInboxRepository};
+pub use membership::{
+    MembershipStatus, NodeMembership, PgMembershipRepository, WorkerRegistration,
+};
 pub use outbox::{
     OutboxDispatchReport, OutboxDispatcherConfig, OutboxDispatcherConfigError,
     OutboxDispatcherError, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
@@ -32,7 +36,9 @@ const INITIAL_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0001_initial_schema.sql");
 const CONSUMER_INBOX_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0002_consumer_inbox.sql");
-const MIGRATION_VERSION: i64 = 2;
+const NODE_MEMBERSHIP_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0003_node_membership.sql");
+const MIGRATION_VERSION: i64 = 3;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -42,7 +48,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -52,6 +58,11 @@ const MIGRATIONS: [Migration; 2] = [
         version: 2,
         name: "0002_consumer_inbox.sql",
         sql: CONSUMER_INBOX_MIGRATION_SQL,
+    },
+    Migration {
+        version: 3,
+        name: "0003_node_membership.sql",
+        sql: NODE_MEMBERSHIP_MIGRATION_SQL,
     },
 ];
 
@@ -114,6 +125,16 @@ pub enum StorageError {
         consumer_name: String,
         event_id: String,
     },
+    /// Another incarnation currently owns an unexpired node membership lease.
+    NodeLeaseBusy(String),
+    /// The supplied node incarnation or membership epoch is no longer current.
+    NodeMembershipLost(String),
+    /// A worker registration ID is already held by a different live owner.
+    WorkerRegistrationBusy(String),
+    /// The worker registration or its parent node epoch is no longer current.
+    WorkerRegistrationLost(String),
+    /// Worker concurrency capacity cannot fit a positive PostgreSQL INTEGER.
+    InvalidWorkerCapacity,
     /// A lease duration is zero or cannot be represented as signed milliseconds.
     InvalidLeaseDuration,
     /// A retry policy cannot be represented by PostgreSQL columns.
@@ -173,6 +194,21 @@ impl fmt::Display for StorageError {
                 formatter,
                 "consumer inbox claim is no longer owned: {consumer_name}/{event_id}"
             ),
+            Self::NodeLeaseBusy(node_id) => {
+                write!(formatter, "node membership lease is still owned: {node_id}")
+            }
+            Self::NodeMembershipLost(node_id) => {
+                write!(formatter, "node membership is no longer current: {node_id}")
+            }
+            Self::WorkerRegistrationBusy(worker_id) => {
+                write!(formatter, "worker registration is still owned: {worker_id}")
+            }
+            Self::WorkerRegistrationLost(worker_id) => {
+                write!(formatter, "worker registration is no longer current: {worker_id}")
+            }
+            Self::InvalidWorkerCapacity => {
+                formatter.write_str("worker concurrency capacity must fit a positive PostgreSQL INTEGER")
+            }
             Self::InvalidLeaseDuration => {
                 formatter.write_str("lease duration must be a positive signed millisecond value")
             }
@@ -365,15 +401,18 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 2);
+        assert_eq!(MIGRATION_VERSION, 3);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
         assert_eq!(MIGRATIONS[1].name, "0002_consumer_inbox.sql");
+        assert_eq!(MIGRATIONS[2].version, 3);
+        assert_eq!(MIGRATIONS[2].name, "0003_node_membership.sql");
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
-        for checksum in [initial, inbox] {
+        let membership = migration_checksum(&MIGRATIONS[2]);
+        for checksum in [initial, inbox, membership] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
             assert!(checksum.bytes().all(|byte| !byte.is_ascii_uppercase()));
