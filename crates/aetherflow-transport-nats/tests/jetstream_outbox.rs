@@ -8,7 +8,7 @@ use aetherflow_core::domain::{
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
-    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
+    OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
     PostgresOutboxDispatcher,
 };
 use aetherflow_transport_nats::NatsJetStreamPublisher;
@@ -64,7 +64,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let jetstream = jetstream::new(client);
     let stream = jetstream
         .create_stream(jetstream::stream::Config {
-            name: stream_name,
+            name: stream_name.clone(),
             subjects: vec![subject.clone()],
             duplicate_window: Duration::from_secs(120),
             ..Default::default()
@@ -193,5 +193,5 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     }
 
     drop(messages);
-    let _ = stream.delete().await;
+    let _ = jetstream.delete_stream(stream_name).await;
 }
