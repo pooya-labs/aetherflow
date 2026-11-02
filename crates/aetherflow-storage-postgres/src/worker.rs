@@ -3,7 +3,7 @@
 //! The worker shares the runtime's handler registry and handler context while
 //! keeping all scheduling, lease, retry, and lifecycle state in PostgreSQL.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,7 @@ use aetherflow_runtime::repository::{
 use aetherflow_runtime::scheduler::{
     TaskCancellationTrigger, TaskContext, TaskExecutionError, TaskFuture, TaskHandler, TaskRegistry,
 };
+use sha2::Digest;
 use sha2::Digest;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -105,7 +106,7 @@ impl PostgresWorkerConfig {
         if heartbeat_interval >= lease_duration {
             return Err(PostgresWorkerConfigError::HeartbeatNotBeforeLeaseExpiry);
         }
-        if task_timeout.is_some_and(Duration::is_zero) {
+        if task_timeout.is_some_and(|timeout| timeout.is_zero()) {
             return Err(PostgresWorkerConfigError::ZeroTaskTimeout);
         }
 
@@ -437,10 +438,12 @@ impl PostgresTaskWorker {
             .repository
             .recover_expired_leases(self.config.recovery_batch_size)
             .await?;
-        let workflow_ids = recovered
+        let mut workflow_ids = recovered
             .iter()
             .map(|lease| lease.task_run().workflow_run_id().clone())
-            .collect::<BTreeSet<WorkflowRunId>>();
+            .collect::<Vec<_>>();
+        workflow_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        workflow_ids.dedup();
         for workflow_run_id in workflow_ids {
             self.repository
                 .aggregate_workflow_run(&workflow_run_id)
@@ -579,7 +582,7 @@ impl AttemptIdGenerator {
     fn next_id(&self) -> Result<AttemptId, StorageError> {
         let sequence = self
             .next
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| {
