@@ -579,14 +579,21 @@ impl AttemptIdGenerator {
     }
 
     fn next_id(&self) -> Result<AttemptId, StorageError> {
-        let sequence = self
-            .next
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| {
-                StorageError::InvalidStoredValue("attempt ID sequence exhausted".to_owned())
-            })?;
+        let sequence = loop {
+            let current = self.next.load(Ordering::Relaxed);
+            let Some(next) = current.checked_add(1) else {
+                return Err(StorageError::InvalidStoredValue(
+                    "attempt ID sequence exhausted".to_owned(),
+                ));
+            };
+            if self
+                .next
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break current;
+            }
+        };
         AttemptId::parse(format!(
             "a-{}-{:032x}-{sequence:x}",
             self.worker_fingerprint, self.process_nonce
