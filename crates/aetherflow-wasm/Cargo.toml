@@ -1,0 +1,13 @@
+[package]
+name = "aetherflow-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Versioned WebAssembly plugin ABI and capability contracts for AetherFlow."
+
+[dependencies]
+aetherflow-core = { path = "../aetherflow-core" }
+
+[lints]
+workspace = true
