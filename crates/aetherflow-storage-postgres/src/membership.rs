@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{NodeId, NodeIncarnationId, WorkerId};
 use deadpool_postgres::Pool;
+use tokio_postgres::Transaction;
 
 use crate::StorageError;
 
@@ -609,6 +610,84 @@ impl PgMembershipRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         rows.iter().map(parse_active_worker).collect()
     }
+}
+
+
+/// Locks and validates a worker's parent node and registration before any task row.
+///
+/// The lock order is node → worker → task → attempt/outbox. Claim admission
+/// requires both records to remain active. A worker already running a task may
+/// continue heartbeat/settlement while both records are draining, but neither
+/// lease may be expired and the incarnation/epoch must still match.
+pub(crate) async fn lock_worker_registration(
+    transaction: &Transaction<'_>,
+    registration: &WorkerRegistration,
+    require_active: bool,
+) -> Result<(), StorageError> {
+    let epoch = sql_i64(registration.node.epoch)?;
+    let node = transaction
+        .query_opt(
+            "SELECT status
+             FROM cluster_nodes
+             WHERE node_id = $1
+               AND incarnation_id = $2
+               AND membership_epoch = $3
+               AND lease_expires_at > clock_timestamp()
+             FOR UPDATE",
+            &[
+                &registration.node.node_id.as_str(),
+                &registration.node.incarnation_id.as_str(),
+                &epoch,
+            ],
+        )
+        .await
+        .map_err(|error| {
+            StorageError::Database(format!("lock worker parent node membership: {error}"))
+        })?;
+    let Some(node) = node else {
+        return Err(StorageError::NodeMembershipLost(
+            registration.node.node_id.as_str().to_owned(),
+        ));
+    };
+    let node_status: String = node.get(0);
+    if require_active && node_status != "active" {
+        return Err(StorageError::NodeMembershipLost(
+            registration.node.node_id.as_str().to_owned(),
+        ));
+    }
+
+    let worker = transaction
+        .query_opt(
+            "SELECT status
+             FROM worker_registrations
+             WHERE worker_id = $1
+               AND node_id = $2
+               AND membership_epoch = $3
+               AND lease_expires_at > clock_timestamp()
+             FOR UPDATE",
+            &[
+                &registration.worker_id.as_str(),
+                &registration.node.node_id.as_str(),
+                &epoch,
+            ],
+        )
+        .await
+        .map_err(|error| {
+            StorageError::Database(format!("lock worker registration: {error}"))
+        })?;
+    let Some(worker) = worker else {
+        return Err(StorageError::WorkerRegistrationLost(
+            registration.worker_id.as_str().to_owned(),
+        ));
+    };
+    let worker_status: String = worker.get(0);
+    if require_active && worker_status != "active" {
+        return Err(StorageError::WorkerRegistrationLost(
+            registration.worker_id.as_str().to_owned(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn parse_node_membership(
