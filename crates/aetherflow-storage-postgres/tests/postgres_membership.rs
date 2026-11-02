@@ -1061,7 +1061,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let mut child_command = if packet_partition {
         let mut command = std::process::Command::new("sudo");
         command
-            .args(["-n", "-u", "nobody", "--"])
+            .args(["-n", "-E", "-u", "nobody", "--"])
             .arg(child_executable);
         command
     } else {
