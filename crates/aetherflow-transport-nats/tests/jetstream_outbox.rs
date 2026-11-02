@@ -1096,18 +1096,14 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             .await
             .expect("create NATS server-restart consumer");
 
-        let restart_workflow_run_id =
-            WorkflowRunId::parse(format!("nats-restart-run-{suffix}"))
-                .expect("valid server-restart workflow-run ID");
-        let restart_workflow_id =
-            WorkflowId::parse(format!("nats-restart-workflow-{suffix}"))
-                .expect("valid server-restart workflow ID");
-        let restart_task_run_id =
-            TaskRunId::parse(format!("nats-restart-task-run-{suffix}"))
-                .expect("valid server-restart task-run ID");
-        let restart_task_id =
-            TaskId::parse(format!("nats-restart-task-{suffix}"))
-                .expect("valid server-restart task ID");
+        let restart_workflow_run_id = WorkflowRunId::parse(format!("nats-restart-run-{suffix}"))
+            .expect("valid server-restart workflow-run ID");
+        let restart_workflow_id = WorkflowId::parse(format!("nats-restart-workflow-{suffix}"))
+            .expect("valid server-restart workflow ID");
+        let restart_task_run_id = TaskRunId::parse(format!("nats-restart-task-run-{suffix}"))
+            .expect("valid server-restart task-run ID");
+        let restart_task_id = TaskId::parse(format!("nats-restart-task-{suffix}"))
+            .expect("valid server-restart task ID");
         repository
             .create_workflow(
                 &restart_workflow_run_id,
@@ -1203,7 +1199,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             }
         })
         .await;
-        assert!(ready.is_ok(), "NATS did not become ready after docker restart");
+        assert!(
+            ready.is_ok(),
+            "NATS did not become ready after docker restart"
+        );
         assert!(
             !matches!(
                 interrupted_publish,
@@ -1255,9 +1254,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             .expect("event should be delivered after NATS restart")
             .expect("server-restart consumer stream should remain open")
             .expect("read event after NATS restart");
-        let delivered_envelope: serde_json::Value =
-            serde_json::from_slice(&delivered.payload)
-                .expect("decode event delivered after NATS restart");
+        let delivered_envelope: serde_json::Value = serde_json::from_slice(&delivered.payload)
+            .expect("decode event delivered after NATS restart");
         assert_eq!(delivered_envelope["event_id"], restart_event_id.to_string());
         delivered
             .double_ack()
@@ -1267,7 +1265,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             Err(_) | Ok(None) => {}
             Ok(Some(Err(error))) => panic!("NATS restart consumer failed: {error}"),
             Ok(Some(Ok(message))) => {
-                panic!("NATS restart created a duplicate message: {:?}", message.subject)
+                panic!(
+                    "NATS restart created a duplicate message: {:?}",
+                    message.subject
+                )
             }
         }
         drop(restart_messages);
