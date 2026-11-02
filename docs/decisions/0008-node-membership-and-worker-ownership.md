@@ -1,8 +1,12 @@
 # ADR-0008: PostgreSQL-backed node membership and worker ownership
 
-- **Status:** Accepted for M05 design; implementation not yet merged
+- **Status:** Accepted; migration v3 and the first membership repository slice are implemented on `main`. Task transaction gating remains open.
 - **Date:** 2026-11-02
 - **Scope:** Node incarnation, membership leases, worker registration, drain semantics, and fencing across multiple AetherFlow processes
+
+## Implementation checkpoint
+
+The first persistence slice is implemented in `0003_node_membership.sql` and `PgMembershipRepository`. It covers node join/takeover, epoch changes, database-time heartbeats, worker registration/capacity, worker/node drain, child-lease capping, active-worker discovery and stale membership-handle rejection. PostgreSQL 18 run `41382505310` and Rust CI run `41382505507` passed the migration, repository and integration tests. Task claim and settlement SQL has not yet been updated to require the matching worker registration and node epoch in the same transaction; that remains the next step under this ADR.
 
 ## Context
 
