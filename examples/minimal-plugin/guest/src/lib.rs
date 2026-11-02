@@ -1,3 +1,5 @@
+#![cfg(target_arch = "wasm32")]
+
 wit_bindgen::generate!({
     path: "../../../crates/aetherflow-wasm/wit",
     world: "task-plugin",
