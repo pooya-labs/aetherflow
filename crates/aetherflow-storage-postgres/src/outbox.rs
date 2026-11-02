@@ -271,9 +271,7 @@ impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
     /// Publication errors are recorded and rescheduled. A lost claim is benign:
     /// another dispatcher owns the newer token, or the event will be reclaimed
     /// after lease expiry.
-    pub async fn dispatch_once(
-        &self,
-    ) -> Result<OutboxDispatchReport, OutboxDispatcherError> {
+    pub async fn dispatch_once(&self) -> Result<OutboxDispatchReport, OutboxDispatcherError> {
         let claims = self
             .repository
             .claim_outbox_events(
