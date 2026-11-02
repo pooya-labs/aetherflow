@@ -207,6 +207,9 @@ impl HostState {
     }
 }
 
+// The shared WIT types interface is imported as an empty host interface.
+impl bindings::aetherflow::plugin::types::Host for HostState {}
+
 impl bindings::aetherflow::plugin::host::Host for HostState {
     fn log(
         &mut self,
