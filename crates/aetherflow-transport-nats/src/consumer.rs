@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use aetherflow_core::domain::WorkerId;
 use aetherflow_storage_postgres::{InboxClaim, InboxClaimResult, PgInboxRepository, StorageError};
-use async_nats::jetstream::Message as JetStreamMessage;
+use async_nats::jetstream::{AckKind, Message as JetStreamMessage};
 use async_nats::jetstream::consumer::PullConsumer;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -174,6 +174,7 @@ impl From<StorageError> for NatsConsumerError {
 enum HandlerExecutionError {
     Handler(String),
     Storage(StorageError),
+    Broker(String),
 }
 
 /// Pull-based JetStream consumer that coordinates each event through
@@ -192,8 +193,10 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
     /// Creates a consumer for an existing durable JetStream pull consumer.
     ///
     /// Configure the JetStream consumer with explicit acknowledgements and an
-    /// `ack_wait` comfortably longer than the inbox lease. The handler runs
-    /// serially per instance; concurrent instances coordinate through PostgreSQL.
+    /// `ack_wait` comfortably longer than the inbox lease. During long-running
+    /// handlers, this worker renews the PostgreSQL lease and sends JetStream
+    /// progress acknowledgements. The handler runs serially per instance;
+    /// concurrent instances coordinate through PostgreSQL.
     pub fn new(
         consumer: PullConsumer,
         inbox: PgInboxRepository,
@@ -290,7 +293,10 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
                 // giving the current inbox owner time to finish or renew.
             }
             InboxClaimResult::Acquired(claim) => {
-                match self.execute_handler_with_renewal(&claim, &event).await {
+                match self
+                    .execute_handler_with_renewal(&claim, &event, &message)
+                    .await
+                {
                     Ok(()) => {
                         self.inbox.acknowledge(&claim).await?;
                         // Confirm broker acknowledgement after the database
@@ -315,6 +321,9 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
                     Err(HandlerExecutionError::Storage(error)) => {
                         return Err(NatsConsumerError::Storage(error));
                     }
+                    Err(HandlerExecutionError::Broker(error)) => {
+                        return Err(NatsConsumerError::Broker(error));
+                    }
                 }
             }
         }
@@ -326,6 +335,7 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
         &self,
         claim: &InboxClaim,
         event: &JetStreamEvent,
+        message: &JetStreamMessage,
     ) -> Result<(), HandlerExecutionError> {
         let handler_future = self.handler.handle(event);
         tokio::pin!(handler_future);
@@ -345,6 +355,10 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
                         .renew(claim, self.lease_duration)
                         .await
                         .map_err(HandlerExecutionError::Storage)?;
+                    message
+                        .ack_with(AckKind::Progress)
+                        .await
+                        .map_err(|error| HandlerExecutionError::Broker(error.to_string()))?;
                 }
             }
         }
