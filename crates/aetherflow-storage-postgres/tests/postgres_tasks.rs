@@ -420,11 +420,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     let failure_sibling_attempt =
         AttemptId::parse("durable-failure-sibling-attempt").expect("valid attempt ID");
     let failure_sibling_claim = repository
-        .claim_next(
-            &worker_b,
-            &failure_sibling_attempt,
-            Duration::from_secs(30),
-        )
+        .claim_next(&worker_b, &failure_sibling_attempt, Duration::from_secs(30))
         .await
         .expect("claim independent sibling")
         .expect("sibling is ready");
