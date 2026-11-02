@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use aetherflow_core::EntityId;
-use aetherflow_wasm::{Capability, CapabilitySet, ExecutionLimits, PluginExecutionContext, WasmPluginRuntime};
+use aetherflow_wasm::{
+    Capability, CapabilitySet, ExecutionLimits, PluginExecutionContext, WasmPluginRuntime,
+};
 
 fn replace_once(source: &mut String, needle: &str, replacement: &str) {
     let offset = source
