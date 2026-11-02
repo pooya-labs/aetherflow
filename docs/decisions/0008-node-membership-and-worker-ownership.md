@@ -1,12 +1,14 @@
 # ADR-0008: PostgreSQL-backed node membership and worker ownership
 
-- **Status:** Accepted; migration v3 and the first membership repository slice are implemented on `main`. Task transaction gating remains open.
+- **Status:** Accepted and implemented for worker-owned task transactions; multi-process partition/rejoin chaos coverage remains open.
 - **Date:** 2026-11-02
 - **Scope:** Node incarnation, membership leases, worker registration, drain semantics, and fencing across multiple AetherFlow processes
 
 ## Implementation checkpoint
 
-The first persistence slice is implemented in `0003_node_membership.sql` and `PgMembershipRepository`. It covers node join/takeover, epoch changes, database-time heartbeats, worker registration/capacity, worker/node drain, child-lease capping, active-worker discovery and stale membership-handle rejection. PostgreSQL 18 run `41382505310` and Rust CI run `41382505507` passed the migration, repository and integration tests. Task claim and settlement SQL has not yet been updated to require the matching worker registration and node epoch in the same transaction; that remains the next step under this ADR.
+The membership persistence slice is implemented in 0003_node_membership.sql and PgMembershipRepository. It covers node join/takeover, epoch changes, database-time heartbeats, worker registration/capacity, worker/node drain, child-lease capping, active-worker discovery and stale-handle rejection.
+
+Task claim and all worker-owned heartbeat/settlement/recovery/promotion/aggregation operations validate the worker registration and parent node epoch in the same transaction as the task write. Claims are filtered by the task IDs present in the worker's local TaskRegistry. The worker loop renews membership while active and while draining in-flight handlers. PostgreSQL 18 + NATS run 41386154586 and Rust CI 41386154607 passed transaction-gate, capability-filter, stale-epoch takeover/recovery and long-handler drain tests. Multi-process partition/rejoin and abrupt worker-loss chaos tests remain future work.
 
 ## Context
 
@@ -38,9 +40,9 @@ A draining node admits no new worker claims. It asks workers to stop claiming ne
 
 ### Task leases remain the execution ownership mechanism
 
-Membership is an eligibility and liveness gate; it does not replace the existing task-run lease or fencing token. A task claim records its worker ID and existing task fencing token. Claim, heartbeat, completion, failure, cancellation, and lease recovery must additionally validate that the worker registration and parent node epoch are live and current.
+Membership is an eligibility and liveness gate; it does not replace the existing task-run lease or fencing token. A task claim records its worker ID and existing task fencing token. Claim, heartbeat, completion, failure, registered cancellation, timeout, promotion, aggregation and lease recovery validate that the worker registration and parent node epoch are live and current.
 
-The membership check and the task-row mutation must occur in the same short PostgreSQL transaction, with a consistent lock order. A reaper may recover a task before its task lease expires when the owning worker/node membership is definitively expired, but only after locking the task and verifying the matching worker registration and node epoch. Every recovery still increments the task fencing token and closes the corresponding attempt transactionally.
+The membership check and the task-row mutation occur in the same short PostgreSQL transaction, with lock order node → worker → task → attempt/outbox. The reaper currently recovers after the old task lease expires; it locks and verifies the replacement worker registration before recovery. Every recovery increments the task fencing token and closes the corresponding attempt transactionally. Membership takeover does not rewrite a still-live task lease.
 
 This prevents a stale process from committing after a new node incarnation takes over while preserving the task row's fencing token as the final per-task write guard. Membership expiry alone must never fabricate successful completion or imply that external work stopped.
 
@@ -63,6 +65,6 @@ Node membership is used for liveness, capacity visibility, admission, draining, 
 - PostgreSQL is the single authority for node membership, worker eligibility, task ownership, and persisted lease time.
 - Process restarts create a new node incarnation and a higher membership epoch rather than impersonating the old process.
 - A node cannot silently keep claiming tasks after it has entered draining or lost its membership lease.
-- Existing per-task fencing remains in place; future task repository methods gain an additional live-worker/node-epoch guard.
-- Initial membership implementation requires an additive PostgreSQL migration and transaction tests for concurrent join, expired-lease takeover, stale epoch rejection, drain, and node/worker loss.
+- Existing per-task fencing remains in place and is combined with a live worker/node-epoch guard for registered worker operations.
+- The membership implementation is covered by concurrent join, expired-lease takeover, stale-epoch task-write fencing, capability-filtered claims and graceful drain tests. Real network partition/rejoin and abrupt node/worker process-loss chaos tests remain required before production claims.
 - Multi-node partition and failover chaos tests remain required before production claims. This ADR does not claim consensus, exactly-once side effects, or automatic fencing of downstream systems.
