@@ -1740,12 +1740,10 @@ async fn postgres_worker_process_death_recovers_inflight_task() {
         WorkflowId::parse(format!("worker-crash-workflow-{suffix}")).expect("valid workflow ID");
     let workflow_run_id =
         WorkflowRunId::parse(format!("worker-crash-run-{suffix}")).expect("valid workflow-run ID");
-    let task_id =
-        TaskId::parse(format!("worker-crash-task-{suffix}")).expect("valid task ID");
+    let task_id = TaskId::parse(format!("worker-crash-task-{suffix}")).expect("valid task ID");
     let task_run_id =
         TaskRunId::parse(format!("worker-crash-task-run-{suffix}")).expect("valid task-run ID");
-    let old_node_id =
-        NodeId::parse(format!("worker-crash-node-{suffix}")).expect("valid node ID");
+    let old_node_id = NodeId::parse(format!("worker-crash-node-{suffix}")).expect("valid node ID");
     let old_incarnation =
         NodeIncarnationId::parse(format!("worker-crash-old-incarnation-{suffix}"))
             .expect("valid old incarnation");
@@ -1756,9 +1754,8 @@ async fn postgres_worker_process_death_recovers_inflight_task() {
         WorkerId::parse(format!("worker-crash-old-worker-{suffix}")).expect("valid old worker ID");
     let replacement_worker_id = WorkerId::parse(format!("worker-crash-new-worker-{suffix}"))
         .expect("valid replacement worker ID");
-    let retry_policy =
-        RetryPolicy::new(NonZeroU32::new(2).expect("positive attempt budget"), 0, 0)
-            .expect("valid retry policy");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(2).expect("positive attempt budget"), 0, 0)
+        .expect("valid retry policy");
 
     repository
         .create_workflow(
@@ -1792,11 +1789,11 @@ async fn postgres_worker_process_death_recovers_inflight_task() {
         "postgres_task_worker_crash_child_process",
         "--nocapture",
     ])
+    .env("AETHERFLOW_WORKER_CRASH_CHILD_DATABASE_URL", &database_url)
     .env(
-        "AETHERFLOW_WORKER_CRASH_CHILD_DATABASE_URL",
-        &database_url,
+        "AETHERFLOW_WORKER_CRASH_CHILD_NODE_ID",
+        old_node_id.as_str(),
     )
-    .env("AETHERFLOW_WORKER_CRASH_CHILD_NODE_ID", old_node_id.as_str())
     .env(
         "AETHERFLOW_WORKER_CRASH_CHILD_INCARNATION_ID",
         old_incarnation.as_str(),
@@ -1855,7 +1852,10 @@ async fn postgres_worker_process_death_recovers_inflight_task() {
     let old_exit = old_worker_process
         .wait()
         .expect("wait for abruptly terminated worker process");
-    assert!(!old_exit.success(), "old worker should have been killed forcibly");
+    assert!(
+        !old_exit.success(),
+        "old worker should have been killed forcibly"
+    );
     drop(diagnostic_client);
 
     // Worker/node membership and task leases are independent durable clocks.
