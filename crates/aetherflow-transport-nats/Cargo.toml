@@ -1,0 +1,24 @@
+[package]
+name = "aetherflow-transport-nats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "NATS JetStream transport adapters for AetherFlow durable events."
+
+[dependencies]
+aetherflow-storage-postgres = { path = "../aetherflow-storage-postgres" }
+async-nats = { version = "=0.46.0", default-features = false, features = ["jetstream", "ring", "server_2_12"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[dev-dependencies]
+aetherflow-core = { path = "../aetherflow-core" }
+aetherflow-runtime = { path = "../aetherflow-runtime" }
+deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1", "runtime"] }
+futures-util = { version = "=0.3.34", default-features = false, features = ["std", "async-await"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-postgres = { version = "=0.7.18" }
+
+[lints]
+workspace = true
