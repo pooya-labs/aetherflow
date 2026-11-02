@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use aetherflow_core::domain::WorkerId;
 use aetherflow_storage_postgres::{InboxClaim, InboxClaimResult, PgInboxRepository, StorageError};
-use async_nats::jetstream::{AckKind, Message as JetStreamMessage};
 use async_nats::jetstream::consumer::PullConsumer;
+use async_nats::jetstream::{AckKind, Message as JetStreamMessage};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::sync::watch;
