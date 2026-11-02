@@ -8,7 +8,7 @@ use aetherflow_wasm::{CapabilitySet, ExecutionLimits, PluginExecutionContext, Wa
 fn valid_component_from_checked_in_wit() -> Vec<u8> {
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
     let mut resolve = wit_parser::Resolve::new();
-    let package = resolve
+    let (package, _source_map) = resolve
         .push_dir(&wit_dir)
         .expect("parse checked-in plugin WIT package");
     let world = resolve
@@ -22,7 +22,6 @@ fn valid_component_from_checked_in_wit() -> Vec<u8> {
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
-        true,
     )
     .expect("embed component type metadata");
 
