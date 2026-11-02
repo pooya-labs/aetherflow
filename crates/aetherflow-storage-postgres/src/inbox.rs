@@ -184,7 +184,7 @@ impl PgInboxRepository {
         let status: String = row.get(0);
         match status.as_str() {
             "processed" => Ok(InboxClaimResult::AlreadyProcessed),
-            "processing" => Ok(InboxClaimResult::Busy),
+            "pending" | "processing" => Ok(InboxClaimResult::Busy),
             other => Err(StorageError::InvalidStoredValue(format!(
                 "unexpected consumer inbox status: {other}"
             ))),
