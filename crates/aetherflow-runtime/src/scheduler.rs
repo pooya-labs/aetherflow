@@ -16,8 +16,8 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clock::Clock;
 use crate::repository::{
-    RepositoryError, TaskClaim, TaskDependencyOutput, TaskInput, TaskOutput, TaskRepository,
-    TaskRun,
+    RepositoryError, TaskClaim, TaskDependencyOutput, TaskExecutionClaim, TaskInput, TaskOutput,
+    TaskRepository, TaskRun,
 };
 use crate::workflow::{
     TaskRunIdGenerator, WorkflowDefinition, WorkflowExecutionError, WorkflowExecutionResult,
@@ -57,18 +57,48 @@ impl TaskCancellation {
     }
 }
 
-/// Context passed to every task-handler attempt.
+/// Sender used by a worker to request cooperative handler cancellation.
+#[derive(Clone, Debug)]
+pub struct TaskCancellationTrigger {
+    sender: watch::Sender<bool>,
+}
+
+impl TaskCancellationTrigger {
+    /// Requests cooperative cancellation from the handler.
+    pub fn cancel(&self) {
+        let _ = self.sender.send(true);
+    }
+}
+
+/// Context passed to every task-handler attempt, independent of its storage backend.
 #[derive(Clone, Debug)]
 pub struct TaskContext {
-    claim: TaskClaim,
+    claim: TaskExecutionClaim,
     dependency_outputs: Vec<TaskDependencyOutput>,
     cancellation: TaskCancellation,
 }
 
 impl TaskContext {
+    /// Creates a handler context and its cancellation trigger.
+    #[must_use]
+    pub fn new(
+        claim: TaskExecutionClaim,
+        dependency_outputs: Vec<TaskDependencyOutput>,
+    ) -> (Self, TaskCancellationTrigger) {
+        let (sender, receiver) = watch::channel(false);
+        (
+            Self {
+                claim,
+                dependency_outputs,
+                cancellation: TaskCancellation { receiver },
+            },
+            TaskCancellationTrigger { sender },
+        )
+    }
+
     /// Returns the immutable claim and attempt snapshot.
     #[must_use]
-    pub fn claim(&self) -> &TaskClaim {
+    pub fn claim(&self) -> &TaskExecutionClaim {
         &self.claim
     }
 
@@ -141,8 +171,18 @@ impl TaskExecutionError {
         Self::Permanent(message.into())
     }
 
-    fn is_retryable(&self) -> bool {
+    /// Returns whether this failure may be retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Retryable(_))
+    }
+
+    /// Returns the handler-provided diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Retryable(message) | Self::Permanent(message) => message,
+        }
     }
 }
 
@@ -205,7 +245,9 @@ impl TaskRegistry {
         Ok(())
     }
 
-    fn handler_for(&self, task_id: &TaskId) -> Option<Arc<dyn TaskHandler>> {
+    /// Returns a clone of the registered handler, when one exists.
+    #[must_use]
+    pub fn handler_for(&self, task_id: &TaskId) -> Option<Arc<dyn TaskHandler>> {
         self.handlers.get(task_id.as_str()).cloned()
     }
 }
@@ -399,7 +441,7 @@ pub struct TaskScheduler<R: TaskRepository + 'static> {
     worker_id: WorkerId,
     registry: Arc<TaskRegistry>,
     config: SchedulerConfig,
-    cancellations: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+    cancellations: Arc<Mutex<HashMap<String, TaskCancellationTrigger>>>,
 }
 
 impl<R: TaskRepository + 'static> Clone for TaskScheduler<R> {
@@ -471,7 +513,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
     fn register_task_cancellation(
         &self,
         task_run_id: &TaskRunId,
-        sender: watch::Sender<bool>,
+        trigger: TaskCancellationTrigger,
     ) -> Result<(), SchedulerError> {
         let key = task_run_id.as_str().to_owned();
         let mut cancellations = self
@@ -481,7 +523,7 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
 
         match cancellations.entry(key.clone()) {
             Entry::Vacant(entry) => {
-                entry.insert(sender);
+                entry.insert(trigger);
                 Ok(())
             }
             Entry::Occupied(_) => Err(SchedulerError::DuplicateActiveClaim(key)),
@@ -495,12 +537,12 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if let Some(sender) = cancellations.get(task_run_id.as_str()) {
-            let _ = sender.send(true);
+            sender.cancel();
         }
     }
 
     fn remove_task_cancellation(
-        cancellations: &Mutex<HashMap<String, watch::Sender<bool>>>,
+        cancellations: &Mutex<HashMap<String, TaskCancellationTrigger>>,
         task_run_id: &TaskRunId,
     ) {
         let mut cancellations = cancellations
@@ -792,14 +834,15 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                     let dependency_outputs = self.load_dependency_outputs(claim.task_run())?;
                     let task_run_id = claim.task_run().task_run_id().clone();
                     let expected_version = claim.task_run().version();
-                    let (cancellation_tx, cancellation_rx) = watch::channel(false);
-                    self.register_task_cancellation(&task_run_id, cancellation_tx.clone())?;
+                    let (context, cancellation_trigger) =
+                        TaskContext::new(claim.execution_claim(), dependency_outputs);
+                    self.register_task_cancellation(&task_run_id, cancellation_trigger.clone())?;
 
                     let latest = self.repository.get(&task_run_id)?;
                     if latest.status() != TaskStatus::Running
                         || latest.version() != expected_version
                     {
-                        let _ = cancellation_tx.send(true);
+                        cancellation_trigger.cancel();
                     }
 
                     let repository = Arc::clone(&self.repository);
@@ -822,9 +865,8 @@ impl<R: TaskRepository + 'static> TaskScheduler<R> {
                             config,
                             claim,
                             handler,
-                            dependency_outputs,
-                            cancellation_rx,
-                            cancellation_tx,
+                            context,
+                            cancellation_trigger,
                         })
                         .await;
                         Self::remove_task_cancellation(&cancellations, &task_run_id);
@@ -1021,9 +1063,8 @@ struct ClaimExecution<R: TaskRepository + 'static> {
     config: SchedulerConfig,
     claim: TaskClaim,
     handler: Option<Arc<dyn TaskHandler>>,
-    dependency_outputs: Vec<TaskDependencyOutput>,
-    cancellation_rx: watch::Receiver<bool>,
-    cancellation_tx: watch::Sender<bool>,
+    context: TaskContext,
+    cancellation_trigger: TaskCancellationTrigger,
 }
 
 async fn execute_claim<R: TaskRepository + 'static>(
@@ -1036,9 +1077,8 @@ async fn execute_claim<R: TaskRepository + 'static>(
         config,
         claim,
         handler,
-        dependency_outputs,
-        cancellation_rx,
-        cancellation_tx,
+        context,
+        cancellation_trigger,
     } = execution;
     let task_run_id = claim.task_run().task_run_id().clone();
     let task_id = claim.task_run().task_id().clone();
@@ -1046,13 +1086,7 @@ async fn execute_claim<R: TaskRepository + 'static>(
     let attempt_number = claim.attempt_number();
 
     let future: TaskFuture = match handler {
-        Some(handler) => handler.execute(TaskContext {
-            claim,
-            dependency_outputs,
-            cancellation: TaskCancellation {
-                receiver: cancellation_rx,
-            },
-        }),
+        Some(handler) => handler.execute(context),
         None => {
             let message = format!("no handler registered for task '{}'", task_id.as_str());
             Box::pin(async move { Err(TaskExecutionError::permanent(message)) })
@@ -1063,7 +1097,7 @@ async fn execute_claim<R: TaskRepository + 'static>(
         Some(timeout) => {
             let result = tokio::time::timeout(timeout, future).await;
             if result.is_err() {
-                let _ = cancellation_tx.send(true);
+                cancellation_trigger.cancel();
             }
             result.ok()
         }
