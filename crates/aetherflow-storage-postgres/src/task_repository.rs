@@ -589,7 +589,8 @@ impl PgTaskRepository {
         attempt_id: &AttemptId,
         lease_duration: Duration,
     ) -> Result<Option<PgTaskClaim>, StorageError> {
-        self.claim_next_inner(worker_id, attempt_id, lease_duration, None).await
+        self.claim_next_inner(worker_id, attempt_id, lease_duration, None)
+            .await
     }
 
     /// Claims work only while the supplied node incarnation and worker
