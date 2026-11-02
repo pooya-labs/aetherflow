@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M04 durable persistence and the M05 membership-gated worker execution slice are hosted-verified. Multi-process partition/rejoin and worker-loss chaos coverage remains in progress; APIs remain experimental and the complete distributed workflow engine is not production-ready.
+> **Project status:** M04 durable persistence and the M05 membership-gated worker execution slice are hosted-verified. CI covers DB-access partition/epoch takeover and a real single-NATS-server stop/start with PostgreSQL online; separate-process/multi-host partition/rejoin, active worker-loss, and clustered NATS failover chaos coverage remain in progress. APIs remain experimental and the complete distributed workflow engine is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
