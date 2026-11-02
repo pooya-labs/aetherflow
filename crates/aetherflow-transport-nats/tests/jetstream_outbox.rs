@@ -78,6 +78,28 @@ impl JetStreamEventHandler for CountingHandler {
     }
 }
 
+struct FailOnceHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+impl JetStreamEventHandler for FailOnceHandler {
+    fn handle<'a>(&'a self, event: &'a JetStreamEvent) -> EventHandlerFuture<'a> {
+        let calls = Arc::clone(&self.calls);
+        let event_id = event.event_id().to_owned();
+        Box::pin(async move {
+            if event_id.is_empty() {
+                return Err("event identity must not be empty".to_owned());
+            }
+            let attempt = calls.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                Err("simulated transient consumer failure".to_owned())
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -326,12 +348,12 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .expect("JetStream should confirm duplicate logical event");
 
     let second_consumer = NatsJetStreamConsumer::new(
-        consumer,
-        inbox,
+        consumer.clone(),
+        inbox.clone(),
         logical_consumer.clone(),
         WorkerId::parse(format!("nats-consumer-b-{suffix}")).expect("valid consumer worker ID"),
         Duration::from_millis(300),
-        handler,
+        Arc::clone(&handler),
     )
     .expect("reopen inbox-backed JetStream consumer");
     let second_metrics = second_consumer.metrics();
@@ -371,6 +393,90 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     assert_eq!(inbox_status, "processed");
     assert_eq!(inbox_attempts, 1);
     assert_eq!(inbox_token, 1);
+
+    // A transient application error releases the inbox row and leaves the
+    // JetStream delivery unacknowledged. Its redelivery must be claimable again.
+    let retry_event_id = format!("consumer-retry-{suffix}");
+    let retry_envelope = serde_json::json!({
+        "schema_version": 1,
+        "event_id": retry_event_id,
+        "aggregate_type": "test",
+        "aggregate_id": format!("aggregate-{suffix}"),
+        "aggregate_version": 1,
+        "event_type": "test.retry",
+        "payload": {"retry": true},
+    });
+    let mut retry_headers = async_nats::HeaderMap::new();
+    retry_headers.append("Nats-Msg-Id", format!("handler-retry-{suffix}"));
+    let retry_ack = jetstream
+        .publish_with_headers(
+            format!("aetherflow.integration.{suffix}.events"),
+            retry_headers,
+            serde_json::to_vec(&retry_envelope)
+                .expect("encode retry event")
+                .into(),
+        )
+        .await
+        .expect("publish retry test event");
+    retry_ack.await.expect("JetStream should store retry test event");
+
+    let retry_calls = Arc::new(AtomicUsize::new(0));
+    let retry_handler = Arc::new(FailOnceHandler {
+        calls: Arc::clone(&retry_calls),
+    });
+    let retry_consumer_name = format!("retry_{}", suffix.replace('_', ""));
+    let retry_consumer = NatsJetStreamConsumer::new(
+        consumer,
+        inbox,
+        retry_consumer_name.clone(),
+        WorkerId::parse(format!("nats-retry-consumer-{suffix}"))
+            .expect("valid retry consumer worker ID"),
+        Duration::from_millis(300),
+        retry_handler,
+    )
+    .expect("create retrying JetStream consumer");
+    let retry_metrics = retry_consumer.metrics();
+    let (retry_shutdown_tx, retry_shutdown_rx) = watch::channel(false);
+    let retry_task = tokio::spawn(async move { retry_consumer.run(retry_shutdown_rx).await });
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = retry_metrics.snapshot();
+            if snapshot.handler_failures == 1 && snapshot.processed == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("handler failure should be retried and eventually processed");
+    retry_shutdown_tx
+        .send(true)
+        .expect("signal retry consumer shutdown");
+    retry_task
+        .await
+        .expect("join retry consumer")
+        .expect("retry consumer should stop cleanly");
+    assert_eq!(retry_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(retry_metrics.snapshot().handler_failures, 1);
+    assert_eq!(retry_metrics.snapshot().processed, 1);
+
+    let retry_state = pool
+        .get()
+        .await
+        .expect("get retry inbox verification connection")
+        .query_one(
+            "SELECT status, attempts, claim_token
+             FROM consumer_inbox WHERE consumer_name = $1 AND event_id = $2",
+            &[&retry_consumer_name, &format!("consumer-retry-{suffix}")],
+        )
+        .await
+        .expect("inspect retried inbox event");
+    let retry_status: String = retry_state.get(0);
+    let retry_attempts: i64 = retry_state.get(1);
+    let retry_token: i64 = retry_state.get(2);
+    assert_eq!(retry_status, "processed");
+    assert_eq!(retry_attempts, 2);
+    assert_eq!(retry_token, 2);
 
     let _ = jetstream.delete_stream(stream_name).await;
 }
