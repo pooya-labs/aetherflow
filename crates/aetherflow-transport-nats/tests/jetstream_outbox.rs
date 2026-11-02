@@ -1,5 +1,5 @@
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,10 +12,14 @@ use aetherflow_storage_postgres::{
     OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
     PostgresOutboxDispatcher,
 };
-use aetherflow_transport_nats::NatsJetStreamPublisher;
+use aetherflow_transport_nats::{
+    EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
+    NatsJetStreamPublisher,
+};
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use futures_util::StreamExt;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_postgres::{Config, NoTls};
 
@@ -48,6 +52,24 @@ impl OutboxPublisher for CrashWindowPublisher {
             } else {
                 Ok(())
             }
+        })
+    }
+}
+
+struct CountingHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+impl JetStreamEventHandler for CountingHandler {
+    fn handle<'a>(&'a self, event: &'a JetStreamEvent) -> EventHandlerFuture<'a> {
+        let calls = Arc::clone(&self.calls);
+        let event_id = event.event_id().to_owned();
+        Box::pin(async move {
+            if event_id.is_empty() {
+                return Err("event identity must not be empty".to_owned());
+            }
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         })
     }
 }
@@ -226,30 +248,114 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     assert_eq!(final_state.get::<_, i32>(1), 2);
     drop(client);
 
-    let mut messages = consumer.messages().await.expect("open pull message stream");
-    let first = timeout(Duration::from_secs(5), messages.next())
-        .await
-        .expect("JetStream should deliver the stored event")
-        .expect("consumer stream should remain open")
-        .expect("read stored JetStream message");
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&first.payload).expect("decode published event envelope");
-    assert_eq!(envelope["schema_version"], 1);
-    assert_eq!(envelope["event_id"], first_claim.event_id().to_string());
-    assert_eq!(envelope["event_type"], first_claim.event_type());
-    assert_eq!(envelope["aggregate_id"], first_claim.aggregate_id());
-    first.ack().await.expect("acknowledge test message");
+    let inbox = PgInboxRepository::from_pool(pool.clone());
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let handler = Arc::new(CountingHandler {
+        calls: Arc::clone(&handler_calls),
+    });
+    let logical_consumer = format!("billing_{}", suffix.replace('_', ""));
+    let first_consumer = NatsJetStreamConsumer::new(
+        consumer.clone(),
+        inbox.clone(),
+        logical_consumer.clone(),
+        WorkerId::parse(format!("nats-consumer-a-{suffix}")).expect("valid consumer worker ID"),
+        Duration::from_millis(300),
+        Arc::clone(&handler),
+    )
+    .expect("create inbox-backed JetStream consumer");
+    let first_metrics = first_consumer.metrics();
+    let (first_shutdown_tx, first_shutdown_rx) = watch::channel(false);
+    let first_task = tokio::spawn(async move { first_consumer.run(first_shutdown_rx).await });
 
-    // The duplicate publication must not create a second stored message within
-    // the stream's configured duplicate window.
-    match timeout(Duration::from_millis(250), messages.next()).await {
-        Err(_) | Ok(None) => {}
-        Ok(Some(Err(error))) => panic!("JetStream consumer failed: {error}"),
-        Ok(Some(Ok(message))) => {
-            panic!("JetStream stored a duplicate event: {:?}", message.subject)
+    timeout(Duration::from_secs(5), async {
+        while first_metrics.snapshot().processed == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }
+    })
+    .await
+    .expect("first JetStream delivery should be processed");
+    first_shutdown_tx.send(true).expect("signal first consumer shutdown");
+    first_task
+        .await
+        .expect("join first consumer")
+        .expect("first consumer should stop cleanly");
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(first_metrics.snapshot().processed, 1);
 
-    drop(messages);
+    // Republish the same logical event ID under a different NATS message ID.
+    // This simulates a broker redelivery after the inbox commit: the inbox must
+    // suppress the handler while the consumer still acknowledges the delivery.
+    let duplicate_envelope = serde_json::json!({
+        "schema_version": 1,
+        "event_id": first_claim.event_id().to_string(),
+        "aggregate_type": first_claim.aggregate_type(),
+        "aggregate_id": first_claim.aggregate_id(),
+        "aggregate_version": first_claim.aggregate_version(),
+        "event_type": first_claim.event_type(),
+        "payload": first_claim.payload(),
+    });
+    let mut duplicate_headers = async_nats::HeaderMap::new();
+    duplicate_headers.append("Nats-Msg-Id", format!("redelivery-{suffix}"));
+    let duplicate_ack = jetstream
+        .publish_with_headers(
+            format!("aetherflow.integration.{suffix}.events"),
+            duplicate_headers,
+            serde_json::to_vec(&duplicate_envelope)
+                .expect("encode duplicate logical event")
+                .into(),
+        )
+        .await
+        .expect("publish duplicate logical event to JetStream");
+    duplicate_ack
+        .await
+        .expect("JetStream should confirm duplicate logical event");
+
+    let second_consumer = NatsJetStreamConsumer::new(
+        consumer,
+        inbox,
+        logical_consumer,
+        WorkerId::parse(format!("nats-consumer-b-{suffix}")).expect("valid consumer worker ID"),
+        Duration::from_millis(300),
+        handler,
+    )
+    .expect("reopen inbox-backed JetStream consumer");
+    let second_metrics = second_consumer.metrics();
+    let (second_shutdown_tx, second_shutdown_rx) = watch::channel(false);
+    let second_task = tokio::spawn(async move { second_consumer.run(second_shutdown_rx).await });
+    timeout(Duration::from_secs(5), async {
+        while second_metrics.snapshot().duplicates == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("duplicate delivery should be suppressed by the durable inbox");
+    second_shutdown_tx
+        .send(true)
+        .expect("signal second consumer shutdown");
+    second_task
+        .await
+        .expect("join second consumer")
+        .expect("second consumer should stop cleanly");
+
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_metrics.snapshot().duplicates, 1);
+    let inbox_state = pool
+        .get()
+        .await
+        .expect("get inbox verification connection")
+        .query_one(
+            "SELECT status, attempts, claim_token
+             FROM consumer_inbox WHERE consumer_name = $1 AND event_id = $2",
+            &[&logical_consumer, &first_claim.event_id().to_string()],
+        )
+        .await
+        .expect("inspect processed inbox event");
+    let inbox_status: String = inbox_state.get(0);
+    let inbox_attempts: i64 = inbox_state.get(1);
+    let inbox_token: i64 = inbox_state.get(2);
+    assert_eq!(inbox_status, "processed");
+    assert_eq!(inbox_attempts, 1);
+    assert_eq!(inbox_token, 1);
+
     let _ = jetstream.delete_stream(stream_name).await;
 }
