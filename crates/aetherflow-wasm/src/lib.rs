@@ -25,6 +25,12 @@ pub const MAX_PLUGIN_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum fuel budget permitted for one plugin invocation.
 pub const MAX_PLUGIN_FUEL: u64 = 100_000_000;
 
+/// Maximum guest-to-host component call transfer budget (16 KiB per call).
+pub const MAX_PLUGIN_HOSTCALL_FUEL: usize = 16 * 1024;
+
+/// Maximum simultaneously-live component handles in one Store.
+pub const MAX_PLUGIN_COMPONENT_HANDLES: usize = 10_000;
+
 /// Maximum wall-clock execution budget for one plugin invocation.
 pub const MAX_PLUGIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -168,8 +174,12 @@ pub struct ExecutionLimits {
     pub max_memory_bytes: usize,
     /// Maximum number of table elements per table.
     pub max_table_elements: usize,
-    /// Wasmtime fuel budget.
+    /// Wasmtime instruction fuel budget.
     pub fuel: u64,
+    /// Maximum bytes a guest may transfer to the host in one component call.
+    pub hostcall_fuel: usize,
+    /// Maximum simultaneously-live component-model handles.
+    pub max_component_handles: usize,
     /// Wall-clock deadline; the engine must actively interrupt execution.
     pub wall_clock_timeout: Duration,
     /// Maximum UTF-8 log message size.
@@ -184,6 +194,8 @@ impl Default for ExecutionLimits {
             max_memory_bytes: 16 * 1024 * 1024,
             max_table_elements: 1_024,
             fuel: 10_000_000,
+            hostcall_fuel: 4 * 1024,
+            max_component_handles: 1_024,
             wall_clock_timeout: Duration::from_secs(2),
             max_log_message_bytes: MAX_LOG_MESSAGE_BYTES,
         }
@@ -207,6 +219,14 @@ impl ExecutionLimits {
         }
         if self.fuel == 0 || self.fuel > MAX_PLUGIN_FUEL {
             return Err(LimitConfigurationError::FuelOutOfRange);
+        }
+        if self.hostcall_fuel == 0 || self.hostcall_fuel > MAX_PLUGIN_HOSTCALL_FUEL {
+            return Err(LimitConfigurationError::HostcallFuelOutOfRange);
+        }
+        if self.max_component_handles == 0
+            || self.max_component_handles > MAX_PLUGIN_COMPONENT_HANDLES
+        {
+            return Err(LimitConfigurationError::ComponentHandlesOutOfRange);
         }
         if self.wall_clock_timeout.is_zero()
             || self.wall_clock_timeout > MAX_PLUGIN_EXECUTION_TIMEOUT
@@ -292,6 +312,10 @@ pub enum LimitConfigurationError {
     TableLimitOutOfRange,
     /// Fuel must be between 1 and 100,000,000 units.
     FuelOutOfRange,
+    /// Host-call transfer fuel must be between 1 byte and 16 KiB.
+    HostcallFuelOutOfRange,
+    /// Component handle count must be between 1 and 10,000.
+    ComponentHandlesOutOfRange,
     /// Wall-clock timeout must be greater than zero and at most 10 seconds.
     TimeoutOutOfRange,
     /// Log message limit must be between 1 byte and 4 KiB.
@@ -306,6 +330,8 @@ impl fmt::Display for LimitConfigurationError {
             Self::MemoryLimitOutOfRange => "plugin memory limit is outside v1 bounds",
             Self::TableLimitOutOfRange => "plugin table limit is outside v1 bounds",
             Self::FuelOutOfRange => "plugin fuel budget is outside v1 bounds",
+            Self::HostcallFuelOutOfRange => "plugin host-call fuel is outside v1 bounds",
+            Self::ComponentHandlesOutOfRange => "plugin component handle limit is outside v1 bounds",
             Self::TimeoutOutOfRange => "plugin wall-clock timeout is outside v1 bounds",
             Self::LogLimitOutOfRange => "plugin log message limit is outside v1 bounds",
         })
@@ -373,6 +399,20 @@ mod tests {
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::FuelOutOfRange)
+        );
+
+        limits = ExecutionLimits::default();
+        limits.hostcall_fuel = super::MAX_PLUGIN_HOSTCALL_FUEL + 1;
+        assert_eq!(
+            limits.validate(),
+            Err(LimitConfigurationError::HostcallFuelOutOfRange)
+        );
+
+        limits = ExecutionLimits::default();
+        limits.max_component_handles = super::MAX_PLUGIN_COMPONENT_HANDLES + 1;
+        assert_eq!(
+            limits.validate(),
+            Err(LimitConfigurationError::ComponentHandlesOutOfRange)
         );
 
         limits = ExecutionLimits::default();
