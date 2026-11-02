@@ -1,0 +1,16 @@
+[package]
+name = "aetherflow-plugin-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Host harness for the minimal AetherFlow ABI v1 plugin example."
+publish = false
+
+[dependencies]
+aetherflow-core = { path = "../../../crates/aetherflow-core" }
+aetherflow-wasm = { path = "../../../crates/aetherflow-wasm" }
+wit-component = "=0.254.2"
+
+[lints]
+workspace = true

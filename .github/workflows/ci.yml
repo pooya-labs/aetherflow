@@ -75,6 +75,14 @@ jobs:
       - name: Build workspace
         run: cargo +1.99.1 build --workspace --release --locked
 
+      - name: Install WebAssembly guest target
+        run: rustup +1.99.1 target add wasm32-unknown-unknown
+
+      - name: Build and execute minimal ABI v1 plugin example
+        run: |
+          cargo +1.99.1 build -p aetherflow-plugin-guest --target wasm32-unknown-unknown --release --locked
+          cargo +1.99.1 run -p aetherflow-plugin-host --release --locked -- target/wasm32-unknown-unknown/release/aetherflow_plugin_guest.wasm
+
       - name: Build documentation
         run: cargo +1.99.1 doc --workspace --no-deps --locked
       - name: Upload resolved Cargo.lock

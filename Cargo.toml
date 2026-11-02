@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/aetherflow-core", "crates/aetherflow-runtime", "crates/aetherflow-storage-postgres", "crates/aetherflow-transport-nats", "crates/aetherflow-wasm", "apps/aetherflow-server"]
+members = [
+    "crates/aetherflow-core",
+    "crates/aetherflow-runtime",
+    "crates/aetherflow-storage-postgres",
+    "crates/aetherflow-transport-nats",
+    "crates/aetherflow-wasm",
+    "apps/aetherflow-server",
+    "examples/minimal-plugin/guest",
+    "examples/minimal-plugin/host",
+]
 
 [workspace.package]
 version = "0.1.0"

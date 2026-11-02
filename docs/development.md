@@ -43,6 +43,27 @@ Task inputs and outputs are opaque byte payloads limited to 1 MiB each; applicat
 
 The foundation and current single-node runtime milestones are checked by hosted CI. The latest fully green Rust workspace run is `41365026218`; it verified 53 tests (15 core, 35 runtime, 2 server, and 1 storage unit test), formatting, Clippy, release build, and docs. A lockfile is committed; regenerate it with `cargo generate-lockfile` whenever dependencies change, then verify with `cargo fetch --locked`. CI runs every check with locked dependency resolution and publishes the resolved lockfile as a short-lived artifact for review when the dependency graph changes. The latest fully green workflow dataflow run is `41359053561`. The current Rust workspace run `41365026218` passed formatting, Clippy, all 53 default workspace tests, release build, and docs. The PostgreSQL 18 integration run `41365026199` executed both migration and durable task-repository tests successfully.
 
+## Build and run the minimal ABI v1 plugin
+
+The reproducible Rust guest/host example lives in
+`examples/minimal-plugin/`. It uses the checked-in WIT package, pinned
+`wit-bindgen` 0.60.0, and host-side `wit-component` 0.254.2. The guest targets
+`wasm32-unknown-unknown` so it does not acquire ambient WASI imports.
+
+From the repository root:
+
+```bash
+rustup +1.99.1 target add wasm32-unknown-unknown
+cargo +1.99.1 build --locked -p aetherflow-plugin-guest --target wasm32-unknown-unknown --release
+cargo +1.99.1 run --locked -p aetherflow-plugin-host --release -- target/wasm32-unknown-unknown/release/aetherflow_plugin_guest.wasm
+```
+
+The host harness validates the guest's embedded WIT metadata, componentizes the
+core module, and executes it through `WasmPluginRuntime`. It verifies unchanged
+opaque output bytes and runs both a default-deny invocation and an invocation
+with `log.write` explicitly granted. The Rust CI workflow builds and runs this
+example on every main push.
+
 ## PostgreSQL persistence work
 
 The initial PostgreSQL schema draft lives in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`. Its intended claim, heartbeat, fencing, recovery, and outbox transaction boundaries are described in `docs/persistence/postgres-transaction-contract.md`. The initial migration has been executed successfully against PostgreSQL 18 in runs `41362986570` and `41365026199`; the async runner applies DDL and checksum ledger transactionally, serializes concurrent first startup, rejects checksum/history/version drift, and returns `AlreadyCurrent` on repeat. The latest PostgreSQL run also verified the initial durable task repository flow and lease recovery. This does not yet imply a complete production workflow engine.

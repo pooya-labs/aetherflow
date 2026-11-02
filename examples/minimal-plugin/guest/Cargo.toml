@@ -1,0 +1,17 @@
+[package]
+name = "aetherflow-plugin-guest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Minimal AetherFlow ABI v1 WebAssembly plugin guest."
+publish = false
+
+[dependencies]
+wit-bindgen = "=0.60.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
