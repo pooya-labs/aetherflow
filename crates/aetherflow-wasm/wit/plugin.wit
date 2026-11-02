@@ -1,0 +1,51 @@
+package aetherflow:plugin@1.0.0;
+
+/// Stable, engine-independent values exchanged with a plugin.
+interface types {
+    record task-context {
+        workflow-run-id: string,
+        task-run-id: string,
+        attempt: u32,
+        deadline-unix-ms: option<u64>,
+    }
+
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    record plugin-error {
+        code: string,
+        message: string,
+    }
+
+    enum host-error {
+        capability-denied,
+        message-too-large,
+    }
+}
+
+/// The only host capability exposed by ABI v1.
+interface host {
+    use types.{log-level, host-error};
+
+    /// Writes a bounded diagnostic message when the invocation has log.write.
+    log: func(level: log-level, message: string) -> result<_, host-error>;
+}
+
+/// The plugin implementation.
+interface guest {
+    use types.{task-context, plugin-error};
+
+    /// Executes one task and returns an opaque output payload.
+    execute: func(context: task-context, input: list<u8>) -> result<list<u8>, plugin-error>;
+}
+
+/// ABI v1 has no ambient WASI imports; all host access is explicit.
+world task-plugin {
+    import host;
+    export guest;
+}
