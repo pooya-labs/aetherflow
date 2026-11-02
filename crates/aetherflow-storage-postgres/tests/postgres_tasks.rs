@@ -799,7 +799,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("read task after failed completion transaction");
     assert_eq!(rolled_back_task.status(), TaskStatus::Running);
-    assert_eq!(rolled_back_task.version(), rollback_claim.task_run().version());
+    assert_eq!(
+        rolled_back_task.version(),
+        rollback_claim.task_run().version()
+    );
     let rolled_back_attempt: String = client
         .query_one(
             "SELECT outcome FROM task_attempts WHERE task_run_id = $1",
