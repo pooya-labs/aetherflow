@@ -19,8 +19,7 @@ use aetherflow_transport_nats::{
     NatsJetStreamPublisher,
 };
 use async_nats::jetstream::{
-    self, consumer::pull::Config as PullConsumerConfig,
-    consumer::PullConsumer,
+    self, consumer::PullConsumer, consumer::pull::Config as PullConsumerConfig,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
@@ -513,9 +512,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .expect("valid publisher crash workflow ID");
     let crash_task_run_id = TaskRunId::parse(format!("nats-publisher-crash-task-run-{suffix}"))
         .expect("valid publisher crash task-run ID");
-    let crash_retry_policy =
-        RetryPolicy::new(NonZeroU32::new(1).expect("non-zero attempts"), 0, 0)
-            .expect("valid publisher crash retry policy");
+    let crash_retry_policy = RetryPolicy::new(NonZeroU32::new(1).expect("non-zero attempts"), 0, 0)
+        .expect("valid publisher crash retry policy");
     repository
         .create_workflow(
             &crash_workflow_run_id,
@@ -559,10 +557,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         "jetstream_child_process_exits_after_broker_storage_before_outbox_ack",
         "--nocapture",
     ])
-    .env(
-        "AETHERFLOW_CRASH_PUBLISH_DATABASE_URL",
-        &database_url,
-    )
+    .env("AETHERFLOW_CRASH_PUBLISH_DATABASE_URL", &database_url)
     .env("AETHERFLOW_CRASH_PUBLISH_NATS_URL", &nats_url)
     .env("AETHERFLOW_CRASH_PUBLISH_SUBJECT", &publisher_crash_subject)
     .env(
@@ -662,7 +657,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let stored_crash_envelope: serde_json::Value =
         serde_json::from_slice(&stored_crash_event.payload)
             .expect("decode publisher crash-window envelope");
-    assert_eq!(stored_crash_envelope["event_id"], crash_event_id.to_string());
+    assert_eq!(
+        stored_crash_envelope["event_id"],
+        crash_event_id.to_string()
+    );
     stored_crash_event
         .double_ack()
         .await
@@ -753,13 +751,19 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     ])
     .env("AETHERFLOW_CRASH_CONSUMER_DATABASE_URL", &database_url)
     .env("AETHERFLOW_CRASH_CONSUMER_NATS_URL", &nats_url)
-    .env("AETHERFLOW_CRASH_CONSUMER_STREAM", &consumer_crash_stream_name)
+    .env(
+        "AETHERFLOW_CRASH_CONSUMER_STREAM",
+        &consumer_crash_stream_name,
+    )
     .env("AETHERFLOW_CRASH_CONSUMER_DURABLE", &consumer_crash_durable)
     .env(
         "AETHERFLOW_CRASH_CONSUMER_LOGICAL_NAME",
         &consumer_crash_logical_name,
     )
-    .env("AETHERFLOW_CRASH_CONSUMER_EVENT_ID", &consumer_crash_event_id)
+    .env(
+        "AETHERFLOW_CRASH_CONSUMER_EVENT_ID",
+        &consumer_crash_event_id,
+    )
     .env(
         "AETHERFLOW_CRASH_CONSUMER_WORKER_ID",
         format!("crash-consumer-worker-{suffix}"),
@@ -785,10 +789,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         )
         .await
         .expect("inspect inbox after consumer process exit");
-    assert_eq!(
-        consumer_crash_inbox_state.get::<_, String>(0),
-        "processed"
-    );
+    assert_eq!(consumer_crash_inbox_state.get::<_, String>(0), "processed");
     assert_eq!(consumer_crash_inbox_state.get::<_, i64>(1), 1);
     assert_eq!(consumer_crash_inbox_state.get::<_, i64>(2), 1);
     let side_effect_count: i64 = pool
@@ -866,7 +867,6 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let _ = jetstream.delete_stream(stream_name).await;
 }
 
-
 /// Child process for the publisher crash-window test. It commits an outbox
 /// claim, stores the event in JetStream, and exits without acknowledging the
 /// outbox row. The parent expects exit code 86.
@@ -886,11 +886,14 @@ async fn jetstream_child_process_exits_after_broker_storage_before_outbox_ack() 
         std::env::var("AETHERFLOW_CRASH_PUBLISH_WORKER_ID"),
         std::env::var("AETHERFLOW_CRASH_PUBLISH_EVENT_ID"),
         std::env::var("AETHERFLOW_CRASH_PUBLISH_LEASE_MS"),
-    ) else {
+    )
+    else {
         return;
     };
 
-    let config: Config = database_url.parse().expect("valid publisher child database URL");
+    let config: Config = database_url
+        .parse()
+        .expect("valid publisher child database URL");
     let manager = Manager::from_config(
         config,
         NoTls,
@@ -912,7 +915,11 @@ async fn jetstream_child_process_exits_after_broker_storage_before_outbox_ack() 
         .claim_outbox_events(&worker_id, 1, lease)
         .await
         .expect("claim outbox event in child process");
-    assert_eq!(claims.len(), 1, "child should claim exactly the crash test event");
+    assert_eq!(
+        claims.len(),
+        1,
+        "child should claim exactly the crash test event"
+    );
     let claim = &claims[0];
     assert_eq!(claim.event_id(), expected_event_id);
 
@@ -951,11 +958,14 @@ async fn jetstream_child_process_exits_after_inbox_commit_before_broker_ack() {
         std::env::var("AETHERFLOW_CRASH_CONSUMER_LOGICAL_NAME"),
         std::env::var("AETHERFLOW_CRASH_CONSUMER_EVENT_ID"),
         std::env::var("AETHERFLOW_CRASH_CONSUMER_WORKER_ID"),
-    ) else {
+    )
+    else {
         return;
     };
 
-    let config: Config = database_url.parse().expect("valid consumer child database URL");
+    let config: Config = database_url
+        .parse()
+        .expect("valid consumer child database URL");
     let manager = Manager::from_config(
         config,
         NoTls,
