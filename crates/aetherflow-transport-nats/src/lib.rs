@@ -52,6 +52,8 @@ impl NatsJetStreamPublisher {
 
 impl OutboxPublisher for NatsJetStreamPublisher {
     fn publish<'a>(&'a self, event: &'a OutboxClaim) -> OutboxPublishFuture<'a> {
+        let context = self.context.clone();
+        let subject = self.subject.clone();
         Box::pin(async move {
             let envelope = OutboxEnvelope {
                 schema_version: 1,
@@ -72,9 +74,8 @@ impl OutboxPublisher for NatsJetStreamPublisher {
 
             // JetStream has a two-stage API: the first await sends the request;
             // the returned future resolves only once the server confirms storage.
-            let acknowledgement = self
-                .context
-                .publish_with_headers(self.subject.as_str(), headers, payload.into())
+            let acknowledgement = context
+                .publish_with_headers(subject, headers, payload.into())
                 .await
                 .map_err(|error| {
                     OutboxPublishError::new(format!("send JetStream publish: {error}"))
