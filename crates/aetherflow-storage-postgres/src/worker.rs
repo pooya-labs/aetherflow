@@ -310,9 +310,16 @@ impl PostgresTaskWorker {
         let mut active_tasks: JoinSet<Result<(), PostgresWorkerError>> = JoinSet::new();
         let active_task_runs = Arc::new(Mutex::new(HashMap::<String, TaskRunId>::new()));
         let mut registration = self.renew_membership(&self.registration).await?;
-        let mut stop_claiming = *shutdown.borrow_and_update()
+        let shutdown_requested = *shutdown.borrow_and_update();
+        let mut stop_claiming = shutdown_requested
             || registration.status() != MembershipStatus::Active
             || registration.node().status() != MembershipStatus::Active;
+        if shutdown_requested && registration.status() == MembershipStatus::Active {
+            registration = self
+                .membership_repository
+                .drain_worker(&registration)
+                .await?;
+        }
         let mut shutdown_started_at = stop_claiming.then(tokio::time::Instant::now);
         let mut cancellation_started_at = None;
         let mut membership_heartbeat = tokio::time::interval(self.config.heartbeat_interval);
@@ -439,7 +446,7 @@ impl PostgresTaskWorker {
                         shutdown_started_at = Some(tokio::time::Instant::now());
                     }
                 }
-                _ = membership_heartbeat.tick(), if !stop_claiming => {
+                _ = membership_heartbeat.tick() => {
                     registration = self.renew_membership(&registration).await?;
                     if registration.status() != MembershipStatus::Active
                         || registration.node().status() != MembershipStatus::Active
