@@ -1634,11 +1634,11 @@ impl CombinedChaosChild {
 
 impl Drop for CombinedChaosChild {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            if child.try_wait().ok().flatten().is_none() {
-                Self::kill_process_group(&mut child);
-                let _ = child.wait();
-            }
+        if let Some(mut child) = self.0.take()
+            && child.try_wait().ok().flatten().is_none()
+        {
+            Self::kill_process_group(&mut child);
+            let _ = child.wait();
         }
     }
 }
