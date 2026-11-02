@@ -182,7 +182,9 @@ impl PgMembershipRepository {
                 &[&node_id.as_str(), &incarnation_id.as_str(), &lease_millis],
             )
             .await
-            .map_err(|error| StorageError::Database(error.to_string()))?;
+            .map_err(|error| {
+                StorageError::Database(format!("join node membership: {error:?}"))
+            })?;
 
         let Some(row) = row else {
             return Err(StorageError::NodeLeaseBusy(node_id.as_str().to_owned()));
