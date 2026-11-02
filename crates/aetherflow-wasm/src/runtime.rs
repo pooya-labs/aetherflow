@@ -498,7 +498,8 @@ mod tests {
             store
                 .set_fuel(limits.fuel)
                 .expect("set table-growth probe fuel");
-            store.set_epoch_deadline(u64::MAX);
+            // The API adds this relative budget to the current epoch; avoid overflow.
+            store.set_epoch_deadline(1_000);
 
             let instance = wasmtime::Instance::new(&mut store, &module, &[])
                 .expect("instantiate table-growth probe");
