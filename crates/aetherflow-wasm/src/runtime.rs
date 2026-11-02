@@ -194,7 +194,9 @@ impl HostState {
             .table_elements(limits.max_table_elements)
             .instances(limits.max_core_instances)
             .memories(1)
-            .tables(1)
+            // Rust Component Model guests produced by wit-bindgen require
+            // two tables for their canonical ABI/runtime support glue.
+            .tables(2)
             .build();
 
         Self {
