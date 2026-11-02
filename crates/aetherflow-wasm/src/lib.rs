@@ -331,7 +331,9 @@ impl fmt::Display for LimitConfigurationError {
             Self::TableLimitOutOfRange => "plugin table limit is outside v1 bounds",
             Self::FuelOutOfRange => "plugin fuel budget is outside v1 bounds",
             Self::HostcallFuelOutOfRange => "plugin host-call fuel is outside v1 bounds",
-            Self::ComponentHandlesOutOfRange => "plugin component handle limit is outside v1 bounds",
+            Self::ComponentHandlesOutOfRange => {
+                "plugin component handle limit is outside v1 bounds"
+            }
             Self::TimeoutOutOfRange => "plugin wall-clock timeout is outside v1 bounds",
             Self::LogLimitOutOfRange => "plugin log message limit is outside v1 bounds",
         })
@@ -357,7 +359,10 @@ mod tests {
 
         capabilities.grant(Capability::LogWrite);
         assert!(capabilities.allows(Capability::LogWrite));
-        assert_eq!(capabilities.iter().collect::<Vec<_>>(), vec![Capability::LogWrite]);
+        assert_eq!(
+            capabilities.iter().collect::<Vec<_>>(),
+            vec![Capability::LogWrite]
+        );
     }
 
     #[test]
@@ -365,8 +370,10 @@ mod tests {
         assert!(PLUGIN_ABI_V1.supports(PluginAbiVersion { major: 1, minor: 0 }));
         assert!(!PLUGIN_ABI_V1.supports(PluginAbiVersion { major: 1, minor: 1 }));
         assert!(!PLUGIN_ABI_V1.supports(PluginAbiVersion { major: 2, minor: 0 }));
-        assert!(PluginAbiVersion { major: 1, minor: 2 }
-            .supports(PluginAbiVersion { major: 1, minor: 1 }));
+        assert!(
+            PluginAbiVersion { major: 1, minor: 2 }
+                .supports(PluginAbiVersion { major: 1, minor: 1 })
+        );
     }
 
     #[test]
