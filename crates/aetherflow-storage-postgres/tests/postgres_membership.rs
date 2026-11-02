@@ -44,8 +44,7 @@ impl TcpDatabaseGate {
         let address = listener
             .local_addr()
             .expect("read isolated PostgreSQL TCP gate address");
-        let (control, mut commands) =
-            mpsc::unbounded_channel::<(bool, oneshot::Sender<()>)>();
+        let (control, mut commands) = mpsc::unbounded_channel::<(bool, oneshot::Sender<()>)>();
         let task = tokio::spawn(async move {
             let mut available = true;
             let mut connections = JoinSet::new();
@@ -894,10 +893,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
             &role_password,
         )
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_NAME",
-            &database_name,
-        )
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
         .env(
             "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
             database_gate.address.port().to_string(),
