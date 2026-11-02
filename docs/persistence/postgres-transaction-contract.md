@@ -1,6 +1,6 @@
 # PostgreSQL persistence transaction contract
 
-**Status:** M04 complete and hosted-verified. The durable worker/coordinator, PostgreSQL inbox, NATS JetStream publisher/consumer, and OS-process crash-window tests passed PostgreSQL 18 + real NATS run `41380067612` and Rust CI run `41380067843`. M05 node membership and worker registration are specified in [ADR-0008](../decisions/0008-node-membership-and-worker-ownership.md) but not yet implemented.
+**Status:** M04 is complete. The first M05 membership persistence slice is implemented and passed PostgreSQL 18 `41382505310` and Rust CI `41382505507`: additive migration v3, node/worker lease repository, concurrent join fencing, node takeover and drain tests. Membership is not yet enforced inside task claim/settlement transactions; see [ADR-0008](../decisions/0008-node-membership-and-worker-ownership.md).
 
 ## Source of truth and time
 
@@ -129,6 +129,20 @@ The required ordering is: claim inbox; run the application handler; acknowledge 
 
 PostgreSQL 18 + real NATS integration run `41380067612` verifies broker-accepted/outbox-ack retry, stable JetStream message-ID deduplication, inbox-backed event consumption, logical duplicate suppression under a distinct broker message ID, long-handler lease/progress heartbeat, and failed-handler release/redelivery/retry. It also terminates a consumer subprocess after a test side effect and inbox completion but before broker acknowledgement. JetStream redelivers to a fresh consumer, which observes `AlreadyProcessed`, acknowledges the delivery, and does not rerun the handler or duplicate the side effect. Both process-death child tests passed; the NATS integration test binary reports 3 passed and 0 failed.
 
+## Node membership and worker registration
+
+Migration v3 adds `cluster_nodes` and `worker_registrations`. A stable logical `node_id` identifies a node across restarts; each process must supply a fresh `incarnation_id`. Every successful takeover after the previous database lease expires increments `membership_epoch`. The epoch is the membership fencing token: a handle carrying an older incarnation/epoch cannot heartbeat or drain the node, renew a worker, or register workers after takeover.
+
+`PgMembershipRepository::join_node` is idempotent for the same active incarnation. A competing incarnation receives `NodeLeaseBusy` while the current node lease is live. Once that lease expires, a new incarnation may take over and receives the next epoch. All lease creation, renewal and expiry checks use PostgreSQL `clock_timestamp()`.
+
+A worker registration is unique to one process instance and records its parent node ID/epoch, concurrency limit, status and lease. Registration and heartbeat validate the parent node first; the worker lease is capped at the node lease expiry. A node heartbeat that shortens its own lease also caps the expiry of its registered worker leases in the same transaction. `active_workers` returns only registrations whose worker and parent node are active and unexpired.
+
+Node and worker states are `active` and `draining`. A draining node can heartbeat while finishing existing work but cannot admit new worker registrations. Draining a node updates its active worker registrations in the same transaction. A draining worker may heartbeat while finishing existing work but is excluded from active-worker discovery. Worker IDs are process-scoped and must not be reused across restarts.
+
+PostgreSQL 18 membership tests verify same-incarnation renewal without epoch change, rejection of a competing live incarnation, worker registration and lease capping, worker/node drain, renewed draining leases, takeover after expiry with epoch 1→2, stale node/worker heartbeat rejection, active-worker discovery after takeover, and concurrent first join where exactly one incarnation wins (run `41382505310`; Rust CI `41382505507`).
+
+**Current enforcement boundary:** These persistence APIs are implemented, but `PostgresTaskWorker` and the task repository's claim/completion/failure/cancellation/timeout/recovery SQL do not yet enforce membership. Until the follow-up transaction gate is implemented, per-task leases and fencing remain the only task-write guard. The required lock order is node → worker → task → attempt/outbox, with node and worker validation in the same short transaction as each task mutation. Node supervisor renew/drain orchestration, partition/rejoin, task rejection after epoch takeover, and multi-node worker-loss tests remain open M05 work.
+
 ## Migration discipline
 
 - Each migration is ordered, immutable after release, and checksummed. The initial v1 schema remains unchanged; v2 adds the durable consumer inbox.
@@ -143,4 +157,4 @@ A lease is temporary permission to attempt work, not proof that the previous wor
 
 ## Implemented vertical slice and remaining scope
 
-M04 is complete: the repository includes `PgTaskRepository`, `PgWorkflowCoordinator`, `PostgresTaskWorker`, the transport-neutral `PostgresOutboxDispatcher`, `PgInboxRepository`, and the isolated `aetherflow-transport-nats` publisher/consumer crate. It implements atomic workflow/task/dependency creation, deterministic task-run ID materialization, dependency-gated promotion, `SKIP LOCKED` claims, fenced heartbeats/completion, expired-lease recovery, typed failure/cancellation/timeout, workflow aggregation, transactional outbox/inbox, confirmed JetStream publication, broker progress acknowledgements for long handlers, logical consumer deduplication, and retryable handler failures. PostgreSQL 18 + NATS run `41380067612` verifies the publisher process exiting after JetStream acceptance but before PostgreSQL outbox ack, then fresh-process retry with one stored message; it also verifies a consumer process exiting after inbox commit but before JetStream ack, then fresh-process redelivery suppression without repeated side effects. Rust CI run `41380067843` passed formatting, Clippy, tests, workspace build, and docs. M05 begins with ADR-0008; its PostgreSQL node membership/worker registration migration, multi-node partition behavior, and node-epoch fencing are not implemented yet.
+M04 is complete: the repository includes `PgTaskRepository`, `PgWorkflowCoordinator`, `PostgresTaskWorker`, `PostgresOutboxDispatcher`, `PgInboxRepository`, and the isolated `aetherflow-transport-nats` crate. PostgreSQL 18 + NATS run `41380067612` verifies both OS-process broker crash windows and Rust CI `41380067843` passed the full workspace checks. The first M05 membership persistence slice is now implemented: migration v3, `PgMembershipRepository`, concurrent node join fencing, worker lease renewal/drain, expired takeover and stale-incarnation rejection. PostgreSQL 18 run `41382505310` and Rust CI `41382505507` verify this slice. Task claim and settlement transactions are not yet membership-gated; multi-node partition and worker-loss failover remain open.
