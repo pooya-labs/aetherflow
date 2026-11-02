@@ -18,7 +18,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
 };
-use tokio_postgres::{config::Host, Config, NoTls};
+use tokio_postgres::{Config, NoTls, config::Host};
 
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
@@ -111,7 +111,6 @@ impl TcpDatabaseGate {
         let _ = self.task.await;
     }
 }
-
 
 fn pool_from_url(database_url: &str, max_size: usize) -> Pool {
     let config: Config = database_url.parse().expect("valid PostgreSQL URL");
@@ -868,11 +867,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         Some(Host::Unix(_)) => panic!("TCP partition test requires a TCP PostgreSQL endpoint"),
         None => panic!("TCP partition test requires an explicit PostgreSQL host"),
     };
-    let upstream_port = database_config
-        .get_ports()
-        .first()
-        .copied()
-        .unwrap_or(5432);
+    let upstream_port = database_config.get_ports().first().copied().unwrap_or(5432);
     let database_gate = TcpDatabaseGate::start(upstream_host, upstream_port).await;
     let mut child_database_config = Config::new();
     child_database_config
@@ -903,7 +898,10 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "postgres_partition_old_worker_child_process",
             "--nocapture",
         ])
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", &child_database_url)
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_URL",
+            &child_database_url,
+        )
         .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
         .env(
             "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
