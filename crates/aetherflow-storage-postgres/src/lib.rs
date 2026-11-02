@@ -11,11 +11,11 @@ mod coordinator;
 mod task_repository;
 mod worker;
 
+pub use coordinator::{PgWorkflowCoordinator, PgWorkflowSubmission};
 pub use task_repository::{
     DurableTaskRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository, RecoveredLease,
     TaskFailure,
 };
-pub use coordinator::{PgWorkflowCoordinator, PgWorkflowSubmission};
 pub use worker::{
     PostgresTaskWorker, PostgresWorkerConfig, PostgresWorkerConfigError, PostgresWorkerError,
 };

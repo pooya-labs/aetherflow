@@ -14,8 +14,7 @@ use aetherflow_runtime::repository::{
     TaskDependencyOutput, TaskExecutionClaim, TaskExecutionSnapshot,
 };
 use aetherflow_runtime::scheduler::{
-    TaskCancellationTrigger, TaskContext, TaskExecutionError, TaskFuture, TaskHandler,
-    TaskRegistry,
+    TaskCancellationTrigger, TaskContext, TaskExecutionError, TaskFuture, TaskHandler, TaskRegistry,
 };
 use sha2::Digest;
 use tokio::sync::watch;
@@ -48,7 +47,9 @@ impl std::fmt::Display for PostgresWorkerConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ZeroPollInterval => formatter.write_str("worker poll interval must be non-zero"),
-            Self::ZeroLeaseDuration => formatter.write_str("worker lease duration must be non-zero"),
+            Self::ZeroLeaseDuration => {
+                formatter.write_str("worker lease duration must be non-zero")
+            }
             Self::ZeroHeartbeatInterval => {
                 formatter.write_str("worker heartbeat interval must be non-zero")
             }
@@ -212,7 +213,10 @@ impl std::fmt::Display for PostgresWorkerError {
                 write!(formatter, "worker already has an active task claim: {id}")
             }
             Self::HandlerPanicked(message) => {
-                write!(formatter, "durable task handler terminated unexpectedly: {message}")
+                write!(
+                    formatter,
+                    "durable task handler terminated unexpectedly: {message}"
+                )
             }
         }
     }
@@ -286,7 +290,10 @@ impl PostgresTaskWorker {
     ///
     /// Shutdown does not mark work cancelled: handlers receive a cooperative signal,
     /// and any aborted attempt is recovered after its PostgreSQL lease expires.
-    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), PostgresWorkerError> {
+    pub async fn run(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), PostgresWorkerError> {
         let mut active_tasks: JoinSet<Result<(), PostgresWorkerError>> = JoinSet::new();
         let active_task_runs = Arc::new(Mutex::new(HashMap::<String, TaskRunId>::new()));
         let mut stop_claiming = *shutdown.borrow_and_update();
@@ -309,11 +316,7 @@ impl PostgresTaskWorker {
                     let attempt_id = self.attempt_ids.next_id()?;
                     let Some(claim) = self
                         .repository
-                        .claim_next(
-                            &self.worker_id,
-                            &attempt_id,
-                            self.config.lease_duration,
-                        )
+                        .claim_next(&self.worker_id, &attempt_id, self.config.lease_duration)
                         .await?
                     else {
                         break;
@@ -325,10 +328,7 @@ impl PostgresTaskWorker {
                     let execution_claim = execution_claim_from_pg(&claim);
                     let (context, cancellation_trigger) =
                         TaskContext::new(execution_claim, dependency_outputs);
-                    self.register_task_cancellation(
-                        &task_run_id,
-                        cancellation_trigger.clone(),
-                    )?;
+                    self.register_task_cancellation(&task_run_id, cancellation_trigger.clone())?;
 
                     let handler = self.registry.handler_for(task_run.task_id());
                     let repository = Arc::clone(&self.repository);
@@ -360,7 +360,6 @@ impl PostgresTaskWorker {
                             .remove(&active_key);
                         result
                     });
-
                 }
             }
 
@@ -374,18 +373,16 @@ impl PostgresTaskWorker {
             let now = tokio::time::Instant::now();
             if stop_claiming
                 && cancellation_started_at.is_none()
-                && shutdown_started_at.is_some_and(|started| {
-                    now >= started + self.config.shutdown_drain_timeout
-                })
+                && shutdown_started_at
+                    .is_some_and(|started| now >= started + self.config.shutdown_drain_timeout)
             {
                 self.signal_active_cancellations();
                 cancellation_started_at = Some(now);
             }
 
             if stop_claiming
-                && cancellation_started_at.is_some_and(|started| {
-                    now >= started + self.config.cancellation_grace_period
-                })
+                && cancellation_started_at
+                    .is_some_and(|started| now >= started + self.config.cancellation_grace_period)
             {
                 active_tasks.abort_all();
                 while let Some(joined) = active_tasks.join_next().await {
@@ -405,8 +402,7 @@ impl PostgresTaskWorker {
             let next_shutdown_deadline = cancellation_started_at
                 .map(|started| started + self.config.cancellation_grace_period)
                 .or_else(|| {
-                    shutdown_started_at
-                        .map(|started| started + self.config.shutdown_drain_timeout)
+                    shutdown_started_at.map(|started| started + self.config.shutdown_drain_timeout)
                 });
 
             tokio::select! {
@@ -466,9 +462,7 @@ impl PostgresTaskWorker {
                 ));
             }
             let output = dependency.output().cloned().ok_or_else(|| {
-                PostgresWorkerError::DependencyOutputMissing(
-                    dependency_run_id.as_str().to_owned(),
-                )
+                PostgresWorkerError::DependencyOutputMissing(dependency_run_id.as_str().to_owned())
             })?;
             outputs.push(TaskDependencyOutput::new(
                 dependency.task_id().clone(),
@@ -517,10 +511,7 @@ impl PostgresTaskWorker {
         }
     }
 
-    fn clear_active_cancellations(
-        &self,
-        active_task_runs: &Mutex<HashMap<String, TaskRunId>>,
-    ) {
+    fn clear_active_cancellations(&self, active_task_runs: &Mutex<HashMap<String, TaskRunId>>) {
         let keys = active_task_runs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -591,7 +582,9 @@ impl AttemptIdGenerator {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
-            .map_err(|_| StorageError::InvalidStoredValue("attempt ID sequence exhausted".to_owned()))?;
+            .map_err(|_| {
+                StorageError::InvalidStoredValue("attempt ID sequence exhausted".to_owned())
+            })?;
         AttemptId::parse(format!(
             "a-{}-{:032x}-{sequence:x}",
             self.worker_fingerprint, self.process_nonce
@@ -690,8 +683,12 @@ async fn execute_pg_claim(
         },
         Some(Err(error)) => {
             let failure = match error {
-                TaskExecutionError::Retryable(message) => TaskFailure::retryable("handler", message),
-                TaskExecutionError::Permanent(message) => TaskFailure::permanent("handler", message),
+                TaskExecutionError::Retryable(message) => {
+                    TaskFailure::retryable("handler", message)
+                }
+                TaskExecutionError::Permanent(message) => {
+                    TaskFailure::permanent("handler", message)
+                }
             };
             match repository
                 .record_failure(
