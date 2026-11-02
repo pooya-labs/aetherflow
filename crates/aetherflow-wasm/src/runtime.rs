@@ -388,8 +388,10 @@ impl Drop for EpochTicker {
 
 #[cfg(test)]
 mod tests {
-    use super::{PluginRuntimeError, WasmPluginRuntime};
-    use crate::MAX_PLUGIN_ARTIFACT_BYTES;
+    use super::{HostState, PluginRuntimeError, WasmPluginRuntime, bindings};
+    use crate::{
+        Capability, CapabilitySet, ExecutionLimits, MAX_PLUGIN_ARTIFACT_BYTES,
+    };
 
     #[test]
     fn runtime_rejects_invalid_component_bytes() {
@@ -412,6 +414,46 @@ mod tests {
             }) if actual == MAX_PLUGIN_ARTIFACT_BYTES + 1
                 && maximum == MAX_PLUGIN_ARTIFACT_BYTES
         ));
+    }
+
+    #[test]
+    fn host_log_is_default_deny_without_an_explicit_capability() {
+        use bindings::aetherflow::plugin::host::Host;
+        use bindings::aetherflow::plugin::types::{HostError, LogLevel};
+
+        let mut state = HostState::new(CapabilitySet::default(), ExecutionLimits::default());
+        let result = state.log(LogLevel::Info, "guest diagnostic".to_owned());
+
+        assert_eq!(result, Err(HostError::CapabilityDenied));
+        assert!(state.logs.is_empty());
+        assert_eq!(state.log_calls, 0);
+    }
+
+    #[test]
+    fn host_log_enforces_utf8_byte_limit_and_per_invocation_rate_limit() {
+        use bindings::aetherflow::plugin::host::Host;
+        use bindings::aetherflow::plugin::types::{HostError, LogLevel};
+
+        let capabilities = CapabilitySet::from_capabilities([Capability::LogWrite]);
+        let limits = ExecutionLimits {
+            max_log_message_bytes: 3,
+            max_log_messages: 1,
+            ..ExecutionLimits::default()
+        };
+        let mut state = HostState::new(capabilities, limits);
+
+        assert_eq!(state.log(LogLevel::Info, "ok".to_owned()), Ok(()));
+        assert_eq!(
+            state.log(LogLevel::Warn, "éé".to_owned()),
+            Err(HostError::MessageTooLarge)
+        );
+        assert_eq!(
+            state.log(LogLevel::Error, "x".to_owned()),
+            Err(HostError::RateLimited)
+        );
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs[0].message, "ok");
+        assert_eq!(state.log_calls, 1);
     }
 
     #[test]
