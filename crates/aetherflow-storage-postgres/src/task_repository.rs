@@ -1057,7 +1057,7 @@ impl PgTaskRepository {
 
         let row = transaction
             .query_opt(
-                "SELECT status, attempts_started, version, claimed_by, fencing_token \\
+                "SELECT status, attempts_started, version, claimed_by, fencing_token \
                  FROM task_runs WHERE task_run_id = $1 FOR UPDATE",
                 &[&task_run_id.as_str()],
             )
@@ -1112,10 +1112,10 @@ impl PgTaskRepository {
 
             let attempt_updated = transaction
                 .execute(
-                    "UPDATE task_attempts \\
-                     SET outcome = $4, finished_at = clock_timestamp(), \\
-                         error_kind = $5, error_message = $6 \\
-                     WHERE task_run_id = $1 AND attempt_number = $2 \\
+                    "UPDATE task_attempts \
+                     SET outcome = $4, finished_at = clock_timestamp(), \
+                         error_kind = $5, error_message = $6 \
+                     WHERE task_run_id = $1 AND attempt_number = $2 \
                        AND worker_id = $3 AND fencing_token = $7 AND outcome = 'running'",
                     &[
                         &task_run_id.as_str(),
@@ -1139,13 +1139,13 @@ impl PgTaskRepository {
 
         let updated = transaction
             .query_one(
-                "UPDATE task_runs \\
-                 SET status = $3, claimed_by = NULL, lease_expires_at = NULL, \\
-                     version = version + 1, updated_at = clock_timestamp(), \\
-                     finished_at = clock_timestamp(), \\
-                     last_error_kind = CASE WHEN $3 = 'timed_out' THEN $4 ELSE last_error_kind END, \\
-                     last_error_message = CASE WHEN $3 = 'timed_out' THEN $5 ELSE last_error_message END \\
-                 WHERE task_run_id = $1 AND version = $2 AND status = $6 \\
+                "UPDATE task_runs \
+                 SET status = $3, claimed_by = NULL, lease_expires_at = NULL, \
+                     version = version + 1, updated_at = clock_timestamp(), \
+                     finished_at = clock_timestamp(), \
+                     last_error_kind = CASE WHEN $3 = 'timed_out' THEN $4 ELSE last_error_kind END, \
+                     last_error_message = CASE WHEN $3 = 'timed_out' THEN $5 ELSE last_error_message END \
+                 WHERE task_run_id = $1 AND version = $2 AND status = $6 \
                  RETURNING version",
                 &[
                     &task_run_id.as_str(),
