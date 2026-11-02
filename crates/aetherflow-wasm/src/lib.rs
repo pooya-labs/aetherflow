@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::time::Duration;
 
-use aetherflow_core::{TaskRunId, WorkflowRunId};
+use aetherflow_core::EntityId;
 
 /// Current host-supported plugin ABI version.
 pub const PLUGIN_ABI_V1: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 0 };
@@ -122,9 +122,9 @@ impl CapabilitySet {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginExecutionContext {
     /// Stable workflow run identifier.
-    workflow_run_id: WorkflowRunId,
+    workflow_run_id: EntityId,
     /// Stable task run identifier.
-    task_run_id: TaskRunId,
+    task_run_id: EntityId,
     /// One-based durable attempt number.
     attempt: u32,
     /// Optional Unix timestamp deadline in milliseconds.
@@ -134,8 +134,8 @@ pub struct PluginExecutionContext {
 impl PluginExecutionContext {
     /// Creates a context, rejecting attempt zero.
     pub fn new(
-        workflow_run_id: WorkflowRunId,
-        task_run_id: TaskRunId,
+        workflow_run_id: EntityId,
+        task_run_id: EntityId,
         attempt: u32,
         deadline_unix_ms: Option<u64>,
     ) -> Result<Self, ContextError> {
@@ -153,13 +153,13 @@ impl PluginExecutionContext {
 
     /// Returns the workflow execution identifier.
     #[must_use]
-    pub fn workflow_run_id(&self) -> &WorkflowRunId {
+    pub fn workflow_run_id(&self) -> &EntityId {
         &self.workflow_run_id
     }
 
     /// Returns the task execution identifier.
     #[must_use]
-    pub fn task_run_id(&self) -> &TaskRunId {
+    pub fn task_run_id(&self) -> &EntityId {
         &self.task_run_id
     }
 
@@ -418,9 +418,9 @@ mod tests {
     #[test]
     fn plugin_context_requires_a_one_based_attempt() {
         let workflow_run_id =
-            aetherflow_core::WorkflowRunId::parse("workflow-run-1").expect("valid workflow run id");
+            aetherflow_core::EntityId::parse("workflow-run-1").expect("valid workflow run id");
         let task_run_id =
-            aetherflow_core::TaskRunId::parse("task-run-1").expect("valid task run id");
+            aetherflow_core::EntityId::parse("task-run-1").expect("valid task run id");
         assert!(
             super::PluginExecutionContext::new(
                 workflow_run_id.clone(),
