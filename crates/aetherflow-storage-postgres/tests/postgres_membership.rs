@@ -1057,16 +1057,102 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let partition_path = shared_markers.join("partition");
     let partition_ack_path = shared_markers.join("partition-ack");
     let resume_path = shared_markers.join("resume");
-    let child_executable = std::env::current_exe().expect("current integration-test executable");
+    let original_executable =
+        std::env::current_exe().expect("current integration-test executable");
+    let child_env = vec![
+        (
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_USER",
+            role_name.clone(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
+            role_password.clone(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_NAME",
+            database_name.clone(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_HOST",
+            child_database_host.clone(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
+            child_database_port.to_string(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_NODE_ID",
+            node_id.as_str().to_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
+            old_incarnation.as_str().to_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_WORKER_ID",
+            old_worker_id.as_str().to_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_TASK_ID",
+            task_id.as_str().to_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID",
+            task_run_id.as_str().to_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
+            format!("partition-old-attempt-{suffix}"),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_READY_PATH",
+            ready_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_PARTITION_PATH",
+            partition_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH",
+            partition_ack_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_RESUME_PATH",
+            resume_path.to_string_lossy().into_owned(),
+        ),
+    ];
+
+    let child_executable = if packet_partition {
+        let executable = shared_markers.join("postgres-membership-child");
+        std::fs::copy(&original_executable, &executable)
+            .expect("copy child test executable to the shared temp directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+                .expect("make copied child executable accessible to nobody UID");
+        }
+        executable
+    } else {
+        original_executable
+    };
+
     let mut child_command = if packet_partition {
         let mut command = std::process::Command::new("sudo");
-        command
-            .args(["-n", "-E", "-u", "nobody", "--"])
-            .arg(child_executable);
+        command.args(["-n", "-u", "nobody", "--", "/usr/bin/env"]);
+        for (key, value) in &child_env {
+            command.arg(format!("{key}={value}"));
+        }
+        command.arg(&child_executable);
         command
     } else {
-        std::process::Command::new(child_executable)
+        let mut command = std::process::Command::new(&child_executable);
+        for (key, value) in &child_env {
+            command.env(key, value);
+        }
+        command
     };
+
     let mut old_worker_process = KillOnDropChild(
         child_command
             .args([
@@ -1074,45 +1160,6 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
                 "postgres_partition_old_worker_child_process",
                 "--nocapture",
             ])
-            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
-                &role_password,
-            )
-            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_DATABASE_HOST",
-                &child_database_host,
-            )
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
-                child_database_port.to_string(),
-            )
-            .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
-                old_incarnation.as_str(),
-            )
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_WORKER_ID",
-                old_worker_id.as_str(),
-            )
-            .env("AETHERFLOW_PARTITION_CHILD_TASK_ID", task_id.as_str())
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID",
-                task_run_id.as_str(),
-            )
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
-                format!("partition-old-attempt-{suffix}"),
-            )
-            .env("AETHERFLOW_PARTITION_CHILD_READY_PATH", &ready_path)
-            .env("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH", &partition_path)
-            .env(
-                "AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH",
-                &partition_ack_path,
-            )
-            .env("AETHERFLOW_PARTITION_CHILD_RESUME_PATH", &resume_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .spawn()

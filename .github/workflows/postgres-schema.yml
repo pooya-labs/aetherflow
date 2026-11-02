@@ -66,13 +66,23 @@ jobs:
       - name: Fetch locked dependencies
         run: cargo +1.99.1 fetch --locked
 
-      - name: Install PostgreSQL client
+      - name: Install PostgreSQL client and verify packet-filter prerequisites
         run: |
+          packages=()
           if ! command -v psql >/dev/null 2>&1; then
+            packages+=(postgresql-client)
+          fi
+          if ! command -v iptables >/dev/null 2>&1; then
+            packages+=(iptables)
+          fi
+          if [[ ${#packages[@]} -gt 0 ]]; then
             sudo apt-get update
-            sudo apt-get install --yes postgresql-client
+            sudo apt-get install --yes "${packages[@]}"
           fi
           psql --version
+          iptables --version
+          sudo -n iptables -S OUTPUT >/dev/null
+          test "$(sudo -n -u nobody -- id -u)" = "$(id -u nobody)"
 
       - name: Create isolated database for migration bootstrap concurrency test
         run: createdb --host 127.0.0.1 --username aetherflow aetherflow_migration_test
