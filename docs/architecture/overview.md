@@ -54,7 +54,7 @@ Workflow definitions and plugin modules are untrusted. Validate payload sizes, c
 
 ADR-0009 accepts the versioned Component Model contract in `crates/aetherflow-wasm/wit/plugin.wit` (`aetherflow:plugin@1.0.0`). The guest exports one task execution function and receives only an opaque payload plus bounded task metadata. The only v1 host import is bounded logging under the explicit `log.write` capability; capability sets default to empty. ABI v1 does not import WASI and has no filesystem, network, environment, secret, process, clock, or database access.
 
-The host owns input/output limits, instruction fuel, host-call transfer fuel, component handle limits, linear memory/table limits, and an actively interruptible wall-clock deadline. Each invocation receives a fresh Store and component instance. Wasmtime 48.0.8 is the selected supported LTS line; engine integration must raise the workspace MSRV to 1.95.0 in the same dependency change. The ABI contract is implemented; the Wasmtime host runtime and adversarial execution tests remain M06 work.
+The host owns input/output limits, instruction fuel, host-call transfer fuel, component handle limits, linear memory/table limits, bounded/rate-limited logging, and an actively interruptible wall-clock deadline. Each invocation receives a fresh Store and component instance. Wasmtime 48.0.8 LTS is integrated with default features disabled; the workspace MSRV is 1.95.0. The engine, safe component compilation, execution path, and capability-gated host logger are implemented. Hosted verification and valid-component/adversarial execution tests remain M06 work.
 
 ## Initial non-goals
 - Universal exactly-once execution across external systems.
