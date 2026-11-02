@@ -394,36 +394,46 @@ mod tests {
 
     #[test]
     fn rejects_unbounded_memory_fuel_and_time_budgets() {
-        let mut limits = ExecutionLimits::default();
-        limits.max_memory_bytes = super::MAX_PLUGIN_MEMORY_BYTES + 1;
+        let limits = ExecutionLimits {
+            max_memory_bytes: super::MAX_PLUGIN_MEMORY_BYTES + 1,
+            ..ExecutionLimits::default()
+        };
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::MemoryLimitOutOfRange)
         );
 
-        limits = ExecutionLimits::default();
-        limits.fuel = super::MAX_PLUGIN_FUEL + 1;
+        let limits = ExecutionLimits {
+            fuel: super::MAX_PLUGIN_FUEL + 1,
+            ..ExecutionLimits::default()
+        };
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::FuelOutOfRange)
         );
 
-        limits = ExecutionLimits::default();
-        limits.hostcall_fuel = super::MAX_PLUGIN_HOSTCALL_FUEL + 1;
+        let limits = ExecutionLimits {
+            hostcall_fuel: super::MAX_PLUGIN_HOSTCALL_FUEL + 1,
+            ..ExecutionLimits::default()
+        };
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::HostcallFuelOutOfRange)
         );
 
-        limits = ExecutionLimits::default();
-        limits.max_component_handles = super::MAX_PLUGIN_COMPONENT_HANDLES + 1;
+        let limits = ExecutionLimits {
+            max_component_handles: super::MAX_PLUGIN_COMPONENT_HANDLES + 1,
+            ..ExecutionLimits::default()
+        };
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::ComponentHandlesOutOfRange)
         );
 
-        limits = ExecutionLimits::default();
-        limits.wall_clock_timeout = super::MAX_PLUGIN_EXECUTION_TIMEOUT + Duration::from_millis(1);
+        let limits = ExecutionLimits {
+            wall_clock_timeout: super::MAX_PLUGIN_EXECUTION_TIMEOUT + Duration::from_millis(1),
+            ..ExecutionLimits::default()
+        };
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::TimeoutOutOfRange)
