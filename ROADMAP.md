@@ -170,8 +170,9 @@ For every material regression, record: detection time; affected commit and Actio
 ## Current checkpoint
 
 **Canonical branch:** `main`  
-**Current main HEAD:** `3090267b4b4e99eebb5dcefa2bde94296909cda6` (CI-generated rustfmt-only commit after capability test commit `c892a8d25330b91b5bfbc6a08289a9502a67e8a2`).  
-**Last fully verified implementation snapshot:** `c892a8d25330b91b5bfbc6a08289a9502a67e8a2`; the Rust CI applied rustfmt and committed the formatting-only tree as `3090267`, then completed successfully.  
+**Last verified implementation commit:** `3090267b4b4e99eebb5dcefa2bde94296909cda6` (rustfmt-only commit following capability test commit `c892a8d25330b91b5bfbc6a08289a9502a67e8a2`).  
+**Roadmap and transaction-contract sync commit:** `11c4430ba5a4216ffd1f470bf2fb00d1804b7966`; Rust CI [41386598280](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386598280) and Pages [41386597327](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386597327) passed after the documentation update.  
+**Resume invariant:** fetch the live `main` HEAD from GitHub before editing; do not assume a SHA written in this checkpoint is still the branch tip.  
 **Current milestone:** M05 — Distributed coordination and event delivery.  
 **Next task:** M05 multi-node partition, epoch-takeover, and worker-loss chaos coverage.
 
@@ -229,6 +230,7 @@ For every material regression, record: detection time; affected commit and Actio
 | 2026-11-02 | M05 | Added PostgreSQL migration v3 and `PgMembershipRepository` for node incarnation/epoch leases, worker registration/capacity, heartbeat, drain, active-worker discovery, expired-lease takeover and stale-epoch fencing. PostgreSQL 18 run `41382505310` and Rust CI `41382505507` passed; migration ledger v1-v3, 9 tables, 13 indexes, and concurrent membership tests were verified. |
 
 | 2026-11-02 | M05 | Enforced membership/epoch guards on registered claims and task state transitions; added registry capability-filtered claims, shutdown-drain persistence, stale-epoch cancellation coverage, and a direct PostgreSQL capability-filter test. PostgreSQL 18 + NATS run [41386154586](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154586) and Rust CI [41386154607](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154607) passed; Pages deploy [41386206466](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386206466) passed. Source HEAD after CI rustfmt commit: `3090267b4b4e99eebb5dcefa2bde94296909cda6`. |
+| 2026-11-02 | M05 | Added the interruption recovery/rollback protocol to the master roadmap and synchronized the PostgreSQL transaction contract with registered-worker fencing, capability filtering, and draining semantics in one atomic documentation commit `11c4430`. Rust CI `41386598280` and Pages `41386597327` passed. |
 
 ## Resume instructions
 
