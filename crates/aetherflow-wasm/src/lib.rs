@@ -122,13 +122,13 @@ impl CapabilitySet {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginExecutionContext {
     /// Stable workflow run identifier.
-    pub workflow_run_id: WorkflowRunId,
+    workflow_run_id: WorkflowRunId,
     /// Stable task run identifier.
-    pub task_run_id: TaskRunId,
+    task_run_id: TaskRunId,
     /// One-based durable attempt number.
-    pub attempt: u32,
+    attempt: u32,
     /// Optional Unix timestamp deadline in milliseconds.
-    pub deadline_unix_ms: Option<u64>,
+    deadline_unix_ms: Option<u64>,
 }
 
 impl PluginExecutionContext {
@@ -149,6 +149,30 @@ impl PluginExecutionContext {
             attempt,
             deadline_unix_ms,
         })
+    }
+
+    /// Returns the workflow execution identifier.
+    #[must_use]
+    pub fn workflow_run_id(&self) -> &WorkflowRunId {
+        &self.workflow_run_id
+    }
+
+    /// Returns the task execution identifier.
+    #[must_use]
+    pub fn task_run_id(&self) -> &TaskRunId {
+        &self.task_run_id
+    }
+
+    /// Returns the one-based durable attempt number.
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    /// Returns the optional Unix timestamp deadline in milliseconds.
+    #[must_use]
+    pub const fn deadline_unix_ms(&self) -> Option<u64> {
+        self.deadline_unix_ms
     }
 }
 
