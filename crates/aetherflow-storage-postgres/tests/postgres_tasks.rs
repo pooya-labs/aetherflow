@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
     AttemptId, IdempotencyKey, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowId,
-    WorkflowRunId,
+    WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_storage_postgres::{
@@ -138,6 +138,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         parent_completed.output().map(TaskOutput::as_bytes),
         Some(&b"parent-output"[..])
     );
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&workflow_run_id)
+            .await
+            .expect("aggregate incomplete workflow"),
+        WorkflowStatus::Running
+    );
 
     assert_eq!(
         repository
@@ -169,6 +176,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         )
         .await
         .expect("complete child");
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&workflow_run_id)
+            .await
+            .expect("aggregate successful workflow"),
+        WorkflowStatus::Succeeded
+    );
 
     let retry_workflow_run =
         WorkflowRunId::parse("durable-retry-run-001").expect("valid workflow-run ID");
@@ -354,19 +368,31 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         WorkflowId::parse("durable-failure-workflow-001").expect("valid workflow ID");
     let failure_task_run =
         TaskRunId::parse("durable-failure-task-run-001").expect("valid task-run ID");
+    let failure_child_run =
+        TaskRunId::parse("durable-failure-child-run-001").expect("valid task-run ID");
     repository
         .create_workflow(
             &failure_workflow_run,
             &failure_workflow_id,
             None,
-            &[NewTaskRun::new(
-                failure_task_run.clone(),
-                TaskId::parse("durable-failure-task-001").expect("valid task ID"),
-                TaskInput::empty(),
-                Vec::new(),
-                retry_policy,
-                due_time,
-            )],
+            &[
+                NewTaskRun::new(
+                    failure_task_run.clone(),
+                    TaskId::parse("durable-failure-task-001").expect("valid task ID"),
+                    TaskInput::empty(),
+                    Vec::new(),
+                    retry_policy,
+                    due_time,
+                ),
+                NewTaskRun::new(
+                    failure_child_run.clone(),
+                    TaskId::parse("durable-failure-child-001").expect("valid task ID"),
+                    TaskInput::empty(),
+                    vec![failure_task_run.clone()],
+                    retry_policy,
+                    due_time,
+                ),
+            ],
         )
         .await
         .expect("create failure workflow");
@@ -415,6 +441,21 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("persist permanent failure");
     assert_eq!(failed.status(), TaskStatus::Failed);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&failure_workflow_run)
+            .await
+            .expect("aggregate failed workflow"),
+        WorkflowStatus::Failed
+    );
+    assert_eq!(
+        repository
+            .get_task_run(&failure_child_run)
+            .await
+            .expect("read cancelled dependency")
+            .status(),
+        TaskStatus::Cancelled
+    );
 
     // Durable cancellation of a running task closes its attempt and fences late
     // worker writes in the same transaction as the task.cancelled event.
@@ -458,6 +499,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("commit durable cancellation");
     assert_eq!(cancelled.status(), TaskStatus::Cancelled);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&cancel_workflow_run)
+            .await
+            .expect("aggregate cancelled workflow"),
+        WorkflowStatus::Cancelled
+    );
     assert!(matches!(
         repository
             .complete(
@@ -526,6 +574,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("commit durable timeout");
     assert_eq!(timed_out.status(), TaskStatus::TimedOut);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&timeout_workflow_run)
+            .await
+            .expect("aggregate timed-out workflow"),
+        WorkflowStatus::TimedOut
+    );
     assert!(matches!(
         repository
             .complete(
@@ -579,6 +634,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("cancel pending task");
     assert_eq!(queued_cancelled.status(), TaskStatus::Cancelled);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&queued_workflow_run)
+            .await
+            .expect("aggregate queued cancellation"),
+        WorkflowStatus::Cancelled
+    );
     let queued_attempt_count: i64 = pool
         .get()
         .await
@@ -608,5 +670,21 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     }));
     assert!(terminal_events.iter().any(|event| {
         event.aggregate_id() == queued_task_run.as_str() && event.event_type() == "task.cancelled"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == workflow_run_id.as_str()
+            && event.event_type() == "workflow.succeeded"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == failure_workflow_run.as_str()
+            && event.event_type() == "workflow.failed"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == cancel_workflow_run.as_str()
+            && event.event_type() == "workflow.cancelled"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == timeout_workflow_run.as_str()
+            && event.event_type() == "workflow.timed_out"
     }));
 }
