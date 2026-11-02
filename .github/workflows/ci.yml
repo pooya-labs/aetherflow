@@ -78,6 +78,9 @@ jobs:
       - name: Install WebAssembly guest target
         run: rustup +1.99.1 target add wasm32-unknown-unknown
 
+      - name: Lint WebAssembly guest target
+        run: cargo +1.99.1 clippy -p aetherflow-plugin-guest --target wasm32-unknown-unknown --locked -- -D warnings
+
       - name: Build and execute minimal ABI v1 plugin example
         run: |
           cargo +1.99.1 build -p aetherflow-plugin-guest --target wasm32-unknown-unknown --release --locked
