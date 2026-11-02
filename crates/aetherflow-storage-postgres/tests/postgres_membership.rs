@@ -2,8 +2,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aetherflow_core::domain::{
-    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, WorkerId, WorkflowId,
-    WorkflowRunId,
+    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId,
+    WorkflowId, WorkflowRunId,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_storage_postgres::{
@@ -531,4 +531,130 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .await
         .expect("drain replacement test node");
     assert_eq!(new_registration.node().epoch(), new_node.epoch());
+}
+
+#[tokio::test]
+async fn postgres_registered_claim_filters_by_worker_task_capabilities() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_TEST_DATABASE_URL is not set; skipping PostgreSQL worker capability test"
+        );
+        return;
+    };
+
+    let pool = pool_from_url(&database_url, 6);
+    let store = PgStore::from_pool(pool.clone());
+    store
+        .migrate()
+        .await
+        .expect("ensure current PostgreSQL schema");
+    let membership = PgMembershipRepository::from_pool(pool.clone());
+    let tasks = PgTaskRepository::from_pool(pool);
+    let suffix = unique_suffix();
+
+    let workflow_id =
+        WorkflowId::parse(format!("capability-workflow-{suffix}")).expect("valid workflow ID");
+    let workflow_run_id =
+        WorkflowRunId::parse(format!("capability-run-{suffix}")).expect("valid workflow run ID");
+    let task_id = TaskId::parse(format!("capability-task-{suffix}")).expect("valid task ID");
+    let task_run_id =
+        TaskRunId::parse(format!("capability-task-run-{suffix}")).expect("valid task run ID");
+    let retry_policy =
+        RetryPolicy::new(NonZeroU32::new(1).expect("positive attempt budget"), 0, 0)
+            .expect("valid retry policy");
+
+    tasks
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id.clone(),
+                task_id.clone(),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() - Duration::from_secs(1),
+            )],
+        )
+        .await
+        .expect("create capability-filtered task");
+    tasks
+        .promote_due_tasks(8)
+        .await
+        .expect("promote capability-filtered task");
+
+    let node_id = NodeId::parse(format!("capability-node-{suffix}")).expect("valid node ID");
+    let incarnation = NodeIncarnationId::parse(format!("capability-incarnation-{suffix}"))
+        .expect("valid node incarnation");
+    let worker_id = WorkerId::parse(format!("capability-worker-{suffix}")).expect("valid worker ID");
+    let node = membership
+        .join_node(&node_id, &incarnation, Duration::from_secs(60))
+        .await
+        .expect("join capability-test node");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("register capability-test worker");
+
+    let empty_registry_attempt =
+        AttemptId::parse(format!("capability-empty-attempt-{suffix}")).expect("valid attempt ID");
+    assert!(
+        tasks
+            .claim_next_registered_for_tasks(
+                &registration,
+                &[],
+                &empty_registry_attempt,
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("empty capability set should be a valid no-op claim")
+            .is_none(),
+        "worker with no registered handlers must not claim any task"
+    );
+    assert_eq!(
+        tasks
+            .get_task_run(&task_run_id)
+            .await
+            .expect("read task after empty capability claim")
+            .status(),
+        TaskStatus::Ready,
+        "unsupported task must remain ready for a capable worker"
+    );
+
+    let supported_attempt =
+        AttemptId::parse(format!("capability-supported-attempt-{suffix}"))
+            .expect("valid attempt ID");
+    let claim = tasks
+        .claim_next_registered_for_tasks(
+            &registration,
+            std::slice::from_ref(&task_id),
+            &supported_attempt,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("capable worker claims matching task")
+        .expect("matching task remains available");
+    assert_eq!(claim.task_run().task_id(), &task_id);
+    let completed = tasks
+        .complete_registered(
+            &task_run_id,
+            &registration,
+            claim.task_run().version(),
+            claim.fencing_token(),
+            TaskOutput::empty(),
+        )
+        .await
+        .expect("capable worker completes its task");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+
+    membership
+        .drain_node(&node)
+        .await
+        .expect("drain capability-test node");
 }
