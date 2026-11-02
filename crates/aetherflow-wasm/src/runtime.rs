@@ -389,9 +389,7 @@ impl Drop for EpochTicker {
 #[cfg(test)]
 mod tests {
     use super::{HostState, PluginRuntimeError, WasmPluginRuntime, bindings};
-    use crate::{
-        Capability, CapabilitySet, ExecutionLimits, MAX_PLUGIN_ARTIFACT_BYTES,
-    };
+    use crate::{Capability, CapabilitySet, ExecutionLimits, MAX_PLUGIN_ARTIFACT_BYTES};
 
     #[test]
     fn runtime_rejects_invalid_component_bytes() {
