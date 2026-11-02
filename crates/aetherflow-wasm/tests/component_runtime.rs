@@ -17,6 +17,14 @@ fn replace_once(source: &mut String, needle: &str, replacement: &str) {
 }
 
 fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec<u8> {
+    component_from_checked_in_wit_with_imports(execute_body, data_segments, "")
+}
+
+fn component_from_checked_in_wit_with_imports(
+    execute_body: &str,
+    data_segments: &str,
+    extra_core_imports: &str,
+) -> Vec<u8> {
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
     let mut resolve = wit_parser::Resolve::new();
     let (package, _source_map) = resolve
@@ -32,7 +40,12 @@ fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec
 
     // Keep the WIT-derived import/export signatures, but replace the dummy
     // module's intentionally trapping Guest and realloc bodies.
-    replace_once(&mut core_wat, "(memory (;0;) 0)", "(memory (;0;) 1)");
+    let memory_declaration = format!("{extra_core_imports}(memory (;0;) 1)");
+    replace_once(
+        &mut core_wat,
+        "(memory (;0;) 0)",
+        &memory_declaration,
+    );
     replace_once(
         &mut core_wat,
         "(memory (;0;) 1)",
@@ -105,6 +118,45 @@ fn component_returning_output(output: &[u8]) -> Vec<u8> {
     let mut data_segments = fixture_data_segment(0, &result);
     data_segments.push_str(&fixture_data_segment(output_pointer, output));
     component_from_checked_in_wit("    i32.const 0", &data_segments)
+}
+
+
+fn component_reporting_memory_growth() -> Vec<u8> {
+    let output_pointer = 128_u32;
+    let mut result = [0_u8; 12];
+    result[4..8].copy_from_slice(&output_pointer.to_le_bytes());
+    result[8..12].copy_from_slice(&1_u32.to_le_bytes());
+
+    let mut data_segments = fixture_data_segment(0, &result);
+    data_segments.push_str(&fixture_data_segment(output_pointer, &[0]));
+
+    let execute_body = r#"    i32.const 1
+    memory.grow 0
+    i32.const 0
+    i32.lt_s
+    if
+      i32.const 128
+      i32.const 1
+      i32.store8
+    else
+      i32.const 128
+      i32.const 0
+      i32.store8
+    end
+    i32.const 0"#;
+
+    component_from_checked_in_wit(execute_body, &data_segments)
+}
+
+fn component_with_ungranted_wasi_import() -> Vec<u8> {
+    let extra_import = r#"  (import "wasi_snapshot_preview1" "fd_write"
+    (func $wasi_fd_write (param i32 i32 i32 i32) (result i32)))
+  "#;
+    component_from_checked_in_wit_with_imports(
+        "    i32.const 0",
+        "",
+        extra_import,
+    )
 }
 
 fn component_returning_guest_error(code: &str, message: &str) -> Vec<u8> {
@@ -255,6 +307,66 @@ fn component_output_limit_is_enforced_after_guest_execution() {
         Err(PluginRuntimeError::OutputTooLarge(error))
             if error.actual == 2 && error.maximum == 1
     ));
+}
+
+
+#[test]
+fn component_memory_growth_is_bounded_per_invocation() {
+    let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
+    let component_bytes = component_reporting_memory_growth();
+    let plugin = runtime
+        .compile_component(&component_bytes)
+        .expect("compile memory-growth component");
+
+    let bounded_limits = ExecutionLimits {
+        max_memory_bytes: 64 * 1024,
+        ..ExecutionLimits::default()
+    };
+    let bounded = runtime
+        .execute(
+            &plugin,
+            &fixture_context(),
+            b"",
+            CapabilitySet::default(),
+            bounded_limits,
+        )
+        .expect("guest should handle a denied memory.grow without trapping");
+    assert_eq!(bounded.output, [1], "memory.grow should fail at the 64 KiB cap");
+
+    let default_limits = runtime
+        .execute(
+            &plugin,
+            &fixture_context(),
+            b"",
+            CapabilitySet::default(),
+            ExecutionLimits::default(),
+        )
+        .expect("guest should grow memory under the default budget");
+    assert_eq!(default_limits.output, [0], "memory.grow should succeed under the default budget");
+}
+
+#[test]
+fn component_cannot_import_ungranted_wasi_preview1_functions() {
+    let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
+    let component_bytes = component_with_ungranted_wasi_import();
+    let plugin = runtime
+        .compile_component(&component_bytes)
+        .expect("component binary should validate before import resolution");
+
+    let result = runtime.execute(
+        &plugin,
+        &fixture_context(),
+        b"",
+        CapabilitySet::default(),
+        ExecutionLimits::default(),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(PluginRuntimeError::Instantiation(_)) | Err(PluginRuntimeError::Linker(_))
+        ),
+        "an ungranted WASI import must fail closed, got {result:?}"
+    );
 }
 
 #[test]
