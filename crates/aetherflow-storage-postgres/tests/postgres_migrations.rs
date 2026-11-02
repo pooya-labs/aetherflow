@@ -6,8 +6,10 @@ use tokio_postgres::{Config, NoTls};
 
 #[tokio::test]
 async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
-    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
-        eprintln!("AETHERFLOW_TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+    let Ok(database_url) = std::env::var("AETHERFLOW_MIGRATION_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_MIGRATION_TEST_DATABASE_URL is not set; skipping isolated PostgreSQL migration integration test"
+        );
         return;
     };
 
