@@ -1,5 +1,7 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
@@ -7,10 +9,14 @@ use aetherflow_core::domain::{
     WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
+use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
+use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, StorageError, TaskFailure,
+    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgWorkflowCoordinator,
+    PostgresTaskWorker, PostgresWorkerConfig, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use tokio::sync::watch;
 use tokio_postgres::{Config, NoTls};
 
 #[tokio::test]
@@ -50,6 +56,144 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     let retry_policy =
         RetryPolicy::new(NonZeroU32::new(2).unwrap(), 0, 0).expect("valid retry policy");
     let due_time = SystemTime::now() - Duration::from_secs(1);
+
+    // Exercise the real durable coordinator and worker against PostgreSQL before
+    // the lower-level repository fixtures create any other ready tasks.
+    let durable_worker_workflow_run =
+        WorkflowRunId::parse("durable-worker-workflow-run").expect("valid workflow-run ID");
+    let durable_worker_workflow_id =
+        WorkflowId::parse("durable-worker-workflow").expect("valid workflow ID");
+    let durable_root_task_id =
+        TaskId::parse("durable-worker-root-task").expect("valid root task ID");
+    let durable_child_task_id =
+        TaskId::parse("durable-worker-child-task").expect("valid child task ID");
+    let durable_definition = WorkflowDefinition::new(
+        durable_worker_workflow_id.clone(),
+        vec![
+            WorkflowTask::new(durable_root_task_id.clone(), Vec::new())
+                .with_input(TaskInput::new(b"durable-root-input".to_vec()).expect("valid input")),
+            WorkflowTask::new(
+                durable_child_task_id.clone(),
+                vec![durable_root_task_id.clone()],
+            ),
+        ],
+    )
+    .expect("valid durable workflow definition");
+    let durable_repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
+    let durable_coordinator = PgWorkflowCoordinator::new(Arc::clone(&durable_repository));
+    let durable_submission = durable_coordinator
+        .submit_workflow_at(
+            &durable_worker_workflow_run,
+            &durable_definition,
+            retry_policy,
+            Some(&IdempotencyKey::parse("durable-worker-idempotency").expect("valid key")),
+            due_time,
+        )
+        .await
+        .expect("materialize durable workflow");
+    let child_execution_count = Arc::new(AtomicUsize::new(0));
+    let mut durable_registry = TaskRegistry::new();
+    durable_registry
+        .register(durable_root_task_id.clone(), |_context: TaskContext| async {
+            Ok(TaskOutput::new(b"durable-root-output".to_vec()).expect("valid output"))
+        })
+        .expect("register durable root handler");
+    let expected_dependency_task_id = durable_root_task_id.clone();
+    let child_execution_count_for_handler = Arc::clone(&child_execution_count);
+    durable_registry
+        .register(
+            durable_child_task_id.clone(),
+            move |context: TaskContext| {
+                let dependency_task_id = expected_dependency_task_id.clone();
+                let executions = Arc::clone(&child_execution_count_for_handler);
+                async move {
+                    let dependency = context
+                        .dependency_output(&dependency_task_id)
+                        .ok_or_else(|| {
+                            TaskExecutionError::permanent("root dependency output missing")
+                        })?;
+                    if dependency.output().as_bytes() != b"durable-root-output" {
+                        return Err(TaskExecutionError::permanent(
+                            "root dependency output did not match",
+                        ));
+                    }
+                    executions.fetch_add(1, Ordering::SeqCst);
+                    Ok(TaskOutput::new(b"durable-child-output".to_vec()).expect("valid output"))
+                }
+            },
+        )
+        .expect("register durable child handler");
+    let durable_worker_id =
+        WorkerId::parse("durable-worker-integration").expect("valid worker ID");
+    let durable_worker_config = PostgresWorkerConfig::new(
+        NonZeroUsize::new(2).expect("non-zero concurrency"),
+        Duration::from_millis(5),
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        Some(Duration::from_secs(3)),
+    )
+    .expect("valid durable worker configuration");
+    let durable_worker = PostgresTaskWorker::new(
+        Arc::clone(&durable_repository),
+        durable_worker_id,
+        durable_registry,
+        durable_worker_config,
+    );
+    let (durable_shutdown_tx, durable_shutdown_rx) = watch::channel(false);
+    let durable_worker_handle =
+        tokio::spawn(async move { durable_worker.run(durable_shutdown_rx).await });
+    let durable_workflow_status = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = durable_repository
+                .aggregate_workflow_run(&durable_worker_workflow_run)
+                .await
+                .expect("read durable workflow state");
+            if matches!(
+                status,
+                WorkflowStatus::Succeeded
+                    | WorkflowStatus::Failed
+                    | WorkflowStatus::Cancelled
+                    | WorkflowStatus::TimedOut
+            ) {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("durable worker finishes the workflow before the deadline");
+    durable_shutdown_tx
+        .send(true)
+        .expect("request durable worker shutdown");
+    durable_worker_handle
+        .await
+        .expect("join durable worker")
+        .expect("durable worker exits cleanly");
+    assert_eq!(durable_workflow_status, WorkflowStatus::Succeeded);
+    assert_eq!(child_execution_count.load(Ordering::SeqCst), 1);
+    let durable_root_run_id = durable_submission
+        .task_run_id(&durable_root_task_id)
+        .expect("root task-run ID");
+    let durable_child_run_id = durable_submission
+        .task_run_id(&durable_child_task_id)
+        .expect("child task-run ID");
+    assert_eq!(
+        durable_repository
+            .get_task_run(durable_root_run_id)
+            .await
+            .expect("read durable root task")
+            .status(),
+        TaskStatus::Succeeded
+    );
+    assert_eq!(
+        durable_repository
+            .get_task_run(durable_child_run_id)
+            .await
+            .expect("read durable child task")
+            .output()
+            .map(TaskOutput::as_bytes),
+        Some(&b"durable-child-output"[..])
+    );
 
     repository
         .create_workflow(
