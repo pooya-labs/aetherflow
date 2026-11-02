@@ -49,6 +49,21 @@ fn checked_in_wit_component_compiles_instantiates_and_executes() {
     )
     .expect("valid plugin execution context");
 
+    let one_instance_limits = ExecutionLimits {
+        max_core_instances: 1,
+        ..ExecutionLimits::default()
+    };
+    assert!(matches!(
+        runtime.execute(
+            &plugin,
+            &context,
+            b"aetherflow-component-fixture",
+            CapabilitySet::default(),
+            one_instance_limits,
+        ),
+        Err(aetherflow_wasm::PluginRuntimeError::Instantiation(_))
+    ));
+
     let result = runtime
         .execute(
             &plugin,
@@ -57,7 +72,7 @@ fn checked_in_wit_component_compiles_instantiates_and_executes() {
             CapabilitySet::default(),
             ExecutionLimits::default(),
         )
-        .expect("instantiate and execute valid v1 component");
+        .expect("default core-instance budget executes valid v1 component");
 
     // The generated dummy guest deliberately returns the ABI's default empty
     // byte list. The purpose of this fixture is to cross the real component

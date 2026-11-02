@@ -484,6 +484,15 @@ mod tests {
         );
 
         let limits = ExecutionLimits {
+            max_core_instances: 0,
+            ..ExecutionLimits::default()
+        };
+        assert_eq!(
+            limits.validate(),
+            Err(LimitConfigurationError::CoreInstancesOutOfRange)
+        );
+
+        let limits = ExecutionLimits {
             max_core_instances: super::MAX_PLUGIN_CORE_INSTANCES + 1,
             ..ExecutionLimits::default()
         };
