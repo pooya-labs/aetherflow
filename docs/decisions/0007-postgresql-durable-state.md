@@ -1,6 +1,6 @@
 # ADR-0007: PostgreSQL durable-state and lease contract
 
-- **Status:** Accepted as the M04 design baseline; initial DDL execution is pending
+- **Status:** Accepted; PostgreSQL 18 schema/migration validation passed, and the initial durable task repository operations passed run `41365026199`
 - **Date:** 2026-11-02
 - **Scope:** Durable workflow/task records, attempts, dependency edges, leases, fencing, and transactional outbox
 
@@ -40,7 +40,7 @@ The publisher can crash after delivery but before marking the event published. D
 
 Migrations are immutable, ordered, and checksummed. A migration runner records version/name/checksum in `aetherflow_schema_migrations` in the same transaction as applying the DDL and serializes migration execution with a PostgreSQL advisory lock. Unknown newer versions and checksum drift fail closed.
 
-The initial schema is a design draft in `migrations/postgres/0001_initial_schema.sql`. It must pass real PostgreSQL migration and integration tests before being treated as verified.
+The initial schema in `migrations/postgres/0001_initial_schema.sql` and its migration runner are verified against PostgreSQL 18. The initial durable task-repository vertical slice is also integration-verified in run `41365026199`; remaining handler failure/cancel/timeout, workflow aggregation, outbox delivery, and process-restart behavior remain outside this ADR's implemented scope.
 
 ## Consequences
 

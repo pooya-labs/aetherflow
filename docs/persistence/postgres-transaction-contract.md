@@ -1,6 +1,6 @@
 # PostgreSQL persistence transaction contract
 
-**Status:** M04 design baseline. The accompanying migration is a draft and has not yet been executed against a PostgreSQL server.
+**Status:** M04 implementation contract. The accompanying initial migration, migration runner, and first task repository vertical slice are verified against PostgreSQL 18 in runs `41362986570` and `41365026199`; remaining operations are identified below as not yet implemented.
 
 ## Source of truth and time
 
@@ -84,3 +84,7 @@ The outbox publisher claims pending rows with row locks, publishes outside the t
 ## Deliberate non-guarantees
 
 A lease is temporary permission to attempt work, not proof that the previous worker stopped executing. Fencing prevents stale database commits; it cannot undo an already-issued HTTP request or other external effect. Handlers still need stable idempotency keys or transactional integration at the downstream boundary.
+
+## Implemented vertical slice and remaining scope
+
+The current `PgTaskRepository` implements atomic workflow/task/dependency creation, dependency-gated ready promotion, `SKIP LOCKED` claims, attempt creation, fenced heartbeat, successful completion/output persistence, expired-lease recovery, and outbox append in the same transaction for those transitions. PostgreSQL 18 run `41365026199` exercises this path including stale-worker rejection after lease reclamation. The adapter is not yet integrated with the async scheduler. Handler-reported permanent/retryable failure, explicit cancellation/timeout, workflow terminal aggregation, outbox publisher claim/ack/redelivery, and full process-restart coordinator recovery remain future work.

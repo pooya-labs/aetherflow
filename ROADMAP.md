@@ -4,8 +4,8 @@ This file is the **source of truth** for project progress. If a chat or network 
 
 Last updated: 2026-11-02  
 Current branch: `main`  
-Current milestone: **M03 — Single-node execution runtime**  
-Overall status: **M03 in progress; M01 hosted CI verified**
+Current milestone: **M04 — Durable persistence**  
+Overall status: **M04 in progress; M00–M03 complete and hosted-verified**
 
 ## Progress rules
 
@@ -59,16 +59,19 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 - [x] Expose successful direct-dependency outputs in TaskContext; verify dataflow integration (run `41359053561`).
 
 ### M04 — Durable persistence
-- [x] Draft PostgreSQL v1 schema and migration strategy for workflow/task runs, ordered dependencies, attempts, fencing leases, and transactional outbox (ADR-0007; real-server validation pending).
-- [x] Select and pin deadpool-postgres 0.14.2, tokio-postgres 0.7.18, and sha2 0.10.9; upstream package metadata declares MSRV 1.85.
-- [x] Add PostgreSQL 18 integration service and schema constraint fixtures; async migration-runner verification pending.
-- [x] Add PostgreSQL tests for checksum drift, untracked schema metadata, unsupported newer schema versions, and concurrent first-start serialization (run `41362986570`).
-- [ ] Implement async durable task operations for atomic workflow creation, dependency promotion, SKIP LOCKED claims, fenced heartbeat/completion, and expired-lease recovery (initial vertical slice added; hosted verification pending).
-- [x] Implement dependency-aware ready promotion and atomic `FOR UPDATE SKIP LOCKED` claims (initial vertical slice added; hosted verification pending).
-- [x] Implement fenced heartbeat/completion and expired-lease recovery with monotonically increasing fencing tokens (initial vertical slice added; hosted verification pending).
-- [x] Persist task attempts, dependencies, task inputs/outputs, and successful completion atomically with version transitions (initial vertical slice added; hosted verification pending).
-- [x] Append workflow-start, ready, claimed, retry-scheduled, succeeded, and failed outbox events in the same transaction as each transition (initial vertical slice added; hosted verification pending).
-- [ ] Add crash-window, stale-worker, lease-expiry, and duplicate-outbox-delivery integration tests.
+- [x] Design PostgreSQL v1 schema and immutable migration/checksum strategy for workflow/task runs, ordered dependencies, attempts, leases/fencing, and outbox (ADR-0007).
+- [x] Select and pin deadpool-postgres 0.14.2, tokio-postgres 0.7.18, serde_json 1.0.154, and sha2 0.10.9 while retaining Rust 1.85 MSRV.
+- [x] Add PostgreSQL 18 service to CI and execute DDL against a real server (run `41365026199`).
+- [x] Implement advisory-locked transactional migration runner with version/name/SHA-256 checks and idempotent repeat (runs `41362986570` and `41365026199`).
+- [x] Add PostgreSQL checks for concurrent first start, checksum drift, untracked history, newer schema, payload/lease/dependency constraints.
+- [x] Implement atomic workflow creation with task records and ordered dependency edges (PostgreSQL integration run `41365026199`).
+- [x] Implement dependency-aware promotion and atomic `FOR UPDATE SKIP LOCKED` claims with attempt/outbox creation.
+- [x] Implement fenced heartbeat and successful completion with output persistence and same-transaction outbox records.
+- [x] Implement expired-lease recovery to retry-waiting/failed state; verify stale worker heartbeat/completion is rejected and fencing token increases on reclaim.
+- [ ] Implement durable handler-reported retryable/permanent failure, cancellation, and timeout transitions.
+- [ ] Aggregate task outcomes into durable workflow-run terminal status.
+- [ ] Implement outbox claim/publish/ack/retry and duplicate-delivery consumer contract.
+- [ ] Add process-crash/restart and transaction crash-window integration tests; connect the adapter to a durable coordinator/worker loop.
 
 ### M05 — Distributed coordination and event delivery
 - [ ] Define node membership and worker ownership model.
@@ -109,17 +112,17 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline except owner license selection. M01 is hosted-verified by run `41353166515`. M02 includes typed execution identities (including idempotency keys), explicit lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive transition matrices, and ADR-0002. M03 single-node runtime is complete: in-memory repository, bounded Tokio scheduler, deterministic DAG validation, workflow-run coordinator, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and successful direct-dependency output access.
+**Completed:** M00 architecture baseline except owner license selection. M01 Rust workspace foundation is hosted-verified (run `41353166515`). M02 includes typed execution identities (including idempotency keys), explicit lifecycle graphs, versioned transitions, capped exponential retry calculation, exhaustive transition matrices, and ADR-0002. M03 single-node runtime is complete and hosted-verified: in-memory repository, bounded Tokio scheduler, deterministic DAG validation, workflow-run coordinator, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and successful direct-dependency output access.
 
-**In progress:** M04 durable persistence. The PostgreSQL v1 schema and transaction contract are hosted-verified against PostgreSQL 18, and the migration runner passes concurrent startup/checksum/history negative tests. An initial async durable task repository vertical slice has been added in `crates/aetherflow-runtime/migrations/postgres/0001_initial_schema.sql`, `docs/persistence/postgres-transaction-contract.md`, and ADR-0007. The schema covers workflow runs, task runs, ordered dependency edges, attempt history, lease/fencing state, and an outbox. It has not yet been executed against PostgreSQL; selected pinned async driver stack: deadpool-postgres 0.14.2, tokio-postgres 0.7.18, and sha2 0.10.9, with upstream MSRV 1.85. A new PostgreSQL storage crate now contains a pool boundary, checksum-aware advisory-locked migration runner, and an environment-gated integration test. The new crate passed full Rust CI in run `41362372285`, and PostgreSQL 18 run `41362372347` passed the migration-runner integration test, schema ledger, table/index inventory, and constraint fixtures. The Cargo.lock update is now committed.
+**In progress:** M04 durable persistence. PostgreSQL 18 schema and migration bootstrap are verified: the initial migration applies with a checksum ledger in one transaction; advisory locking serializes concurrent startup; checksum drift, untracked migration history, unsupported newer schema, payload bounds, invalid leases, and duplicate dependency edges are rejected. The async `PgTaskRepository` vertical slice is now hosted-verified. It atomically creates workflow/task/dependency rows, promotes only tasks whose direct dependencies succeeded, claims with `FOR UPDATE SKIP LOCKED`, persists attempts and fencing tokens, extends leases with owner/version/fencing checks, commits successful outputs and outbox events together, and recovers expired leases to retry-waiting or failed state.
 
-**Next action:** Verify the durable task-repository vertical slice in full Rust CI and PostgreSQL 18 CI. Fix any compile/SQL/runtime issues before adding failure/retry persistence, workflow terminal aggregation, and outbox publisher claim/ack/redelivery behavior.
+**Next action:** Add durable handler failure/retry and cancellation/timeout commands; aggregate task outcomes into workflow-run terminal states; implement outbox publisher claiming, publish acknowledgement, retry and duplicate-delivery semantics. Then add crash-window/process-restart tests and connect the async PostgreSQL repository to a durable worker/coordinator loop without reusing process-local monotonic timestamps.
 
-**Verification:** M01 run \`41353166515\`; M03 repository/server run \`41353963000\`; async scheduler run \`41354805491\`; DAG validation run \`41355173212\`; workflow coordinator run \`41356396516\`; cooperative cancellation run \`41357065422\`; bounded shutdown run \`41357506821\`; payload I/O run \`41358509174\`; direct-dependency dataflow run \`41359053561\`; migration runner baseline run \`41362372347\`; and schema hardening runs \`41362986591\` (Rust) and \`41362986570\` (PostgreSQL) all passed. The first durable repository is formatted, and main CI has auto-format enabled. Clippy run \`41364224325\` found one cloned-slice assertion; PostgreSQL run \`41364224344\` still failed during workflow creation with a parameter-serialization error. The task-row insert now includes detailed serializer diagnostics; this commit adds stage-specific diagnostics to workflow, dependency, and outbox inserts and fixes the Clippy assertion. Exact failing statement awaits the next database run.
+**Verification:** M01 run `41353166515`; M03 repository/server run `41353963000`; async scheduler run `41354805491`; DAG validation run `41355173212`; workflow coordinator run `41356396516`; cooperative cancellation run `41357065422`; bounded shutdown run `41357506821`; payload I/O run `41358509174`; direct-dependency dataflow run `41359053561`; PostgreSQL migration-runner hardening run `41362986570`; latest Rust workspace run `41365026218`; and PostgreSQL 18 durable task repository run `41365026199` all completed successfully. Rust CI passed locked dependency resolution, formatting, Clippy, 53 workspace tests (15 core, 35 runtime, 2 server, 1 storage unit), release build, and docs. The PostgreSQL 18 job executed both storage integration tests: migration bootstrap/fail-closed checks and the durable task flow covering workflow creation, dependency gating, claim, heartbeat, output completion, lease expiry/recovery, retry attempt 2, strictly higher fencing token, stale-worker write rejection, and transactional outbox records. It also passed the six-table/eight-index inventory and SQL constraint fixtures.
 
-**Known limitations:** PostgreSQL schema, driver, migration runner, and an initial async task repository exist; however, the adapter is not yet integrated with the scheduler and has no durable failure/retry API or outbox publisher. Workflow terminal aggregation and process-restart coordinator recovery are not yet implemented. The in-memory repository loses state on process exit. Handler cancellation is cooperative; an aborted future cannot undo external side effects. Task payloads are opaque bytes capped at 1 MiB each; the application owns encoding/schema versions and transforms direct dependency outputs into handler-specific inputs. The bootstrap HTTP server remains sequential and non-production.
+**Known limitations:** The PostgreSQL adapter is not yet wired into the existing Tokio scheduler/coordinator. Durable handler-reported retryable/permanent failure, cancellation, timeout, workflow terminal aggregation, and an outbox publisher are not implemented. Crash/restart recovery is currently exercised at the lease/task-row level, not as a full process restart with a reconstructed workflow coordinator. Outbox rows are written transactionally, but delivery/acknowledgement/redelivery is not implemented. The in-memory repository remains process-local. Handler cancellation cannot undo external effects already issued. Task payloads remain opaque bytes capped at 1 MiB; applications own encoding and schema compatibility. The bootstrap HTTP server remains sequential and non-production.
 
-**Blockers:** The new durable task repository vertical slice must pass hosted Rust and PostgreSQL verification before its semantics are marked complete. License selection remains with repository owner. License selection remains with repository owner.
+**Blockers:** The remaining M04 work is implementation and verification, not a schema/driver blocker. License selection remains with repository owner.
 
 **Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
 
@@ -132,7 +135,7 @@ Overall status: **M03 in progress; M01 hosted CI verified**
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
 | 2026-11-02 | M03 | Closed and hosted-verified through run `41359053561`: 15 core, 35 runtime, and 2 server tests passed; workflow DAG activation, cooperative cancellation, bounded shutdown, payload I/O, and direct dependency output access verified |
 
-| 2026-11-02 | M04 | Pinned PostgreSQL driver stack and initial schema/migration runner committed. PostgreSQL 18 CI run `41361580073` passed runner compilation, transactional apply, idempotent re-run, ledger, table/index inventory, and constraint fixtures. Rust workspace CI lockfile refresh detection is being corrected after a shallow-checkout issue. |
+| 2026-11-02 | M04 | PostgreSQL 18 schema and migration runner verified; concurrent startup and fail-closed migration checks passed. Added and verified `PgTaskRepository` for atomic workflow creation, dependency promotion, SKIP LOCKED claim, attempt/outbox insertion, fenced heartbeat/completion, and expired-lease recovery. Rust CI `41365026218` and PostgreSQL 18 CI `41365026199` passed. |
 
 ## Resume instructions
 
