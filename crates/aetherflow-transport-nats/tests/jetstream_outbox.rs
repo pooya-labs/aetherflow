@@ -148,7 +148,10 @@ fn parse_nats_seed_urls(urls: &str) -> Vec<async_nats::ServerAddr> {
                 .expect("valid NATS seed server URL")
         })
         .collect::<Vec<_>>();
-    assert!(!servers.is_empty(), "at least one NATS seed URL is required");
+    assert!(
+        !servers.is_empty(),
+        "at least one NATS seed URL is required"
+    );
     servers
 }
 
@@ -160,9 +163,8 @@ async fn connect_to_nats(urls: &str) -> async_nats::Client {
 
 #[test]
 fn nats_seed_url_list_parses_all_cluster_members() {
-    let servers = parse_nats_seed_urls(
-        "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224",
-    );
+    let servers =
+        parse_nats_seed_urls("nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224");
     assert_eq!(servers.len(), 3);
 }
 
@@ -1235,11 +1237,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
 
         let ready = timeout(Duration::from_secs(15), async {
             loop {
-                if let Ok(Ok(client)) = timeout(
-                    Duration::from_millis(300),
-                    connect_to_nats(&nats_url),
-                )
-                .await
+                if let Ok(Ok(client)) =
+                    timeout(Duration::from_millis(300), connect_to_nats(&nats_url)).await
                 {
                     drop(client);
                     break;
