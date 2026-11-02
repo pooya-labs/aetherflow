@@ -671,20 +671,20 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     assert!(terminal_events.iter().any(|event| {
         event.aggregate_id() == queued_task_run.as_str() && event.event_type() == "task.cancelled"
     }));
-    assert!(terminal_events.iter().any(|event| {
-        event.aggregate_id() == workflow_run_id.as_str()
-            && event.event_type() == "workflow.succeeded"
-    }));
-    assert!(terminal_events.iter().any(|event| {
-        event.aggregate_id() == failure_workflow_run.as_str()
-            && event.event_type() == "workflow.failed"
-    }));
-    assert!(terminal_events.iter().any(|event| {
-        event.aggregate_id() == cancel_workflow_run.as_str()
-            && event.event_type() == "workflow.cancelled"
-    }));
-    assert!(terminal_events.iter().any(|event| {
-        event.aggregate_id() == timeout_workflow_run.as_str()
-            && event.event_type() == "workflow.timed_out"
-    }));
+    for (aggregate_id, event_type) in [
+        (workflow_run_id.as_str(), "workflow.succeeded"),
+        (failure_workflow_run.as_str(), "workflow.failed"),
+        (cancel_workflow_run.as_str(), "workflow.cancelled"),
+        (timeout_workflow_run.as_str(), "workflow.timed_out"),
+    ] {
+        let event_count: i64 = client
+            .query_one(
+                "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = $2",
+                &[&aggregate_id, &event_type],
+            )
+            .await
+            .expect("read workflow transition outbox event")
+            .get(0);
+        assert_eq!(event_count, 1, "expected one {event_type} event");
+    }
 }
