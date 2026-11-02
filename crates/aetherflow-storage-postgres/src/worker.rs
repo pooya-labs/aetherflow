@@ -335,7 +335,12 @@ impl PostgresTaskWorker {
 
                 while active_tasks.len() < self.config.max_concurrency.get() {
                     if *shutdown.borrow() {
+                        registration = self
+                            .membership_repository
+                            .drain_worker(&registration)
+                            .await?;
                         stop_claiming = true;
+                        shutdown_started_at = Some(tokio::time::Instant::now());
                         break;
                     }
 
