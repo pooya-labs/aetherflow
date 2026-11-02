@@ -162,7 +162,7 @@ fn ungranted_wasi_componentization_error() -> String {
     )
     .expect("embed component type metadata");
 
-    wit_component::ComponentEncoder::default()
+    let error = wit_component::ComponentEncoder::default()
         .module(&module)
         .expect("register guest core module")
         .validate(true)
