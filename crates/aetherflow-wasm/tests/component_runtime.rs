@@ -78,17 +78,25 @@ fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec
 
 fn valid_component_from_checked_in_wit() -> Vec<u8> {
     component_from_checked_in_wit(
-        "    i32.const 2\\n    i32.const 64\\n    i32.const 20\\n    i32.const 32\\n    call 0\\n    i32.const 0",
-        "\\n  (data (i32.const 64) \\"AetherFlow guest log\\")\\n",
+        r#"    i32.const 2
+    i32.const 64
+    i32.const 20
+    i32.const 32
+    call 0
+    i32.const 0"#,
+        r#"
+  (data (i32.const 64) "AetherFlow guest log")
+"#,
     )
 }
 
 fn fixture_data_segment(offset: u32, bytes: &[u8]) -> String {
     let encoded = bytes
         .iter()
-        .map(|byte| format!("\\\\{byte:02x}"))
+        .map(|byte| format!(r#"\{byte:02x}"#))
         .collect::<String>();
-    format!("  (data (i32.const {offset}) \\"{encoded}\\")\\n")
+    format!(r#"  (data (i32.const {offset}) "{encoded}")
+"#)
 }
 
 fn component_returning_output(output: &[u8]) -> Vec<u8> {
@@ -120,7 +128,10 @@ fn component_returning_guest_error(code: &str, message: &str) -> Vec<u8> {
 
 fn component_spinning_forever() -> Vec<u8> {
     component_from_checked_in_wit(
-        "    (loop $forever\\n      br $forever\\n    )\\n    i32.const 0",
+        r#"    (loop $forever
+      br $forever
+    )
+    i32.const 0"#,
         "",
     )
 }
