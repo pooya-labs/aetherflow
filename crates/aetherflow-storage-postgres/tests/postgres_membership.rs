@@ -32,7 +32,7 @@ fn unique_suffix() -> String {
 /// the test controller and replacement incarnation keep using the direct DB URL.
 struct TcpDatabaseGate {
     address: SocketAddr,
-    control: mpsc::UnboundedSender<(bool, oneshot::Sender<()>)>,
+    control: Option<mpsc::UnboundedSender<(bool, oneshot::Sender<()>)>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -91,7 +91,7 @@ impl TcpDatabaseGate {
         });
         Self {
             address,
-            control,
+            control: Some(control),
             task: Some(task),
         }
     }
@@ -99,6 +99,8 @@ impl TcpDatabaseGate {
     async fn set_available(&self, available: bool) {
         let (acknowledge, acknowledged) = oneshot::channel();
         self.control
+            .as_ref()
+            .expect("TCP database gate controller is still available")
             .send((available, acknowledge))
             .expect("TCP database gate controller is still running");
         acknowledged
@@ -107,7 +109,7 @@ impl TcpDatabaseGate {
     }
 
     async fn shutdown(mut self) {
-        drop(self.control);
+        drop(self.control.take());
         if let Some(task) = self.task.take() {
             let _ = task.await;
         }
