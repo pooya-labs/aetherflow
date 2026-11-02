@@ -48,6 +48,7 @@ jobs:
       PGPASSWORD: aetherflow-ci-password
       PGDATABASE: aetherflow_test
       AETHERFLOW_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_test
+      AETHERFLOW_MIGRATION_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_migration_test
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
       AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222
     steps:
@@ -70,6 +71,9 @@ jobs:
             sudo apt-get install --yes postgresql-client
           fi
           psql --version
+
+      - name: Create isolated database for migration bootstrap concurrency test
+        run: createdb --host 127.0.0.1 --username aetherflow aetherflow_migration_test
 
       - name: Run PostgreSQL storage integration tests
         run: cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
