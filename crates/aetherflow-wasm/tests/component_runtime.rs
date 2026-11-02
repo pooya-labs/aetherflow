@@ -310,20 +310,21 @@ fn component_epoch_deadline_interrupts_non_terminating_guest_code() {
         .expect("compile non-terminating component");
     let limits = ExecutionLimits {
         fuel: MAX_PLUGIN_FUEL,
-        wall_clock_timeout: Duration::from_millis(200),
+        wall_clock_timeout: Duration::from_millis(10),
         ..ExecutionLimits::default()
     };
 
-    assert!(matches!(
-        runtime.execute(
-            &plugin,
-            &fixture_context(),
-            b"",
-            CapabilitySet::default(),
-            limits,
-        ),
-        Err(PluginRuntimeError::DeadlineExceeded)
-    ));
+    let result = runtime.execute(
+        &plugin,
+        &fixture_context(),
+        b"",
+        CapabilitySet::default(),
+        limits,
+    );
+    assert!(
+        matches!(&result, Err(PluginRuntimeError::DeadlineExceeded)),
+        "unexpected result while testing epoch deadline: {result:?}"
+    );
 }
 
 #[test]
