@@ -41,11 +41,11 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     ];
     let applied = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 1, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 2, .. }))
         .count();
     let already_current = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 1, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 2, .. }))
         .count();
     assert_eq!(applied, 1);
     assert_eq!(already_current, 1);
@@ -78,6 +78,39 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("restore migration checksum");
 
+    // The additive inbox migration has its own immutable checksum as well.
+    let inbox_checksum: String = client
+        .query_one(
+            "SELECT checksum_sha256 FROM aetherflow_schema_migrations WHERE version = 2",
+            &[],
+        )
+        .await
+        .expect("read consumer inbox migration checksum")
+        .get(0);
+    let invalid_inbox_checksum = if inbox_checksum.starts_with('0') {
+        "1".repeat(64)
+    } else {
+        "0".repeat(64)
+    };
+    client
+        .execute(
+            "UPDATE aetherflow_schema_migrations SET checksum_sha256 = $1 WHERE version = 2",
+            &[&invalid_inbox_checksum],
+        )
+        .await
+        .expect("corrupt inbox migration checksum for negative test");
+    assert!(matches!(
+        store.migrate().await,
+        Err(StorageError::MigrationChecksumMismatch { version: 2, .. })
+    ));
+    client
+        .execute(
+            "UPDATE aetherflow_schema_migrations SET checksum_sha256 = $1 WHERE version = 2",
+            &[&inbox_checksum],
+        )
+        .await
+        .expect("restore inbox migration checksum");
+
     // Existing schema objects without a tracked migration row are not adopted.
     client
         .execute(
@@ -100,8 +133,8 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("restore migration ledger row");
 
     // A database schema newer than the binary is never downgraded or ignored.
-    let future_version = 2_i64;
-    let future_name = "0002_future_schema.sql";
+    let future_version = 3_i64;
+    let future_name = "0003_future_schema.sql";
     let future_checksum = "a".repeat(64);
     client
         .execute(
@@ -114,13 +147,13 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     assert!(matches!(
         store.migrate().await,
         Err(StorageError::NewerSchema {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     ));
     client
         .execute(
-            "DELETE FROM aetherflow_schema_migrations WHERE version = 2",
+            "DELETE FROM aetherflow_schema_migrations WHERE version = 3",
             &[],
         )
         .await
