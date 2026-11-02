@@ -24,11 +24,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     // wit-bindgen embeds WIT component-type metadata in the core module.
     // Validate that metadata and create a component without adding any
     // WASI adapter or ambient interface.
-    let mut encoder = ComponentEncoder::default();
-    encoder
+    let component_bytes = ComponentEncoder::default()
         .module(&guest_module)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let component_bytes = encoder
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?
         .validate(true)
         .encode()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
