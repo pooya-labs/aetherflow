@@ -13,6 +13,8 @@ wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow"
 [dev-dependencies]
 wit-component = { version = "=0.254.2", features = ["dummy-module"] }
 wit-parser = "=0.254.2"
+wasmprinter = "=0.254.2"
+wat = "=1.263.0"
 
 [lints]
 workspace = true

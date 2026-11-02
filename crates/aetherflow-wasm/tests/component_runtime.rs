@@ -17,6 +17,8 @@ fn valid_component_from_checked_in_wit() -> Vec<u8> {
 
     let mut module =
         wit_component::dummy_module(&resolve, world, wit_parser::ManglingAndAbi::Standard32);
+    let printable = wasmprinter::print_bytes(&module).expect("print generated WIT core module");
+    println!("AETHERFLOW_WIT_DUMMY_MODULE_BEGIN\n{printable}\nAETHERFLOW_WIT_DUMMY_MODULE_END");
     wit_component::embed_component_metadata(
         &mut module,
         &resolve,
@@ -72,7 +74,7 @@ fn checked_in_wit_component_compiles_instantiates_and_executes() {
             CapabilitySet::default(),
             ExecutionLimits::default(),
         )
-        .expect("default core-instance budget executes valid v1 component");
+        .expect("execute WIT-conforming component generated for ABI inspection");
 
     // The generated dummy guest deliberately returns the ABI's default empty
     // byte list. The purpose of this fixture is to cross the real component
