@@ -37,6 +37,11 @@ define_id!(TaskId, "Identifies a task definition within a workflow.");
 define_id!(TaskRunId, "Identifies one execution of a task definition.");
 define_id!(AttemptId, "Identifies one attempt to execute a task run.");
 define_id!(WorkerId, "Identifies a worker process or worker instance.");
+define_id!(NodeId, "Identifies a stable logical AetherFlow node.");
+define_id!(
+    NodeIncarnationId,
+    "Identifies one process incarnation of a logical AetherFlow node."
+);
 define_id!(
     IdempotencyKey,
     "Identifies one logical side effect across delivery attempts."
