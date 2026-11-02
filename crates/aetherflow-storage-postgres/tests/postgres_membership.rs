@@ -292,7 +292,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
             | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
     let membership = PgMembershipRepository::from_pool(pool.clone());
-    let tasks = PgTaskRepository::from_pool(pool);
+    let tasks = PgTaskRepository::from_pool(pool.clone());
     let suffix = unique_suffix();
 
     let node_id = NodeId::parse(format!("stale-task-node-{suffix}")).expect("valid node ID");
@@ -374,7 +374,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
             &new_node,
             &new_worker_id,
             NonZeroU32::new(2).expect("positive worker capacity"),
-            Duration::from_secs(2),
+            Duration::from_secs(20),
         )
         .await
         .expect("new worker registers under the replacement epoch");
@@ -460,12 +460,61 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         Some(old_worker_id.as_str())
     );
 
-    // A control-plane cancellation is still allowed to clean up the fixture;
-    // it does not impersonate the stale worker.
-    tasks
-        .cancel_task_run(&task_run_id, unchanged.version())
+    // The replacement worker recovers the still-running task after its old
+    // task lease expires. Membership takeover alone must not rewrite task state;
+    // recovery is an explicit, fenced transaction owned by the new epoch.
+    let lease_client = pool.get().await.expect("get task lease connection");
+    lease_client
+        .execute(
+            "UPDATE task_runs SET lease_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE task_run_id = $1",
+            &[&task_run_id.as_str()],
+        )
         .await
-        .expect("administrative cancellation settles the test task");
+        .expect("expire old worker task lease");
+
+    let recovered = tasks
+        .recover_expired_leases_registered(&new_registration, 8)
+        .await
+        .expect("replacement worker recovers old task lease");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(
+        recovered[0].task_run().status(),
+        aetherflow_core::domain::TaskStatus::RetryWaiting
+    );
+
+    tasks
+        .promote_due_tasks_registered(&new_registration, 8)
+        .await
+        .expect("replacement worker promotes recovered retry");
+    let replacement_attempt = AttemptId::parse(format!("stale-task-attempt-new-{suffix}"))
+        .expect("valid replacement attempt ID");
+    let replacement_claim = tasks
+        .claim_next_registered(
+            &new_registration,
+            &replacement_attempt,
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("replacement worker claims recovered task")
+        .expect("recovered task is ready");
+    assert_eq!(replacement_claim.attempt_number().get(), 2);
+    assert_eq!(replacement_claim.fencing_token(), claim.fencing_token() + 1);
+
+    let completed = tasks
+        .complete_registered(
+            &task_run_id,
+            &new_registration,
+            replacement_claim.task_run().version(),
+            replacement_claim.fencing_token(),
+            TaskOutput::new(b"recovered-by-new-epoch".to_vec()).expect("valid output"),
+        )
+        .await
+        .expect("replacement epoch completes recovered task");
+    assert_eq!(
+        completed.status(),
+        aetherflow_core::domain::TaskStatus::Succeeded
+    );
+
     membership
         .drain_node(&new_node)
         .await
