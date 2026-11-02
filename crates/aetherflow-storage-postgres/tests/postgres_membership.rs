@@ -771,8 +771,14 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     // and registration in its own address space while the controller revokes
     // its PostgreSQL login and installs the replacement epoch.
     let ready_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.ready"));
+    let partition_path =
+        std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.partition"));
+    let partition_ack_path =
+        std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.partition-ack"));
     let resume_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.resume"));
     let _ = std::fs::remove_file(&ready_path);
+    let _ = std::fs::remove_file(&partition_path);
+    let _ = std::fs::remove_file(&partition_ack_path);
     let _ = std::fs::remove_file(&resume_path);
     let child_executable = std::env::current_exe().expect("current integration-test executable");
     let mut old_worker_process = std::process::Command::new(child_executable)
@@ -806,6 +812,11 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             format!("partition-old-attempt-{suffix}"),
         )
         .env("AETHERFLOW_PARTITION_CHILD_READY_PATH", &ready_path)
+        .env("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH", &partition_path)
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH",
+            &partition_ack_path,
+        )
         .env("AETHERFLOW_PARTITION_CHILD_RESUME_PATH", &resume_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
@@ -842,6 +853,16 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         )
         .await
         .expect("terminate old worker process database sessions");
+    std::fs::write(&partition_path, "partition")
+        .expect("signal the child process that PostgreSQL access is partitioned");
+    let partition_ack_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !partition_ack_path.exists() && tokio::time::Instant::now() < partition_ack_deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        partition_ack_path.exists(),
+        "old worker process did not fail closed while PostgreSQL login was disabled"
+    );
 
     tokio::time::sleep(Duration::from_millis(3_300)).await;
     let new_node = admin_membership
@@ -937,6 +958,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         "old worker process failed to observe stale-epoch fencing: {child_status}"
     );
     let _ = std::fs::remove_file(&ready_path);
+    let _ = std::fs::remove_file(&partition_path);
+    let _ = std::fs::remove_file(&partition_ack_path);
     let _ = std::fs::remove_file(&resume_path);
 
     admin_membership
@@ -978,6 +1001,8 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(task_run_id),
         Ok(attempt_id),
         Ok(ready_path),
+        Ok(partition_path),
+        Ok(partition_ack_path),
         Ok(resume_path),
     ) = (
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_URL"),
@@ -990,6 +1015,8 @@ async fn postgres_partition_old_worker_child_process() {
         std::env::var("AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_READY_PATH"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_RESUME_PATH"),
     )
     else {
@@ -1035,6 +1062,30 @@ async fn postgres_partition_old_worker_child_process() {
         .expect("partition task should be claimed by old child");
     std::fs::write(&ready_path, node.epoch().to_string())
         .expect("publish child readiness after durable claim");
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !std::path::Path::new(&partition_path).exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("parent should signal the database partition");
+
+    assert!(
+        tasks
+            .heartbeat_registered(
+                &task_run_id,
+                &registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                Duration::from_secs(10),
+            )
+            .await
+            .is_err(),
+        "old worker must fail closed while PostgreSQL login is disabled"
+    );
+    std::fs::write(&partition_ack_path, "database-error-observed")
+        .expect("acknowledge fail-closed behavior to parent");
 
     tokio::time::timeout(Duration::from_secs(20), async {
         while !std::path::Path::new(&resume_path).exists() {
