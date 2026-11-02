@@ -60,6 +60,31 @@ impl OutboxPublisher for CrashWindowPublisher {
     }
 }
 
+struct BrokerUnavailablePublisher {
+    inner: NatsJetStreamPublisher,
+    broker_available: Arc<AtomicBool>,
+    attempted_event_ids: Mutex<Vec<i64>>,
+}
+
+impl OutboxPublisher for BrokerUnavailablePublisher {
+    fn publish<'a>(&'a self, event: &'a OutboxClaim) -> OutboxPublishFuture<'a> {
+        self.attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event.event_id());
+
+        if !self.broker_available.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(OutboxPublishError::new(
+                    "simulated NATS broker/network partition before publish",
+                ))
+            });
+        }
+
+        self.inner.publish(event)
+    }
+}
+
 struct CountingHandler {
     calls: Arc<AtomicUsize>,
     delay: Duration,
@@ -864,6 +889,183 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await
         .expect("drop consumer crash side-effect table");
     let _ = jetstream.delete_stream(consumer_crash_stream_name).await;
+
+    // Broker partition/recovery: PostgreSQL remains healthy while the
+    // transport adapter reports NATS unavailable. The outbox must retain the
+    // same durable event identity and publish it after the broker returns.
+    let partition_subject = format!("aetherflow.integration.{suffix}.partition-recovery");
+    let partition_stream_name = format!("AFLOW_PARTITION_{}", suffix.replace('_', ""));
+    let partition_consumer_name = format!("aflow_partition_{}", suffix.replace('_', ""));
+    let partition_stream = jetstream
+        .create_stream(jetstream::stream::Config {
+            name: partition_stream_name.clone(),
+            subjects: vec![partition_subject.clone()],
+            duplicate_window: Duration::from_secs(120),
+            ..Default::default()
+        })
+        .await
+        .expect("create broker-partition recovery stream");
+    let partition_consumer = partition_stream
+        .create_consumer(PullConsumerConfig {
+            durable_name: Some(partition_consumer_name),
+            filter_subject: partition_subject.clone(),
+            ack_wait: Duration::from_millis(500),
+            max_ack_pending: 1,
+            ..Default::default()
+        })
+        .await
+        .expect("create broker-partition recovery consumer");
+
+    let partition_workflow_run_id =
+        WorkflowRunId::parse(format!("nats-partition-run-{suffix}"))
+            .expect("valid broker-partition workflow-run ID");
+    let partition_workflow_id =
+        WorkflowId::parse(format!("nats-partition-workflow-{suffix}"))
+            .expect("valid broker-partition workflow ID");
+    let partition_task_run_id =
+        TaskRunId::parse(format!("nats-partition-task-run-{suffix}"))
+            .expect("valid broker-partition task-run ID");
+    let partition_task_id =
+        TaskId::parse(format!("nats-partition-task-{suffix}"))
+            .expect("valid broker-partition task ID");
+    repository
+        .create_workflow(
+            &partition_workflow_run_id,
+            &partition_workflow_id,
+            None,
+            &[NewTaskRun::new(
+                partition_task_run_id,
+                partition_task_id,
+                TaskInput::empty(),
+                Vec::new(),
+                RetryPolicy::new(NonZeroU32::new(1).expect("non-zero attempts"), 0, 0)
+                    .expect("valid broker-partition retry policy"),
+                SystemTime::now() + Duration::from_secs(300),
+            )],
+        )
+        .await
+        .expect("create workflow during simulated broker partition");
+
+    let partition_event_id: i64 = pool
+        .get()
+        .await
+        .expect("get broker-partition outbox connection")
+        .query_one(
+            "SELECT event_id FROM outbox_events
+             WHERE aggregate_type = 'workflow_run'
+               AND aggregate_id = $1
+               AND event_type = 'workflow.started'
+               AND published_at IS NULL",
+            &[&partition_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("find broker-partition outbox event")
+        .get(0);
+
+    let broker_available = Arc::new(AtomicBool::new(false));
+    let partition_publisher = Arc::new(BrokerUnavailablePublisher {
+        inner: NatsJetStreamPublisher::new(jetstream.clone(), partition_subject),
+        broker_available: Arc::clone(&broker_available),
+        attempted_event_ids: Mutex::new(Vec::new()),
+    });
+    let partition_dispatcher = PostgresOutboxDispatcher::new(
+        Arc::clone(&repository),
+        WorkerId::parse(format!("nats-partition-publisher-{suffix}"))
+            .expect("valid broker-partition publisher ID"),
+        Arc::clone(&partition_publisher),
+        OutboxDispatcherConfig::new(
+            1,
+            Duration::from_millis(10),
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid broker-partition dispatcher config"),
+    );
+
+    let unavailable_report = partition_dispatcher
+        .dispatch_once()
+        .await
+        .expect("dispatcher reschedules unavailable broker publication");
+    assert_eq!(unavailable_report.claimed(), 1);
+    assert_eq!(unavailable_report.acknowledged(), 0);
+    assert_eq!(unavailable_report.rescheduled(), 1);
+    let unavailable_state = pool
+        .get()
+        .await
+        .expect("get unavailable outbox verification connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts
+             FROM outbox_events WHERE event_id = $1",
+            &[&partition_event_id],
+        )
+        .await
+        .expect("inspect outbox after broker partition");
+    assert!(!unavailable_state.get::<_, bool>(0));
+    assert_eq!(unavailable_state.get::<_, i32>(1), 1);
+
+    broker_available.store(true, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let recovered_report = partition_dispatcher
+        .dispatch_once()
+        .await
+        .expect("dispatcher publishes after broker connectivity returns");
+    assert_eq!(recovered_report.claimed(), 1);
+    assert_eq!(recovered_report.acknowledged(), 1);
+    assert_eq!(recovered_report.rescheduled(), 0);
+
+    let attempted_partition_ids = partition_publisher
+        .attempted_event_ids
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        attempted_partition_ids,
+        vec![partition_event_id, partition_event_id]
+    );
+
+    let recovered_outbox_state = pool
+        .get()
+        .await
+        .expect("get recovered outbox verification connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts, claim_token,
+                    claim_owner IS NULL
+             FROM outbox_events WHERE event_id = $1",
+            &[&partition_event_id],
+        )
+        .await
+        .expect("inspect recovered outbox event");
+    assert!(recovered_outbox_state.get::<_, bool>(0));
+    assert_eq!(recovered_outbox_state.get::<_, i32>(1), 2);
+    assert_eq!(recovered_outbox_state.get::<_, i64>(2), 2);
+    assert!(recovered_outbox_state.get::<_, bool>(3));
+
+    let mut partition_messages = partition_consumer
+        .messages()
+        .await
+        .expect("open broker-partition recovery messages");
+    let delivered = timeout(Duration::from_secs(5), partition_messages.next())
+        .await
+        .expect("recovered broker event should be delivered")
+        .expect("broker-partition consumer stream should remain open")
+        .expect("read recovered broker event");
+    let delivered_envelope: serde_json::Value =
+        serde_json::from_slice(&delivered.payload).expect("decode recovered event envelope");
+    assert_eq!(delivered_envelope["event_id"], partition_event_id.to_string());
+    delivered
+        .double_ack()
+        .await
+        .expect("acknowledge recovered broker event");
+    match timeout(Duration::from_millis(250), partition_messages.next()).await {
+        Err(_) | Ok(None) => {}
+        Ok(Some(Err(error))) => panic!("broker-partition consumer failed: {error}"),
+        Ok(Some(Ok(message))) => {
+            panic!("broker recovery produced a duplicate event: {:?}", message.subject)
+        }
+    }
+    drop(partition_messages);
+    let _ = jetstream.delete_stream(partition_stream_name).await;
 
     let _ = jetstream.delete_stream(stream_name).await;
 }
