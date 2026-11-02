@@ -15,8 +15,7 @@ use aetherflow_storage_postgres::{
     InboxClaimResult, MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatcherConfig,
     OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository,
     PgMembershipRepository, PgStore, PgTaskRepository, PgWorkflowCoordinator,
-    PostgresOutboxDispatcher, PostgresTaskWorker,
-    PostgresWorkerConfig, StorageError, TaskFailure,
+    PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
@@ -193,8 +192,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         )
         .await
         .expect("register durable worker node incarnation");
-    let durable_worker_id =
-        WorkerId::parse("durable-worker-integration").expect("valid worker ID");
+    let durable_worker_id = WorkerId::parse("durable-worker-integration").expect("valid worker ID");
     let durable_registration = durable_membership
         .register_worker(
             &durable_node,
