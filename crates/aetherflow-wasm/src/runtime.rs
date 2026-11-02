@@ -469,4 +469,56 @@ mod tests {
             3
         );
     }
+
+    #[test]
+    fn store_limiter_enforces_guest_table_growth_ceiling() {
+        let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
+        let wasm = wat::parse_str(
+            r#"(module
+                (table 1 2 funcref)
+                (func (export "grow") (result i32)
+                    ref.null func
+                    i32.const 1
+                    table.grow 0
+                )
+            )"#,
+        )
+        .expect("assemble table-growth probe");
+        let module = wasmtime::Module::new(&runtime.engine, &wasm)
+            .expect("compile table-growth probe");
+
+        let grow_once = |max_table_elements| {
+            let limits = ExecutionLimits {
+                max_table_elements,
+                ..ExecutionLimits::default()
+            };
+            let state = HostState::new(CapabilitySet::default(), limits);
+            let mut store = wasmtime::Store::new(&runtime.engine, state);
+            store.limiter(|state| &mut state.resource_limits);
+            store
+                .set_fuel(limits.fuel)
+                .expect("set table-growth probe fuel");
+            store.set_epoch_deadline(u64::MAX);
+
+            let instance = wasmtime::Instance::new(&mut store, &module, &[])
+                .expect("instantiate table-growth probe");
+            let grow = instance
+                .get_typed_func::<(), i32>(&mut store, "grow")
+                .expect("get table-growth export");
+            grow.call(&mut store, ())
+                .expect("execute table-growth probe")
+        };
+
+        assert_eq!(
+            grow_once(1),
+            -1,
+            "table.grow must fail when the configured ceiling equals the initial size"
+        );
+        assert_eq!(
+            grow_once(2),
+            1,
+            "table.grow must succeed when one additional element is within the ceiling"
+        );
+    }
+
 }
