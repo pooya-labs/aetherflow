@@ -55,7 +55,7 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
             | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
 
-    let membership = PgMembershipRepository::from_pool(pool);
+    let membership = PgMembershipRepository::from_pool(pool.clone());
     let suffix = unique_suffix();
     let node_id = NodeId::parse(format!("membership-node-{suffix}")).expect("valid node ID");
     let incarnation_a = NodeIncarnationId::parse(format!("membership-incarnation-a-{suffix}"))
@@ -158,9 +158,25 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .await
         .expect("draining node may heartbeat during graceful shutdown");
     assert_eq!(node_a_draining_renewed.status(), MembershipStatus::Draining);
+    let persisted_worker_expiry_is_capped: bool = pool
+        .get()
+        .await
+        .expect("get lease verification connection")
+        .query_one(
+            "SELECT worker.lease_expires_at <= node.lease_expires_at
+             FROM worker_registrations AS worker
+             JOIN cluster_nodes AS node
+               ON node.node_id = worker.node_id
+              AND node.membership_epoch = worker.membership_epoch
+             WHERE worker.worker_id = $1 AND node.node_id = $2",
+            &[&worker_id.as_str(), &node_id.as_str()],
+        )
+        .await
+        .expect("read persisted worker/node lease relationship")
+        .get(0);
     assert!(
-        worker_a_after_drain.lease_expires_at() <= node_a_draining_renewed.lease_expires_at(),
-        "a node heartbeat that shortens its lease must also cap child worker leases"
+        persisted_worker_expiry_is_capped,
+        "a node heartbeat that shortens its lease must cap persisted child worker leases"
     );
 
     // A fresh process may take over only after the prior database-owned node
