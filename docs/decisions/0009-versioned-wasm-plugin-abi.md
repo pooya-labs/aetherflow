@@ -50,7 +50,9 @@ The workspace currently pins Rust 1.99.1 but declares Rust 1.85 as its package M
 | Output payload | 1 MiB | 1 MiB |
 | Linear memory | 16 MiB | 64 MiB |
 | Table elements | 1,024 | 10,000 |
-| Wasmtime fuel | 10,000,000 | 100,000,000 |
+| Wasmtime instruction fuel | 10,000,000 | 100,000,000 |
+| Guest-to-host host-call fuel (per call) | 4 KiB | 16 KiB |
+| Component-model handles | 1,024 | 10,000 |
 | Wall-clock execution | 2 s | 10 s |
 | One log message | 4 KiB | 4 KiB |
 
