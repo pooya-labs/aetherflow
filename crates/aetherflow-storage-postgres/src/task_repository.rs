@@ -771,7 +771,7 @@ impl PgTaskRepository {
                 })?;
                 Duration::from_millis(policy.backoff_ms(retry_number)).as_secs_f64()
             } else {
-                0
+                0.0
             };
 
             let attempt_updated = transaction
