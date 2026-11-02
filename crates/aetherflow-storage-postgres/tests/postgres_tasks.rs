@@ -277,16 +277,18 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             .await
             .expect("read durable task failure diagnostics")
             .into_iter()
-            .map(|row| (
-                row.get::<_, String>(0),
-                row.get::<_, String>(1),
-                row.get::<_, Option<String>>(2),
-                row.get::<_, Option<String>>(3),
-                row.get::<_, i32>(4),
-                row.get::<_, Option<String>>(5),
-                row.get::<_, i64>(6),
-                row.get::<_, i64>(7),
-            ))
+            .map(|row| {
+                (
+                    row.get::<_, String>(0),
+                    row.get::<_, String>(1),
+                    row.get::<_, Option<String>>(2),
+                    row.get::<_, Option<String>>(3),
+                    row.get::<_, i32>(4),
+                    row.get::<_, Option<String>>(5),
+                    row.get::<_, i64>(6),
+                    row.get::<_, i64>(7),
+                )
+            })
             .collect::<Vec<_>>();
         panic!(
             "durable worker workflow did not succeed ({durable_workflow_status:?}); task diagnostics: {diagnostics:?}"
