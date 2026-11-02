@@ -274,7 +274,9 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     })
     .await
     .expect("first JetStream delivery should be processed");
-    first_shutdown_tx.send(true).expect("signal first consumer shutdown");
+    first_shutdown_tx
+        .send(true)
+        .expect("signal first consumer shutdown");
     first_task
         .await
         .expect("join first consumer")

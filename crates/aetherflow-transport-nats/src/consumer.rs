@@ -12,18 +12,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use aetherflow_core::domain::WorkerId;
-use aetherflow_storage_postgres::{
-    InboxClaim, InboxClaimResult, PgInboxRepository, StorageError,
-};
-use async_nats::jetstream::consumer::PullConsumer;
+use aetherflow_storage_postgres::{InboxClaim, InboxClaimResult, PgInboxRepository, StorageError};
 use async_nats::jetstream::Message as JetStreamMessage;
+use async_nats::jetstream::consumer::PullConsumer;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::sync::watch;
 
 /// Boxed handler future for one decoded event.
-pub type EventHandlerFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+pub type EventHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
 /// A versioned event envelope written by the AetherFlow outbox publisher.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -147,7 +144,10 @@ impl std::fmt::Display for NatsConsumerError {
                 write!(formatter, "invalid AetherFlow event envelope: {error}")
             }
             Self::UnsupportedSchemaVersion(version) => {
-                write!(formatter, "unsupported AetherFlow event schema version: {version}")
+                write!(
+                    formatter,
+                    "unsupported AetherFlow event schema version: {version}"
+                )
             }
             Self::InvalidLeaseDuration => {
                 formatter.write_str("consumer inbox lease duration is not representable")
@@ -227,10 +227,7 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
     ///
     /// The current delivery, if any, is allowed to finish before shutdown. An
     /// unprocessed delivery is never acknowledged merely because shutdown began.
-    pub async fn run(
-        &self,
-        mut shutdown: watch::Receiver<bool>,
-    ) -> Result<(), NatsConsumerError> {
+    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), NatsConsumerError> {
         if *shutdown.borrow_and_update() {
             return Ok(());
         }
@@ -261,10 +258,7 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
         }
     }
 
-    async fn process_message(
-        &self,
-        message: JetStreamMessage,
-    ) -> Result<(), NatsConsumerError> {
+    async fn process_message(&self, message: JetStreamMessage) -> Result<(), NatsConsumerError> {
         let event: JetStreamEvent = serde_json::from_slice(&message.payload)
             .map_err(|error| NatsConsumerError::InvalidEnvelope(error.to_string()))?;
         if event.schema_version != 1 {
@@ -309,7 +303,9 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
                         self.metrics.processed.fetch_add(1, Ordering::Relaxed);
                     }
                     Err(HandlerExecutionError::Handler(error)) => {
-                        self.inbox.release(&claim, Some(&bounded_error(&error))).await?;
+                        self.inbox
+                            .release(&claim, Some(&bounded_error(&error)))
+                            .await?;
                         self.metrics
                             .handler_failures
                             .fetch_add(1, Ordering::Relaxed);
