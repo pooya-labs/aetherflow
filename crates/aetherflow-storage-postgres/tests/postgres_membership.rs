@@ -559,9 +559,8 @@ async fn postgres_registered_claim_filters_by_worker_task_capabilities() {
     let task_id = TaskId::parse(format!("capability-task-{suffix}")).expect("valid task ID");
     let task_run_id =
         TaskRunId::parse(format!("capability-task-run-{suffix}")).expect("valid task run ID");
-    let retry_policy =
-        RetryPolicy::new(NonZeroU32::new(1).expect("positive attempt budget"), 0, 0)
-            .expect("valid retry policy");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(1).expect("positive attempt budget"), 0, 0)
+        .expect("valid retry policy");
 
     tasks
         .create_workflow(
@@ -587,7 +586,8 @@ async fn postgres_registered_claim_filters_by_worker_task_capabilities() {
     let node_id = NodeId::parse(format!("capability-node-{suffix}")).expect("valid node ID");
     let incarnation = NodeIncarnationId::parse(format!("capability-incarnation-{suffix}"))
         .expect("valid node incarnation");
-    let worker_id = WorkerId::parse(format!("capability-worker-{suffix}")).expect("valid worker ID");
+    let worker_id =
+        WorkerId::parse(format!("capability-worker-{suffix}")).expect("valid worker ID");
     let node = membership
         .join_node(&node_id, &incarnation, Duration::from_secs(60))
         .await
@@ -627,9 +627,8 @@ async fn postgres_registered_claim_filters_by_worker_task_capabilities() {
         "unsupported task must remain ready for a capable worker"
     );
 
-    let supported_attempt =
-        AttemptId::parse(format!("capability-supported-attempt-{suffix}"))
-            .expect("valid attempt ID");
+    let supported_attempt = AttemptId::parse(format!("capability-supported-attempt-{suffix}"))
+        .expect("valid attempt ID");
     let claim = tasks
         .claim_next_registered_for_tasks(
             &registration,
