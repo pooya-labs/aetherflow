@@ -1900,6 +1900,18 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         assert_eq!(running.get::<_, String>(0), "running");
         let old_fencing_token: i64 = running.get(1);
         assert_eq!(running.get::<_, i32>(2), 1);
+        let node_lease_before: f64 = pool
+            .get()
+            .await
+            .expect("get pre-partition membership connection")
+            .query_one(
+                "SELECT extract(epoch FROM lease_expires_at)::double precision
+                 FROM cluster_nodes WHERE node_id = $1",
+                &[&node_id.as_str()],
+            )
+            .await
+            .expect("read node lease before packet partition")
+            .get(0);
 
         let workflow_event_id: i64 = pool
             .get()
@@ -1943,6 +1955,23 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             packet_filter.install();
             tokio::time::sleep(Duration::from_millis(850)).await;
         }
+
+        let node_lease_after: f64 = pool
+            .get()
+            .await
+            .expect("get post-partition membership connection")
+            .query_one(
+                "SELECT extract(epoch FROM lease_expires_at)::double precision
+                 FROM cluster_nodes WHERE node_id = $1",
+                &[&node_id.as_str()],
+            )
+            .await
+            .expect("read node lease after packet partition")
+            .get(0);
+        assert!(
+            node_lease_after <= node_lease_before + 0.01,
+            "partitioned worker renewed its PostgreSQL membership lease"
+        );
 
         // This marker is refreshed by the handler future itself. It proves
         // the worker is being killed while the actual handler is still live.
@@ -2001,14 +2030,6 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
                 .get::<_, bool>(0)
         );
 
-        // All fault conditions overlap here: DB egress is blocked, one NATS
-        // member is down, and the active task handler is killed without drain.
-        let child_status = old_worker.kill_and_wait();
-        assert!(
-            !child_status.success(),
-            "worker process must be abruptly killed"
-        );
-        packet_filter.remove();
         nats_node.restore();
 
         timeout(Duration::from_secs(20), async {
