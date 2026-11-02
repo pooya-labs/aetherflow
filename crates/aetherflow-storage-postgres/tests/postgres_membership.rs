@@ -927,25 +927,15 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .expect("recovered task is ready");
     assert_eq!(new_claim.attempt_number().get(), 2);
     assert!(new_claim.fencing_token() > old_fencing_token as u64);
-    let completed = admin_tasks
-        .complete_registered(
-            &task_run_id,
-            &new_registration,
-            new_claim.task_run().version(),
-            new_claim.fencing_token(),
-            TaskOutput::new(b"recovered-after-database-partition".to_vec())
-                .expect("valid recovered output"),
-        )
-        .await
-        .expect("replacement worker completes recovered task");
-    assert_eq!(completed.status(), TaskStatus::Succeeded);
-
+    // Reconnect the old OS process while the replacement owns attempt 2.
+    // Both stale heartbeat and stale completion must be fenced before the new
+    // owner is allowed to settle the task.
     admin_client
         .batch_execute(&format!("ALTER ROLE {quoted_role} LOGIN;"))
         .await
         .expect("restore old worker database login");
     std::fs::write(&resume_path, "resume")
-        .expect("signal old worker process to reconnect after takeover");
+        .expect("signal old worker process to reconnect while replacement owns task");
     let child_status = tokio::task::spawn_blocking(move || {
         old_worker_process
             .wait()
@@ -961,6 +951,19 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let _ = std::fs::remove_file(&partition_path);
     let _ = std::fs::remove_file(&partition_ack_path);
     let _ = std::fs::remove_file(&resume_path);
+
+    let completed = admin_tasks
+        .complete_registered(
+            &task_run_id,
+            &new_registration,
+            new_claim.task_run().version(),
+            new_claim.fencing_token(),
+            TaskOutput::new(b"recovered-after-database-partition".to_vec())
+                .expect("valid recovered output"),
+        )
+        .await
+        .expect("replacement worker completes recovered task");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
 
     admin_membership
         .drain_node(&new_node)
