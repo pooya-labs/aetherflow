@@ -37,9 +37,7 @@ impl OutboxPublisher for CrashWindowPublisher {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(event.event_id());
 
-        let fail_after_storage = self
-            .fail_after_first_storage
-            .swap(false, Ordering::SeqCst);
+        let fail_after_storage = self.fail_after_first_storage.swap(false, Ordering::SeqCst);
         let publish = self.inner.publish(event);
         Box::pin(async move {
             publish.await?;
