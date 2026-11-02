@@ -17,6 +17,7 @@ use aetherflow_runtime::scheduler::{
     TaskCancellationTrigger, TaskContext, TaskExecutionError, TaskFuture, TaskHandler,
     TaskRegistry,
 };
+use sha2::Digest;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
@@ -320,7 +321,6 @@ impl PostgresTaskWorker {
 
                     let task_run = claim.task_run();
                     let task_run_id = task_run.task_run_id().clone();
-                    let workflow_run_id = task_run.workflow_run_id().clone();
                     let dependency_outputs = self.load_dependency_outputs(task_run).await?;
                     let execution_claim = execution_claim_from_pg(&claim);
                     let (context, cancellation_trigger) =
@@ -361,9 +361,6 @@ impl PostgresTaskWorker {
                         result
                     });
 
-                    // The workflow ID is retained by the durable task row; the
-                    // worker does not maintain a process-local workflow registry.
-                    let _ = workflow_run_id;
                 }
             }
 
@@ -618,7 +615,6 @@ async fn execute_pg_claim(
     let task_id = task_run.task_id().clone();
     let expected_version = task_run.version();
     let fencing_token = claim.fencing_token();
-    let attempt_number = claim.attempt_number();
 
     let future: TaskFuture = match handler {
         Some(handler) => handler.execute(context),
@@ -708,7 +704,6 @@ async fn execute_pg_claim(
                 .await
             {
                 Ok(_) => {
-                    let _ = attempt_number;
                     repository.aggregate_workflow_run(&workflow_run_id).await?;
                     Ok(())
                 }
