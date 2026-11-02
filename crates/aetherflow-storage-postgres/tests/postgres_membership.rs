@@ -767,45 +767,63 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .await
         .expect("grant isolated worker database connection");
 
-    let mut old_db_config: Config = database_url.parse().expect("valid PostgreSQL URL");
-    old_db_config.user(&role_name);
-    old_db_config.password(&role_password);
-    let old_pool = pool_from_config(old_db_config, 4);
-    let old_membership = PgMembershipRepository::from_pool(old_pool.clone());
-    let old_tasks = PgTaskRepository::from_pool(old_pool.clone());
-
-    // The old incarnation and worker lease are deliberately short, but their
-    // setup begins only after all workflow fixtures and grants are ready.
-    let old_node = old_membership
-        .join_node(&node_id, &old_incarnation, Duration::from_secs(3))
-        .await
-        .expect("old isolated node joins");
-    let old_registration = old_membership
-        .register_worker(
-            &old_node,
-            &old_worker_id,
-            NonZeroU32::new(1).expect("positive worker capacity"),
-            Duration::from_secs(2),
+    // Run the old incarnation in a distinct OS process. It holds the claim
+    // and registration in its own address space while the controller revokes
+    // its PostgreSQL login and installs the replacement epoch.
+    let ready_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.ready"));
+    let resume_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.resume"));
+    let _ = std::fs::remove_file(&ready_path);
+    let _ = std::fs::remove_file(&resume_path);
+    let child_database_url = {
+        let mut config: Config = database_url.parse().expect("valid PostgreSQL URL");
+        config.user(&role_name);
+        config.password(&role_password);
+        config.to_string()
+    };
+    let child_executable = std::env::current_exe().expect("current integration-test executable");
+    let mut old_worker_process = std::process::Command::new(child_executable)
+        .args([
+            "--exact",
+            "postgres_partition_old_worker_child_process",
+            "--nocapture",
+        ])
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", child_database_url)
+        .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
+            old_incarnation.as_str(),
         )
-        .await
-        .expect("old isolated worker registers");
-    let old_attempt =
-        AttemptId::parse(format!("partition-old-attempt-{suffix}")).expect("valid old attempt ID");
-    let old_claim = old_tasks
-        .claim_next_registered_for_tasks(
-            &old_registration,
-            std::slice::from_ref(&task_id),
-            &old_attempt,
-            Duration::from_secs(10),
+        .env("AETHERFLOW_PARTITION_CHILD_WORKER_ID", old_worker_id.as_str())
+        .env("AETHERFLOW_PARTITION_CHILD_TASK_ID", task_id.as_str())
+        .env("AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID", task_run_id.as_str())
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
+            format!("partition-old-attempt-{suffix}"),
         )
-        .await
-        .expect("old worker claims before partition")
-        .expect("partition task is claimed");
-    let old_fencing_token = old_claim.fencing_token();
-    let old_version = old_claim.task_run().version();
+        .env("AETHERFLOW_PARTITION_CHILD_READY_PATH", &ready_path)
+        .env("AETHERFLOW_PARTITION_CHILD_RESUME_PATH", &resume_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("spawn old worker in a separate OS process");
 
-    // Revoke login and terminate every established backend for this process:
-    // the process cannot reconnect to PostgreSQL until the partition is healed.
+    let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !ready_path.exists() && tokio::time::Instant::now() < ready_deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    if !ready_path.exists() {
+        let _ = old_worker_process.kill();
+        let _ = old_worker_process.wait();
+        panic!("old worker process did not claim its task before timeout");
+    }
+    let old_epoch: u64 = std::fs::read_to_string(&ready_path)
+        .expect("read old worker's process-local membership epoch")
+        .trim()
+        .parse()
+        .expect("old worker writes its node epoch after claiming");
+
+    // Revoke login and terminate every established backend for the child
+    // process. The child remains alive with its old registration and claim.
     admin_client
         .batch_execute(&format!("ALTER ROLE {quoted_role} NOLOGIN;"))
         .await
@@ -818,27 +836,14 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             &[&role_name],
         )
         .await
-        .expect("terminate old worker database sessions");
-    assert!(
-        old_tasks
-            .heartbeat_registered(
-                &task_run_id,
-                &old_registration,
-                old_version,
-                old_fencing_token,
-                Duration::from_secs(10),
-            )
-            .await
-            .is_err(),
-        "old worker must fail closed while database access is partitioned"
-    );
+        .expect("terminate old worker process database sessions");
 
     tokio::time::sleep(Duration::from_millis(3_300)).await;
     let new_node = admin_membership
         .join_node(&node_id, &new_incarnation, Duration::from_secs(30))
         .await
-        .expect("replacement incarnation takes over after old lease expiry");
-    assert_eq!(new_node.epoch(), old_node.epoch() + 1);
+        .expect("replacement incarnation takes over after old process lease expiry");
+    assert_eq!(new_node.epoch(), old_epoch + 1);
     let new_registration = admin_membership
         .register_worker(
             &new_node,
@@ -848,47 +853,6 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         )
         .await
         .expect("replacement worker registers under new epoch");
-
-    // Heal the DB partition. The old process reconnects with its original
-    // incarnation handle, but the replacement epoch must fence every write.
-    admin_client
-        .batch_execute(&format!("ALTER ROLE {quoted_role} LOGIN;"))
-        .await
-        .expect("restore old worker database login");
-    drop(old_tasks);
-    drop(old_membership);
-    drop(old_pool);
-
-    let mut reconnected_config: Config = database_url.parse().expect("valid PostgreSQL URL");
-    reconnected_config.user(&role_name);
-    reconnected_config.password(&role_password);
-    let reconnected_pool = pool_from_config(reconnected_config, 4);
-    let stale_tasks = PgTaskRepository::from_pool(reconnected_pool.clone());
-    assert!(matches!(
-        stale_tasks
-            .heartbeat_registered(
-                &task_run_id,
-                &old_registration,
-                old_version,
-                old_fencing_token,
-                Duration::from_secs(10),
-            )
-            .await,
-        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
-    ));
-    assert!(matches!(
-        stale_tasks
-            .complete_registered(
-                &task_run_id,
-                &old_registration,
-                old_version,
-                old_fencing_token,
-                TaskOutput::new(b"stale-partition-output".to_vec())
-                    .expect("valid stale output"),
-            )
-            .await,
-        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
-    ));
 
     // The new epoch owns recovery after the old task lease expires. The old
     // claim remains fenced even though the database connection is restored.
@@ -905,6 +869,14 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         )
         .await
         .expect("expire disconnected worker task lease");
+    let old_fencing_token: i64 = lease_client
+        .query_one(
+            "SELECT fencing_token FROM task_runs WHERE task_run_id = $1",
+            &[&task_run_id.as_str()],
+        )
+        .await
+        .expect("read old worker fencing token")
+        .get(0);
     let recovered = admin_tasks
         .recover_expired_leases_registered(&new_registration, 8)
         .await
@@ -928,7 +900,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .expect("replacement epoch claims recovered task")
         .expect("recovered task is ready");
     assert_eq!(new_claim.attempt_number().get(), 2);
-    assert!(new_claim.fencing_token() > old_fencing_token);
+    assert!(new_claim.fencing_token() > old_fencing_token as u64);
     let completed = admin_tasks
         .complete_registered(
             &task_run_id,
@@ -942,14 +914,32 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .expect("replacement worker completes recovered task");
     assert_eq!(completed.status(), TaskStatus::Succeeded);
 
+    admin_client
+        .batch_execute(&format!("ALTER ROLE {quoted_role} LOGIN;"))
+        .await
+        .expect("restore old worker database login");
+    std::fs::write(&resume_path, "resume")
+        .expect("signal old worker process to reconnect after takeover");
+    let child_status = tokio::task::spawn_blocking(move || {
+        old_worker_process
+            .wait()
+            .expect("wait for old worker process after reconnect")
+    })
+    .await
+    .expect("join old worker process wait task");
+    assert!(
+        child_status.success(),
+        "old worker process failed to observe stale-epoch fencing: {child_status}"
+    );
+    let _ = std::fs::remove_file(&ready_path);
+    let _ = std::fs::remove_file(&resume_path);
+
     admin_membership
         .drain_node(&new_node)
         .await
         .expect("drain replacement partition-test node");
 
-    // Release the temporary role and its grants after all worker pools are gone.
-    drop(stale_tasks);
-    drop(reconnected_pool);
+    // Release the temporary role and its grants after the child process exits.
     let _ = admin_client
         .query(
             "SELECT pg_terminate_backend(pid)
@@ -967,3 +957,108 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .await
         .expect("remove temporary isolated worker role");
 }
+
+/// Separate OS process for the database-partition regression. It owns the old
+/// membership registration and task claim while the parent replaces its epoch.
+#[tokio::test]
+async fn postgres_partition_old_worker_child_process() {
+    let (
+        Ok(database_url),
+        Ok(node_id),
+        Ok(incarnation_id),
+        Ok(worker_id),
+        Ok(task_id),
+        Ok(task_run_id),
+        Ok(attempt_id),
+        Ok(ready_path),
+        Ok(resume_path),
+    ) = (
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_URL"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_NODE_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_INCARNATION_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_WORKER_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_TASK_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_READY_PATH"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_RESUME_PATH"),
+    )
+    else {
+        return;
+    };
+
+    let pool = pool_from_url(&database_url, 4);
+    let membership = PgMembershipRepository::from_pool(pool.clone());
+    let tasks = PgTaskRepository::from_pool(pool.clone());
+    let node_id = NodeId::parse(node_id).expect("valid child node ID");
+    let incarnation_id =
+        NodeIncarnationId::parse(incarnation_id).expect("valid child incarnation ID");
+    let worker_id = WorkerId::parse(worker_id).expect("valid child worker ID");
+    let task_id = TaskId::parse(task_id).expect("valid child task ID");
+    let task_run_id = TaskRunId::parse(task_run_id).expect("valid child task-run ID");
+    let attempt_id = AttemptId::parse(attempt_id).expect("valid child attempt ID");
+
+    let node = membership
+        .join_node(&node_id, &incarnation_id, Duration::from_secs(3))
+        .await
+        .expect("old child node joins");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("old child worker registers");
+    let claim = tasks
+        .claim_next_registered_for_tasks(
+            &registration,
+            std::slice::from_ref(&task_id),
+            &attempt_id,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("old child worker claims task before partition")
+        .expect("partition task should be claimed by old child");
+    std::fs::write(&ready_path, node.epoch().to_string())
+        .expect("publish child readiness after durable claim");
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !std::path::Path::new(&resume_path).exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("parent should restore DB access and resume the old process");
+
+    assert!(matches!(
+        tasks
+            .heartbeat_registered(
+                &task_run_id,
+                &registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                Duration::from_secs(10),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
+            .complete_registered(
+                &task_run_id,
+                &registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+                TaskOutput::new(b"stale-partition-output".to_vec())
+                    .expect("valid stale output"),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    drop(tasks);
+    drop(membership);
+    drop(pool);
+}
+
