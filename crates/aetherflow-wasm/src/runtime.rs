@@ -121,7 +121,7 @@ impl WasmPluginRuntime {
         };
 
         let guest_result = bindings
-            .guest()
+            .aetherflow_plugin_guest()
             .call_execute(&mut store, wit_context, input.to_vec())
             .map_err(map_wasmtime_error)?;
 
@@ -207,7 +207,7 @@ impl HostState {
     }
 }
 
-impl bindings::aetherflow::plugin::host::Host for HostState {
+impl bindings::aetherflow::plugin::types::Host for HostState {
     fn log(
         &mut self,
         level: bindings::aetherflow::plugin::types::LogLevel,
