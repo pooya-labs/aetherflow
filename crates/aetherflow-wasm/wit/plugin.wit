@@ -25,6 +25,7 @@ interface types {
     enum host-error {
         capability-denied,
         message-too-large,
+        rate-limited,
     }
 }
 
