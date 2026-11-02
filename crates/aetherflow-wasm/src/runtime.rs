@@ -486,9 +486,9 @@ mod tests {
             (12,)
         );
 
-        let error = spray1
-            .call(&mut store, (12,))
-            .expect_err("combined allocations across both component instances must hit the Store cap");
+        let error = spray1.call(&mut store, (12,)).expect_err(
+            "combined allocations across both component instances must hit the Store cap",
+        );
         let message = format!("{error:#}");
         assert!(
             message.contains("store handle limit exceeded"),
