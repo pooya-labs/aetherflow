@@ -1,16 +1,16 @@
-mod consumer;
-
-pub use consumer::{
-    ConsumerMetrics, ConsumerMetricsSnapshot, EventHandlerFuture, JetStreamEvent,
-    JetStreamEventHandler, NatsConsumerError, NatsJetStreamConsumer,
-};
-
 //! NATS JetStream publishing adapters for AetherFlow's durable outbox.
 //!
 //! The publisher resolves only after JetStream confirms that the message was
 //! stored. A stable `Nats-Msg-Id` header lets JetStream suppress duplicate
 //! publications within the stream's configured duplicate window. Consumers
 //! must still use the durable PostgreSQL inbox for longer-lived deduplication.
+
+mod consumer;
+
+pub use consumer::{
+    ConsumerMetrics, ConsumerMetricsSnapshot, EventHandlerFuture, JetStreamEvent,
+    JetStreamEventHandler, NatsConsumerError, NatsJetStreamConsumer,
+};
 
 use aetherflow_storage_postgres::{
     OutboxClaim, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
