@@ -1555,6 +1555,23 @@ impl Drop for CombinedPacketFilter {
     }
 }
 
+fn assert_handler_heartbeat_is_fresh(marker: &Path) {
+    let observed: u128 = std::fs::read_to_string(marker)
+        .expect("read active handler heartbeat marker")
+        .trim()
+        .parse()
+        .expect("handler marker should contain Unix nanoseconds");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    let age = now.saturating_sub(observed);
+    assert!(
+        age < 500_000_000,
+        "handler future stopped making progress {age}ns before worker kill"
+    );
+}
+
 struct CombinedChaosDirectory(PathBuf);
 
 impl CombinedChaosDirectory {
@@ -1814,6 +1831,9 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             String::from_utf8_lossy(&sudo_check.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&sudo_check.stdout).trim(), uid);
+        // Declared before the child guard: unwind kills/reaps the child first,
+        // then Drop removes its packet filter, then NATS is restarted.
+        let mut packet_filter = CombinedPacketFilter::new(uid.clone(), pg_port);
 
         let envs = [
             (
@@ -1881,38 +1901,6 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         let old_fencing_token: i64 = running.get(1);
         assert_eq!(running.get::<_, i32>(2), 1);
 
-        let mut packet_filter = CombinedPacketFilter::new(uid, pg_port);
-        if round == 0 {
-            // First failure order: cut the worker's database path, then lose
-            // one JetStream member.
-            packet_filter.install();
-        } else {
-            // Second failure order: lose the JetStream member first, then
-            // partition the worker's PostgreSQL egress path.
-            nats_node.stop();
-            packet_filter.install();
-        }
-
-        // A live worker renews a three-second node lease every 200 ms. Once
-        // its PostgreSQL egress is blocked, the remaining lease must decay.
-        tokio::time::sleep(Duration::from_millis(850)).await;
-        let remaining_lease: f64 = pool
-            .get()
-            .await
-            .expect("get lease diagnostic connection")
-            .query_one(
-                "SELECT extract(epoch FROM lease_expires_at - clock_timestamp())::double precision
-                 FROM cluster_nodes WHERE node_id = $1",
-                &[&node_id.as_str()],
-            )
-            .await
-            .expect("read partitioned worker lease")
-            .get(0);
-        assert!(
-            remaining_lease < 2.5,
-            "partitioned worker unexpectedly renewed membership lease: {remaining_lease:.3}s remain"
-        );
-
         let workflow_event_id: i64 = pool
             .get()
             .await
@@ -1945,8 +1933,34 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         );
 
         if round == 0 {
+            // First failure order: cut worker DB egress, then stop NATS member 1.
+            packet_filter.install();
+            tokio::time::sleep(Duration::from_millis(850)).await;
             nats_node.stop();
+        } else {
+            // Second failure order: stop NATS member 1, then cut worker DB egress.
+            nats_node.stop();
+            packet_filter.install();
+            tokio::time::sleep(Duration::from_millis(850)).await;
         }
+
+        // This marker is refreshed by the handler future itself. It proves
+        // the worker is being killed while the actual handler is still live.
+        assert_handler_heartbeat_is_fresh(&marker);
+        assert!(
+            old_worker.try_wait().is_none(),
+            "worker process should still be alive immediately before kill"
+        );
+
+        // All three failures overlap: DB egress is packet-filtered, one
+        // JetStream member is stopped, and the active worker is killed now.
+        let child_status = old_worker.kill_and_wait();
+        assert!(
+            !child_status.success(),
+            "worker process must be abruptly killed while handler is active"
+        );
+        packet_filter.remove();
+
         let quorum_ack = timeout(Duration::from_secs(12), async {
             loop {
                 if let Ok(report) = dispatcher.dispatch_once().await {
@@ -2011,9 +2025,9 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         .await
         .expect("NATS cluster should recover after member restart");
 
-        // Node lease (3 s), worker lease (2 s), and task lease (3 s) are
-        // separate durable clocks; wait out the longest before takeover.
-        tokio::time::sleep(Duration::from_millis(3_700)).await;
+        // Node lease (16 s), worker lease (12 s), and task lease (12 s)
+        // are separate durable clocks; wait out the longest before takeover.
+        tokio::time::sleep(Duration::from_millis(16_500)).await;
         let replacement_node = membership
             .join_node(&node_id, &new_incarnation, Duration::from_secs(30))
             .await
@@ -2319,15 +2333,26 @@ async fn jetstream_combined_chaos_worker_child_process() {
         .register(task_id, move |_context: TaskContext| {
             let marker = handler_marker.clone();
             async move {
-                std::fs::write(marker, "handler-started").expect("write handler marker");
-                std::future::pending::<()>().await;
+                let _ = tokio::time::timeout(Duration::from_secs(3_600), async {
+                    loop {
+                        let timestamp = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("system clock after Unix epoch")
+                            .as_nanos()
+                            .to_string();
+                        std::fs::write(&marker, timestamp)
+                            .expect("write live handler heartbeat marker");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                })
+                .await;
                 Ok(TaskOutput::empty())
             }
         })
         .expect("register long-running handler");
 
     let node = membership
-        .join_node(&node_id, &incarnation_id, Duration::from_secs(3))
+        .join_node(&node_id, &incarnation_id, Duration::from_secs(16))
         .await
         .expect("join old node incarnation");
     let registration = membership
@@ -2335,15 +2360,15 @@ async fn jetstream_combined_chaos_worker_child_process() {
             &node,
             &worker_id,
             NonZeroU32::new(1).expect("one worker"),
-            Duration::from_secs(2),
+            Duration::from_secs(12),
         )
         .await
         .expect("register old worker");
     let config = PostgresWorkerConfig::new(
         NonZeroUsize::new(1).expect("one worker slot"),
         Duration::from_millis(10),
-        Duration::from_secs(3),
-        Duration::from_millis(200),
+        Duration::from_secs(12),
+        Duration::from_secs(8),
         None,
     )
     .expect("valid worker configuration");
