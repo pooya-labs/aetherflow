@@ -1600,9 +1600,9 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
             let started = Arc::clone(&handler_started_flag);
             async move {
                 started.store(true, Ordering::SeqCst);
-                // Longer than the initial node/worker membership lease. The
-                // worker must continue renewing membership after it starts draining.
-                tokio::time::sleep(Duration::from_millis(900)).await;
+                // Longer than the two-second node/worker lease. The worker must keep
+                // renewing membership while draining an active handler.
+                tokio::time::sleep(Duration::from_millis(2_200)).await;
                 Ok(
                     TaskOutput::new(b"finished-while-draining".to_vec())
                         .expect("valid task output"),
@@ -1614,12 +1614,12 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
     let worker_config = PostgresWorkerConfig::new(
         NonZeroUsize::new(1).expect("positive worker concurrency"),
         Duration::from_millis(5),
-        Duration::from_millis(600),
-        Duration::from_millis(100),
+        Duration::from_secs(2),
+        Duration::from_millis(200),
         Some(Duration::from_secs(3)),
     )
     .expect("valid short-lease worker config")
-    .with_shutdown_timeouts(Duration::from_secs(2), Duration::from_secs(1))
+    .with_shutdown_timeouts(Duration::from_secs(4), Duration::from_secs(1))
     .expect("valid graceful drain policy");
     let node_id = NodeId::parse("drain-worker-node").expect("valid node ID");
     let incarnation_id =
@@ -1649,7 +1649,7 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
 
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if handler_started.load(Ordering::SeqCst) {
                 break;
@@ -1667,7 +1667,7 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
     shutdown_tx
         .send(true)
         .expect("request graceful worker shutdown while handler is running");
-    tokio::time::timeout(Duration::from_secs(5), &mut worker_handle)
+    tokio::time::timeout(Duration::from_secs(8), &mut worker_handle)
         .await
         .expect("worker drains the active handler before exiting")
         .expect("join registered worker task")
