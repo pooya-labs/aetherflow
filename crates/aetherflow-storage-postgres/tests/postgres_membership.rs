@@ -44,7 +44,8 @@ impl TcpDatabaseGate {
         let address = listener
             .local_addr()
             .expect("read isolated PostgreSQL TCP gate address");
-        let (control, mut commands) = mpsc::unbounded_channel();
+        let (control, mut commands) =
+            mpsc::unbounded_channel::<(bool, oneshot::Sender<()>)>();
         let task = tokio::spawn(async move {
             let mut available = true;
             let mut connections = JoinSet::new();
@@ -869,16 +870,6 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     };
     let upstream_port = database_config.get_ports().first().copied().unwrap_or(5432);
     let database_gate = TcpDatabaseGate::start(upstream_host, upstream_port).await;
-    let mut child_database_config = Config::new();
-    child_database_config
-        .user(&role_name)
-        .password(&role_password)
-        .dbname(&database_name)
-        .host("127.0.0.1")
-        .port(database_gate.address.port())
-        .connect_timeout(Duration::from_secs(2));
-    let child_database_url = child_database_config.to_string();
-
     // Run the old incarnation in a distinct OS process. It holds the claim
     // and registration in its own address space while the TCP relay is cut.
     let ready_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.ready"));
@@ -898,9 +889,18 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "postgres_partition_old_worker_child_process",
             "--nocapture",
         ])
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
         .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_URL",
-            &child_database_url,
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
+            &role_password,
+        )
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_NAME",
+            &database_name,
+        )
+        .env(
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
+            database_gate.address.port().to_string(),
         )
         .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
         .env(
@@ -1090,7 +1090,10 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
 #[tokio::test]
 async fn postgres_partition_old_worker_child_process() {
     let (
-        Ok(database_url),
+        Ok(database_user),
+        Ok(database_password),
+        Ok(database_name),
+        Ok(database_port),
         Ok(node_id),
         Ok(incarnation_id),
         Ok(worker_id),
@@ -1102,7 +1105,10 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(partition_ack_path),
         Ok(resume_path),
     ) = (
-        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_URL"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_USER"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PORT"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_NODE_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_INCARNATION_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_WORKER_ID"),
@@ -1118,7 +1124,14 @@ async fn postgres_partition_old_worker_child_process() {
         return;
     };
 
-    let child_config: Config = database_url.parse().expect("valid child PostgreSQL URL");
+    let mut child_config = Config::new();
+    child_config
+        .user(&database_user)
+        .password(&database_password)
+        .dbname(&database_name)
+        .host("127.0.0.1")
+        .port(database_port.parse().expect("valid child PostgreSQL port"))
+        .connect_timeout(Duration::from_secs(2));
     let pool = pool_from_config(child_config, 4);
     let membership = PgMembershipRepository::from_pool(pool.clone());
     let tasks = PgTaskRepository::from_pool(pool.clone());
