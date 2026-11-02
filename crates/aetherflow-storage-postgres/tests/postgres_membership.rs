@@ -237,7 +237,12 @@ async fn postgres_concurrent_node_join_has_one_winning_incarnation() {
         return;
     };
 
-    let membership = PgMembershipRepository::from_pool(pool_from_url(&database_url, 6));
+    let pool = pool_from_url(&database_url, 6);
+    PgStore::from_pool(pool.clone())
+        .migrate()
+        .await
+        .expect("ensure the isolated membership race fixture has the latest schema");
+    let membership = PgMembershipRepository::from_pool(pool);
     let suffix = unique_suffix();
     let node_id =
         NodeId::parse(format!("membership-race-node-{suffix}")).expect("valid racing node ID");
