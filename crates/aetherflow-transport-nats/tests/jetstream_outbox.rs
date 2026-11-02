@@ -9,8 +9,8 @@ use aetherflow_core::domain::{
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
-    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
-    PostgresOutboxDispatcher,
+    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository, PgStore,
+    PgTaskRepository, PostgresOutboxDispatcher,
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
