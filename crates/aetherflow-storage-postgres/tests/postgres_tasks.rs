@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -1508,3 +1508,153 @@ async fn postgres_restart_child_process_recovers_expired_task() {
         WorkflowStatus::Succeeded
     );
 }
+#[tokio::test]
+async fn registered_worker_keeps_membership_alive_while_draining_inflight_task() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_TEST_DATABASE_URL is not set; skipping registered worker drain integration test"
+        );
+        return;
+    };
+
+    let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(8)
+        .build()
+        .expect("build PostgreSQL pool");
+    let store = PgStore::from_pool(pool.clone());
+    store.migrate().await.expect("apply current PostgreSQL schema");
+
+    let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
+    let membership = Arc::new(PgMembershipRepository::from_pool(pool));
+    let node_id = NodeId::parse("drain-worker-node").expect("valid node ID");
+    let incarnation_id =
+        NodeIncarnationId::parse("drain-worker-incarnation").expect("valid incarnation ID");
+    let worker_id = WorkerId::parse("drain-worker-instance").expect("valid worker ID");
+    let node = membership
+        .join_node(&node_id, &incarnation_id, Duration::from_millis(600))
+        .await
+        .expect("join node before worker startup");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_millis(600),
+        )
+        .await
+        .expect("register worker before startup");
+
+    let workflow_id = WorkflowId::parse("drain-worker-workflow").expect("valid workflow ID");
+    let workflow_run_id =
+        WorkflowRunId::parse("drain-worker-workflow-run").expect("valid workflow-run ID");
+    let task_id = TaskId::parse("drain-worker-task").expect("valid task ID");
+    let task_run_id = TaskRunId::parse("drain-worker-task-run").expect("valid task-run ID");
+    let retry_policy = RetryPolicy::new(
+        NonZeroU32::new(1).expect("positive attempt budget"),
+        0,
+        0,
+    )
+    .expect("valid retry policy");
+    repository
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id.clone(),
+                task_id.clone(),
+                TaskInput::new(b"draining-worker-input".to_vec()).expect("valid task input"),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() - Duration::from_secs(1),
+            )],
+        )
+        .await
+        .expect("create task for draining worker");
+
+    let handler_started = Arc::new(AtomicBool::new(false));
+    let handler_started_flag = Arc::clone(&handler_started);
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(task_id, move |_context: TaskContext| {
+            let started = Arc::clone(&handler_started_flag);
+            async move {
+                started.store(true, Ordering::SeqCst);
+                // Longer than the initial node/worker membership lease. The
+                // worker must continue renewing membership after it starts draining.
+                tokio::time::sleep(Duration::from_millis(900)).await;
+                Ok(TaskOutput::new(b"finished-while-draining".to_vec())
+                    .expect("valid task output"))
+            }
+        })
+        .expect("register slow task handler");
+
+    let worker_config = PostgresWorkerConfig::new(
+        NonZeroUsize::new(1).expect("positive worker concurrency"),
+        Duration::from_millis(5),
+        Duration::from_millis(600),
+        Duration::from_millis(100),
+        Some(Duration::from_secs(3)),
+    )
+    .expect("valid short-lease worker config")
+    .with_shutdown_timeouts(Duration::from_secs(2), Duration::from_secs(1))
+    .expect("valid graceful drain policy");
+    let worker = PostgresTaskWorker::new(
+        Arc::clone(&repository),
+        Arc::clone(&membership),
+        registration,
+        registry,
+        worker_config,
+    );
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !handler_started.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("registered worker starts the in-flight handler");
+
+    shutdown_tx
+        .send(true)
+        .expect("request graceful worker shutdown while handler is running");
+    tokio::time::timeout(Duration::from_secs(5), worker_handle)
+        .await
+        .expect("worker drains the active handler before exiting")
+        .expect("join registered worker task")
+        .expect("registered worker exits cleanly");
+
+    let completed = repository
+        .get_task_run(&task_run_id)
+        .await
+        .expect("read task after graceful worker drain");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+    assert_eq!(
+        completed.output().map(TaskOutput::as_bytes),
+        Some(&b"finished-while-draining"[..])
+    );
+    assert!(
+        membership
+            .active_workers()
+            .await
+            .expect("list active workers after drain")
+            .iter()
+            .all(|worker| worker.worker_id() != &worker_id),
+        "draining worker must not admit more tasks"
+    );
+    membership
+        .drain_node(&node)
+        .await
+        .expect("drain integration-test node");
+}
+
