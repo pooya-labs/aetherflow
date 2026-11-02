@@ -496,8 +496,8 @@ impl PgMembershipRepository {
             .query_opt(
                 "UPDATE worker_registrations
                  SET lease_expires_at = LEAST(
-                         clock_timestamp() + ($5::BIGINT * INTERVAL '1 millisecond'),
-                         $6::TIMESTAMPTZ
+                         clock_timestamp() + ($4::BIGINT * INTERVAL '1 millisecond'),
+                         $5::TIMESTAMPTZ
                      ),
                      heartbeat_at = clock_timestamp(),
                      updated_at = clock_timestamp()
@@ -506,13 +506,12 @@ impl PgMembershipRepository {
                    AND membership_epoch = $3
                    AND status IN ('active', 'draining')
                    AND lease_expires_at > clock_timestamp()
-                   AND $6::TIMESTAMPTZ > clock_timestamp()
+                   AND $5::TIMESTAMPTZ > clock_timestamp()
                  RETURNING status, concurrency_limit, lease_expires_at",
                 &[
                     &registration.worker_id.as_str(),
                     &registration.node.node_id.as_str(),
                     &epoch,
-                    &registration.node.incarnation_id.as_str(),
                     &lease_millis,
                     &node_lease_expiry,
                 ],
