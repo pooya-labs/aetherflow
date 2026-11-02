@@ -158,6 +158,10 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .await
         .expect("draining node may heartbeat during graceful shutdown");
     assert_eq!(node_a_draining_renewed.status(), MembershipStatus::Draining);
+    assert!(
+        worker_a_after_drain.lease_expires_at() <= node_a_draining_renewed.lease_expires_at(),
+        "a node heartbeat that shortens its lease must also cap child worker leases"
+    );
 
     // A fresh process may take over only after the prior database-owned node
     // lease expires. The membership epoch advances, fencing every old handle.
