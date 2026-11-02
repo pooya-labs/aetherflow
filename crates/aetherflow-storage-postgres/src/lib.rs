@@ -64,6 +64,8 @@ pub enum StorageError {
     },
     /// A task run does not exist.
     TaskRunNotFound(String),
+    /// A workflow run does not exist.
+    WorkflowRunNotFound(String),
     /// A task claim is stale, expired, or belongs to another worker.
     ClaimLost(String),
     /// A lease duration is zero or cannot be represented as signed milliseconds.
@@ -109,6 +111,7 @@ impl fmt::Display for StorageError {
                 "migration {version} checksum mismatch: expected {expected}, found {actual}"
             ),
             Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
+            Self::WorkflowRunNotFound(id) => write!(formatter, "workflow run not found: {id}"),
             Self::ClaimLost(id) => write!(formatter, "task claim is no longer owned: {id}"),
             Self::InvalidLeaseDuration => {
                 formatter.write_str("lease duration must be a positive signed millisecond value")
