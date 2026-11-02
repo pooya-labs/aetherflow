@@ -731,11 +731,13 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .get()
         .await
         .expect("get admin connection for isolated worker role");
+    // The generated credential is restricted to a safe ASCII alphabet, so
+    // it can be embedded as a SQL literal in PostgreSQL's CREATE ROLE command
+    // (utility statements do not accept bind parameters for this option).
     admin_client
-        .execute(
-            &format!("CREATE ROLE {quoted_role} LOGIN PASSWORD $1"),
-            &[&role_password],
-        )
+        .batch_execute(&format!(
+            "CREATE ROLE {quoted_role} LOGIN PASSWORD '{role_password}';"
+        ))
         .await
         .expect("create temporary isolated worker role");
     admin_client
