@@ -1081,7 +1081,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
                 name: restart_stream_name.clone(),
                 subjects: vec![restart_subject.clone()],
                 duplicate_window: Duration::from_secs(120),
-                replicas: 3,
+                num_replicas: 3,
                 ..Default::default()
             })
             .await
