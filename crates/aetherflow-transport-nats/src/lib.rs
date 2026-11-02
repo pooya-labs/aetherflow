@@ -62,8 +62,9 @@ impl OutboxPublisher for NatsJetStreamPublisher {
                 event_type: event.event_type(),
                 payload: event.payload(),
             };
-            let payload = serde_json::to_vec(&envelope)
-                .map_err(|error| OutboxPublishError::new(format!("encode outbox event: {error}")))?;
+            let payload = serde_json::to_vec(&envelope).map_err(|error| {
+                OutboxPublishError::new(format!("encode outbox event: {error}"))
+            })?;
 
             let mut headers = async_nats::HeaderMap::new();
             headers.append("Nats-Msg-Id", event.event_id().to_string());
@@ -75,10 +76,12 @@ impl OutboxPublisher for NatsJetStreamPublisher {
                 .context
                 .publish_with_headers(self.subject.as_str(), headers, payload.into())
                 .await
-                .map_err(|error| OutboxPublishError::new(format!("send JetStream publish: {error}")))?;
-            acknowledgement
-                .await
-                .map_err(|error| OutboxPublishError::new(format!("JetStream publish acknowledgement: {error}")))?;
+                .map_err(|error| {
+                    OutboxPublishError::new(format!("send JetStream publish: {error}"))
+                })?;
+            acknowledgement.await.map_err(|error| {
+                OutboxPublishError::new(format!("JetStream publish acknowledgement: {error}"))
+            })?;
 
             Ok(())
         })
