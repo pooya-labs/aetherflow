@@ -1563,11 +1563,7 @@ impl PgTaskRepository {
             .filter(|(_, status, ..)| {
                 matches!(status.as_str(), "failed" | "cancelled" | "timed_out")
             })
-            .min_by(|left, right| {
-                left.6
-                    .cmp(&right.6)
-                    .then_with(|| left.0.cmp(&right.0))
-            });
+            .min_by(|left, right| left.6.cmp(&right.6).then_with(|| left.0.cmp(&right.0)));
 
         let next_status = if let Some((_, status, ..)) = first_terminal_failure {
             match status.as_str() {
@@ -1576,7 +1572,10 @@ impl PgTaskRepository {
                 "timed_out" => WorkflowStatus::TimedOut,
                 _ => unreachable!("filtered terminal failure status"),
             }
-        } else if task_runs.iter().all(|(_, status, ..)| status == "succeeded") {
+        } else if task_runs
+            .iter()
+            .all(|(_, status, ..)| status == "succeeded")
+        {
             WorkflowStatus::Succeeded
         } else {
             transaction
@@ -1590,15 +1589,8 @@ impl PgTaskRepository {
         if next_status != WorkflowStatus::Succeeded {
             // Stop all remaining work after the first terminal non-success
             // result. Stale worker writes then fail their status/version guards.
-            for (
-                task_run_id,
-                status,
-                version,
-                attempts_started,
-                claimed_by,
-                fencing_token,
-                _,
-            ) in &task_runs
+            for (task_run_id, status, version, attempts_started, claimed_by, fencing_token, _) in
+                &task_runs
             {
                 if !matches!(
                     status.as_str(),
