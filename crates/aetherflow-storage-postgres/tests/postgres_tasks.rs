@@ -287,7 +287,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("claim pending outbox events");
     assert!(first_batch.len() >= 14);
-    let first_event = first_batch.first().expect("at least one outbox event").clone();
+    let first_event = first_batch
+        .first()
+        .expect("at least one outbox event")
+        .clone();
     repository
         .retry_outbox_event(
             first_event.event_id(),
@@ -308,14 +311,19 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .find(|event| event.event_id() == first_event.event_id())
         .expect("retried event is available to another publisher");
     assert!(reclaimed_event.claim_token() > first_event.claim_token());
-    assert_eq!(reclaimed_event.publish_attempts(), first_event.publish_attempts() + 1);
+    assert_eq!(
+        reclaimed_event.publish_attempts(),
+        first_event.publish_attempts() + 1
+    );
 
     assert!(matches!(
-        repository.acknowledge_outbox_event(
-            first_event.event_id(),
-            &publisher_a,
-            first_event.claim_token(),
-        ).await,
+        repository
+            .acknowledge_outbox_event(
+                first_event.event_id(),
+                &publisher_a,
+                first_event.claim_token(),
+            )
+            .await,
         Err(StorageError::ClaimLost(_))
     ));
     repository
@@ -328,11 +336,13 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .expect("current publisher acknowledges event");
 
     assert!(matches!(
-        repository.acknowledge_outbox_event(
-            reclaimed_event.event_id(),
-            &publisher_b,
-            reclaimed_event.claim_token(),
-        ).await,
+        repository
+            .acknowledge_outbox_event(
+                reclaimed_event.event_id(),
+                &publisher_b,
+                reclaimed_event.claim_token(),
+            )
+            .await,
         Err(StorageError::ClaimLost(_))
     ));
 
@@ -344,54 +354,69 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         WorkflowId::parse("durable-failure-workflow-001").expect("valid workflow ID");
     let failure_task_run =
         TaskRunId::parse("durable-failure-task-run-001").expect("valid task-run ID");
-    repository.create_workflow(
-        &failure_workflow_run,
-        &failure_workflow_id,
-        None,
-        &[NewTaskRun::new(
-            failure_task_run.clone(),
-            TaskId::parse("durable-failure-task-001").expect("valid task ID"),
-            TaskInput::empty(),
-            Vec::new(),
-            retry_policy,
-            due_time,
-        )],
-    ).await.expect("create failure workflow");
-    repository.promote_due_tasks(10).await.expect("promote failure task");
+    repository
+        .create_workflow(
+            &failure_workflow_run,
+            &failure_workflow_id,
+            None,
+            &[NewTaskRun::new(
+                failure_task_run.clone(),
+                TaskId::parse("durable-failure-task-001").expect("valid task ID"),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create failure workflow");
+    repository
+        .promote_due_tasks(10)
+        .await
+        .expect("promote failure task");
     let failure_attempt_a =
         AttemptId::parse("durable-failure-attempt-a").expect("valid attempt ID");
-    let failure_claim_a = repository.claim_next(
-        &worker_a,
-        &failure_attempt_a,
-        Duration::from_secs(30),
-    ).await.expect("claim first failure attempt").expect("task is ready");
-    let retrying_failure = repository.record_failure(
-        &failure_task_run,
-        &worker_a,
-        failure_claim_a.task_run().version(),
-        failure_claim_a.fencing_token(),
-        true,
-        "temporary",
-        "transient downstream error",
-    ).await.expect("persist retryable failure");
+    let failure_claim_a = repository
+        .claim_next(&worker_a, &failure_attempt_a, Duration::from_secs(30))
+        .await
+        .expect("claim first failure attempt")
+        .expect("task is ready");
+    let retrying_failure = repository
+        .record_failure(
+            &failure_task_run,
+            &worker_a,
+            failure_claim_a.task_run().version(),
+            failure_claim_a.fencing_token(),
+            true,
+            "temporary",
+            "transient downstream error",
+        )
+        .await
+        .expect("persist retryable failure");
     assert_eq!(retrying_failure.status(), TaskStatus::RetryWaiting);
 
-    repository.promote_due_tasks(10).await.expect("promote retry after zero delay");
+    repository
+        .promote_due_tasks(10)
+        .await
+        .expect("promote retry after zero delay");
     let failure_attempt_b =
         AttemptId::parse("durable-failure-attempt-b").expect("valid attempt ID");
-    let failure_claim_b = repository.claim_next(
-        &worker_b,
-        &failure_attempt_b,
-        Duration::from_secs(30),
-    ).await.expect("claim second failure attempt").expect("retry is ready");
-    let failed = repository.record_failure(
-        &failure_task_run,
-        &worker_b,
-        failure_claim_b.task_run().version(),
-        failure_claim_b.fencing_token(),
-        false,
-        "permanent",
-        "non-retryable business error",
-    ).await.expect("persist permanent failure");
+    let failure_claim_b = repository
+        .claim_next(&worker_b, &failure_attempt_b, Duration::from_secs(30))
+        .await
+        .expect("claim second failure attempt")
+        .expect("retry is ready");
+    let failed = repository
+        .record_failure(
+            &failure_task_run,
+            &worker_b,
+            failure_claim_b.task_run().version(),
+            failure_claim_b.fencing_token(),
+            false,
+            "permanent",
+            "non-retryable business error",
+        )
+        .await
+        .expect("persist permanent failure");
     assert_eq!(failed.status(), TaskStatus::Failed);
 }
