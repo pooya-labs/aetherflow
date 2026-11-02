@@ -428,6 +428,17 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     ));
     assert!(matches!(
         tasks
+            .cancel_task_run_registered(
+                &task_run_id,
+                &old_registration,
+                claim.task_run().version(),
+                claim.fencing_token(),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        tasks
             .recover_expired_leases_registered(&old_registration, 8)
             .await,
         Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
