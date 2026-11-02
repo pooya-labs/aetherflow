@@ -415,4 +415,193 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("persist permanent failure");
     assert_eq!(failed.status(), TaskStatus::Failed);
+
+    // Durable cancellation of a running task closes its attempt and fences late
+    // worker writes in the same transaction as the task.cancelled event.
+    let cancel_workflow_run =
+        WorkflowRunId::parse("durable-cancel-workflow-run-001").expect("valid workflow-run ID");
+    let cancel_workflow =
+        WorkflowId::parse("durable-cancel-workflow-001").expect("valid workflow ID");
+    let cancel_task_run =
+        TaskRunId::parse("durable-cancel-task-run-001").expect("valid task-run ID");
+    repository
+        .create_workflow(
+            &cancel_workflow_run,
+            &cancel_workflow,
+            None,
+            &[NewTaskRun::new(
+                cancel_task_run.clone(),
+                TaskId::parse("durable-cancel-task-001").expect("valid task ID"),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create cancellation workflow");
+    assert_eq!(
+        repository.promote_due_tasks(10).await.expect("promote cancellation task"),
+        vec![cancel_task_run.clone()]
+    );
+    let cancel_attempt =
+        AttemptId::parse("durable-cancel-attempt-001").expect("valid attempt ID");
+    let cancel_claim = repository
+        .claim_next(&worker_a, &cancel_attempt, Duration::from_secs(30))
+        .await
+        .expect("claim cancellation task")
+        .expect("cancellation task is ready");
+    let cancelled = repository
+        .cancel_task_run(&cancel_task_run, cancel_claim.task_run().version())
+        .await
+        .expect("commit durable cancellation");
+    assert_eq!(cancelled.status(), TaskStatus::Cancelled);
+    assert!(matches!(
+        repository
+            .complete(
+                &cancel_task_run,
+                &worker_a,
+                cancel_claim.task_run().version(),
+                cancel_claim.fencing_token(),
+                TaskOutput::empty(),
+            )
+            .await,
+        Err(StorageError::ClaimLost(_))
+    ));
+    let cancel_attempt_outcome: String = pool
+        .get()
+        .await
+        .expect("get PostgreSQL connection")
+        .query_one(
+            "SELECT outcome FROM task_attempts WHERE task_run_id = $1",
+            &[&cancel_task_run.as_str()],
+        )
+        .await
+        .expect("read cancelled attempt outcome")
+        .get(0);
+    assert_eq!(cancel_attempt_outcome, "cancelled");
+
+    // Timeout has the same first-committed terminal-writer rule, but records
+    // the timed_out attempt outcome rather than a retryable handler failure.
+    let timeout_workflow_run =
+        WorkflowRunId::parse("durable-timeout-workflow-run-001").expect("valid workflow-run ID");
+    let timeout_workflow =
+        WorkflowId::parse("durable-timeout-workflow-001").expect("valid workflow ID");
+    let timeout_task_run =
+        TaskRunId::parse("durable-timeout-task-run-001").expect("valid task-run ID");
+    repository
+        .create_workflow(
+            &timeout_workflow_run,
+            &timeout_workflow,
+            None,
+            &[NewTaskRun::new(
+                timeout_task_run.clone(),
+                TaskId::parse("durable-timeout-task-001").expect("valid task ID"),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create timeout workflow");
+    assert_eq!(
+        repository.promote_due_tasks(10).await.expect("promote timeout task"),
+        vec![timeout_task_run.clone()]
+    );
+    let timeout_attempt =
+        AttemptId::parse("durable-timeout-attempt-001").expect("valid attempt ID");
+    let timeout_claim = repository
+        .claim_next(&worker_b, &timeout_attempt, Duration::from_secs(30))
+        .await
+        .expect("claim timeout task")
+        .expect("timeout task is ready");
+    let timed_out = repository
+        .timeout_task_run(&timeout_task_run, timeout_claim.task_run().version())
+        .await
+        .expect("commit durable timeout");
+    assert_eq!(timed_out.status(), TaskStatus::TimedOut);
+    assert!(matches!(
+        repository
+            .complete(
+                &timeout_task_run,
+                &worker_b,
+                timeout_claim.task_run().version(),
+                timeout_claim.fencing_token(),
+                TaskOutput::empty(),
+            )
+            .await,
+        Err(StorageError::ClaimLost(_))
+    ));
+    let timeout_attempt_outcome: String = pool
+        .get()
+        .await
+        .expect("get PostgreSQL connection")
+        .query_one(
+            "SELECT outcome FROM task_attempts WHERE task_run_id = $1",
+            &[&timeout_task_run.as_str()],
+        )
+        .await
+        .expect("read timed-out attempt outcome")
+        .get(0);
+    assert_eq!(timeout_attempt_outcome, "timed_out");
+
+    // Queued work can also be cancelled without fabricating an attempt.
+    let queued_workflow_run =
+        WorkflowRunId::parse("durable-queued-cancel-run-001").expect("valid workflow-run ID");
+    let queued_workflow =
+        WorkflowId::parse("durable-queued-cancel-workflow-001").expect("valid workflow ID");
+    let queued_task_run =
+        TaskRunId::parse("durable-queued-cancel-task-run-001").expect("valid task-run ID");
+    repository
+        .create_workflow(
+            &queued_workflow_run,
+            &queued_workflow,
+            None,
+            &[NewTaskRun::new(
+                queued_task_run.clone(),
+                TaskId::parse("durable-queued-cancel-task-001").expect("valid task ID"),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create queued cancellation workflow");
+    let queued_cancelled = repository
+        .cancel_task_run(&queued_task_run, 0)
+        .await
+        .expect("cancel pending task");
+    assert_eq!(queued_cancelled.status(), TaskStatus::Cancelled);
+    let queued_attempt_count: i64 = pool
+        .get()
+        .await
+        .expect("get PostgreSQL connection")
+        .query_one(
+            "SELECT count(*) FROM task_attempts WHERE task_run_id = $1",
+            &[&queued_task_run.as_str()],
+        )
+        .await
+        .expect("count queued task attempts")
+        .get(0);
+    assert_eq!(queued_attempt_count, 0);
+
+    let terminal_events = repository
+        .claim_outbox_events(
+            &WorkerId::parse("durable-terminal-publisher").expect("valid publisher ID"),
+            100,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("claim terminal transition events");
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == cancel_task_run.as_str() && event.event_type() == "task.cancelled"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == timeout_task_run.as_str() && event.event_type() == "task.timed_out"
+    }));
+    assert!(terminal_events.iter().any(|event| {
+        event.aggregate_id() == queued_task_run.as_str() && event.event_type() == "task.cancelled"
+    }));
 }
