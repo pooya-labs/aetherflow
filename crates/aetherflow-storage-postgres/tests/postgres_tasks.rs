@@ -1124,6 +1124,42 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("acknowledge reclaimed inbox event");
 
+    let renewable_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-renew-001",
+            &inbox_worker_a,
+            Duration::from_millis(200),
+        )
+        .await
+        .expect("claim inbox event before renewal")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected renewable inbox claim, got {other:?}"),
+    };
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    inbox
+        .renew(&renewable_claim, Duration::from_secs(5))
+        .await
+        .expect("renew active inbox lease");
+    tokio::time::sleep(Duration::from_millis(225)).await;
+    assert!(matches!(
+        inbox
+            .try_claim(
+                "billing-consumer",
+                "event-inbox-renew-001",
+                &inbox_worker_b,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("check renewed inbox lease"),
+        InboxClaimResult::Busy
+    ));
+    inbox
+        .acknowledge(&renewable_claim)
+        .await
+        .expect("acknowledge event with renewed lease");
+
     let expiring_claim = match inbox
         .try_claim(
             "billing-consumer",
@@ -1153,6 +1189,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     };
     assert_eq!(after_expiry_claim.attempts(), 2);
     assert_eq!(after_expiry_claim.claim_token(), 2);
+    assert!(matches!(
+        inbox.renew(&expiring_claim, Duration::from_secs(5)).await,
+        Err(StorageError::InboxClaimLost { .. })
+    ));
     assert!(matches!(
         inbox.acknowledge(&expiring_claim).await,
         Err(StorageError::InboxClaimLost { .. })
