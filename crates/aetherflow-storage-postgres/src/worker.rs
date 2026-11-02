@@ -668,7 +668,6 @@ async fn execute_pg_claim(
     let task_run_id = task_run.task_run_id().clone();
     let workflow_run_id = task_run.workflow_run_id().clone();
     let task_id = task_run.task_id().clone();
-    let worker_id = registration.worker_id().clone();
     let expected_version = task_run.version();
     let fencing_token = claim.fencing_token();
 
