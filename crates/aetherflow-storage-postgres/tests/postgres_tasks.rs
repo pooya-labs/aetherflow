@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
-    AttemptId, IdempotencyKey, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowId,
-    WorkflowRunId, WorkflowStatus,
+    AttemptId, IdempotencyKey, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId,
+    TaskStatus, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     InboxClaimResult, MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatcherConfig,
-    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository, PgStore,
-    PgTaskRepository, PgWorkflowCoordinator, PostgresOutboxDispatcher, PostgresTaskWorker,
+    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository,
+    PgMembershipRepository, PgStore, PgTaskRepository, PgWorkflowCoordinator,
+    PostgresOutboxDispatcher, PostgresTaskWorker,
     PostgresWorkerConfig, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -182,7 +183,27 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             },
         )
         .expect("register durable child handler");
-    let durable_worker_id = WorkerId::parse("durable-worker-integration").expect("valid worker ID");
+    let durable_membership = Arc::new(PgMembershipRepository::from_pool(pool.clone()));
+    let durable_node = durable_membership
+        .join_node(
+            &NodeId::parse("durable-worker-node").expect("valid node ID"),
+            &NodeIncarnationId::parse("durable-worker-incarnation")
+                .expect("valid process incarnation ID"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("register durable worker node incarnation");
+    let durable_worker_id =
+        WorkerId::parse("durable-worker-integration").expect("valid worker ID");
+    let durable_registration = durable_membership
+        .register_worker(
+            &durable_node,
+            &durable_worker_id,
+            NonZeroU32::new(2).expect("non-zero worker capacity"),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("register durable worker under its node epoch");
     let durable_worker_config = PostgresWorkerConfig::new(
         NonZeroUsize::new(2).expect("non-zero concurrency"),
         Duration::from_millis(5),
@@ -193,7 +214,8 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     .expect("valid durable worker configuration");
     let durable_worker = PostgresTaskWorker::new(
         Arc::clone(&durable_repository),
-        durable_worker_id,
+        Arc::clone(&durable_membership),
+        durable_registration,
         durable_registry,
         durable_worker_config,
     );
@@ -227,6 +249,19 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("join durable worker")
         .expect("durable worker exits cleanly");
+    assert!(
+        durable_membership
+            .active_workers()
+            .await
+            .expect("list active workers after shutdown")
+            .iter()
+            .all(|worker| worker.worker_id() != &durable_worker_id),
+        "worker shutdown must persist draining state and stop new admissions"
+    );
+    durable_membership
+        .drain_node(&durable_node)
+        .await
+        .expect("drain durable integration-test node");
     assert_eq!(durable_workflow_status, WorkflowStatus::Succeeded);
     assert_eq!(child_execution_count.load(Ordering::SeqCst), 1);
     let durable_root_run_id = durable_submission
