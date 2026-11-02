@@ -1026,8 +1026,13 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             .args(["-u", "nobody"])
             .output()
             .expect("read dedicated nobody UID");
-        assert!(nobody_uid.status.success(), "nobody user must exist for packet test");
-        let uid = String::from_utf8_lossy(&nobody_uid.stdout).trim().to_owned();
+        assert!(
+            nobody_uid.status.success(),
+            "nobody user must exist for packet test"
+        );
+        let uid = String::from_utf8_lossy(&nobody_uid.stdout)
+            .trim()
+            .to_owned();
         let sudo_check = std::process::Command::new("sudo")
             .args(["-n", "-u", "nobody", "--", "id", "-u"])
             .output()
@@ -1055,7 +1060,9 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let child_executable = std::env::current_exe().expect("current integration-test executable");
     let mut child_command = if packet_partition {
         let mut command = std::process::Command::new("sudo");
-        command.args(["-n", "-u", "nobody", "--"]).arg(child_executable);
+        command
+            .args(["-n", "-u", "nobody", "--"])
+            .arg(child_executable);
         command
     } else {
         std::process::Command::new(child_executable)
@@ -1073,7 +1080,10 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
                 &role_password,
             )
             .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
-            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_HOST", &child_database_host)
+            .env(
+                "AETHERFLOW_PARTITION_CHILD_DATABASE_HOST",
+                &child_database_host,
+            )
             .env(
                 "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
                 child_database_port.to_string(),
