@@ -12,9 +12,10 @@ use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatcherConfig, OutboxPublishError,
-    OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository, PgWorkflowCoordinator,
-    PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig, StorageError, TaskFailure,
+    InboxClaimResult, MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatcherConfig,
+    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository, PgStore,
+    PgTaskRepository, PgWorkflowCoordinator, PostgresOutboxDispatcher, PostgresTaskWorker,
+    PostgresWorkerConfig, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
@@ -99,7 +100,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("schema is current"),
-        MigrationOutcome::AlreadyCurrent { version: 1, .. }
+        MigrationOutcome::AlreadyCurrent { version: 2, .. }
     ));
     let repository = PgTaskRepository::from_pool(pool.clone());
 
@@ -1028,6 +1029,139 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     assert_eq!(dispatch_attempts, 2);
     assert_eq!(dispatch_claim_token, 2);
 
+    // The durable inbox suppresses duplicate delivery, reports concurrent
+    // ownership, and fences a previous owner after release or lease expiry.
+    let inbox = PgInboxRepository::from_pool(pool.clone());
+    let inbox_worker_a = WorkerId::parse("durable-inbox-worker-a").expect("valid worker ID");
+    let inbox_worker_b = WorkerId::parse("durable-inbox-worker-b").expect("valid worker ID");
+
+    let completed_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-completed-001",
+            &inbox_worker_a,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("claim inbox event")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected a new inbox claim, got {other:?}"),
+    };
+    assert_eq!(completed_claim.attempts(), 1);
+    assert_eq!(completed_claim.claim_token(), 1);
+    assert!(matches!(
+        inbox
+            .try_claim(
+                "billing-consumer",
+                "event-inbox-completed-001",
+                &inbox_worker_b,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("observe the active inbox claim"),
+        InboxClaimResult::Busy
+    ));
+    inbox
+        .acknowledge(&completed_claim)
+        .await
+        .expect("acknowledge completed inbox event");
+    inbox
+        .acknowledge(&completed_claim)
+        .await
+        .expect("make inbox acknowledgement idempotent");
+    assert!(matches!(
+        inbox
+            .try_claim(
+                "billing-consumer",
+                "event-inbox-completed-001",
+                &inbox_worker_b,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("deduplicate processed event"),
+        InboxClaimResult::AlreadyProcessed
+    ));
+
+    let released_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-release-001",
+            &inbox_worker_a,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("claim event before releasing it")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected a releasable inbox claim, got {other:?}"),
+    };
+    inbox
+        .release(&released_claim, Some("simulated consumer failure"))
+        .await
+        .expect("release failed inbox event");
+    let reclaimed_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-release-001",
+            &inbox_worker_b,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("reclaim released inbox event")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected released inbox event to be claimable, got {other:?}"),
+    };
+    assert_eq!(reclaimed_claim.attempts(), 2);
+    assert_eq!(reclaimed_claim.claim_token(), 2);
+    assert!(matches!(
+        inbox.acknowledge(&released_claim).await,
+        Err(StorageError::InboxClaimLost { .. })
+    ));
+    inbox
+        .acknowledge(&reclaimed_claim)
+        .await
+        .expect("acknowledge reclaimed inbox event");
+
+    let expiring_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-expiry-001",
+            &inbox_worker_a,
+            Duration::from_millis(20),
+        )
+        .await
+        .expect("claim inbox event with a short lease")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected an expiring inbox claim, got {other:?}"),
+    };
+    tokio::time::sleep(Duration::from_millis(35)).await;
+    let after_expiry_claim = match inbox
+        .try_claim(
+            "billing-consumer",
+            "event-inbox-expiry-001",
+            &inbox_worker_b,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("reclaim inbox event after lease expiry")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected expired inbox event to be reclaimable, got {other:?}"),
+    };
+    assert_eq!(after_expiry_claim.attempts(), 2);
+    assert_eq!(after_expiry_claim.claim_token(), 2);
+    assert!(matches!(
+        inbox.acknowledge(&expiring_claim).await,
+        Err(StorageError::InboxClaimLost { .. })
+    ));
+    inbox
+        .acknowledge(&after_expiry_claim)
+        .await
+        .expect("acknowledge inbox event after lease recovery");
+
     // Force the outbox insert to fail after the task and attempt UPDATEs have
     // executed. PostgreSQL must roll the whole completion transaction back.
     let rollback_workflow_run =
@@ -1242,7 +1376,7 @@ async fn postgres_restart_child_process_recovers_expired_task() {
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("verify schema after restart"),
-        MigrationOutcome::AlreadyCurrent { version: 1, .. }
+        MigrationOutcome::AlreadyCurrent { version: 2, .. }
     ));
     let repository = PgTaskRepository::from_pool(pool);
 
