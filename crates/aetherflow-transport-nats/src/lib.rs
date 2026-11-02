@@ -1,3 +1,10 @@
+mod consumer;
+
+pub use consumer::{
+    ConsumerMetrics, ConsumerMetricsSnapshot, EventHandlerFuture, JetStreamEvent,
+    JetStreamEventHandler, NatsConsumerError, NatsJetStreamConsumer,
+};
+
 //! NATS JetStream publishing adapters for AetherFlow's durable outbox.
 //!
 //! The publisher resolves only after JetStream confirms that the message was
