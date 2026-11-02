@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -8,7 +9,8 @@ use aetherflow_core::domain::{
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
-    OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository, PostgresOutboxDispatcher,
+    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgStore, PgTaskRepository,
+    PostgresOutboxDispatcher,
 };
 use aetherflow_transport_nats::NatsJetStreamPublisher;
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
@@ -17,18 +19,38 @@ use futures_util::StreamExt;
 use tokio::time::timeout;
 use tokio_postgres::{Config, NoTls};
 
-struct CapturingPublisher {
+struct CrashWindowPublisher {
     inner: NatsJetStreamPublisher,
     last_claim: Mutex<Option<OutboxClaim>>,
+    attempted_event_ids: Mutex<Vec<i64>>,
+    fail_after_first_storage: AtomicBool,
 }
 
-impl OutboxPublisher for CapturingPublisher {
+impl OutboxPublisher for CrashWindowPublisher {
     fn publish<'a>(&'a self, event: &'a OutboxClaim) -> OutboxPublishFuture<'a> {
         *self
             .last_claim
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(event.clone());
-        self.inner.publish(event)
+        self.attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event.event_id());
+
+        let fail_after_storage = self
+            .fail_after_first_storage
+            .swap(false, Ordering::SeqCst);
+        let publish = self.inner.publish(event);
+        Box::pin(async move {
+            publish.await?;
+            if fail_after_storage {
+                Err(OutboxPublishError::new(
+                    "simulated process loss after JetStream storage acknowledgement",
+                ))
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 
@@ -98,7 +120,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             | MigrationOutcome::AlreadyCurrent { version: 2, .. }
     ));
 
-    let repository = Arc::new(PgTaskRepository::from_pool(pool));
+    let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
     let workflow_run_id =
         WorkflowRunId::parse(format!("nats-workflow-run-{suffix}")).expect("valid workflow-run ID");
     let workflow_id =
@@ -127,9 +149,11 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .expect("create workflow and transactional outbox event");
 
     let nats_publisher = NatsJetStreamPublisher::new(jetstream.clone(), subject);
-    let capturing_publisher = Arc::new(CapturingPublisher {
-        inner: nats_publisher.clone(),
+    let capturing_publisher = Arc::new(CrashWindowPublisher {
+        inner: nats_publisher,
         last_claim: Mutex::new(None),
+        attempted_event_ids: Mutex::new(Vec::new()),
+        fail_after_first_storage: AtomicBool::new(true),
     });
     let dispatcher = PostgresOutboxDispatcher::new(
         Arc::clone(&repository),
@@ -145,27 +169,64 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .expect("valid dispatcher config"),
     );
 
-    let report: OutboxDispatchReport = dispatcher
+    let first_report: OutboxDispatchReport = dispatcher
         .dispatch_once()
         .await
-        .expect("dispatch event to JetStream");
-    assert_eq!(report.claimed(), 1);
-    assert_eq!(report.acknowledged(), 1);
-    assert_eq!(report.rescheduled(), 0);
+        .expect("first publication reaches JetStream before simulated process loss");
+    assert_eq!(first_report.claimed(), 1);
+    assert_eq!(first_report.acknowledged(), 0);
+    assert_eq!(first_report.rescheduled(), 1);
 
-    let claim = capturing_publisher
+    let first_claim = capturing_publisher
         .last_claim
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
-        .expect("capture published outbox claim");
-
-    // Simulate the outbox crash window: JetStream accepted the event, but the
-    // producer retries the same event ID before it can know the DB ack committed.
-    nats_publisher
-        .publish(&claim)
+        .expect("capture first outbox claim");
+    let client = pool.get().await.expect("get PostgreSQL test connection");
+    let first_state = client
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts
+             FROM outbox_events WHERE event_id = $1",
+            &[&first_claim.event_id()],
+        )
         .await
-        .expect("republish stable event ID");
+        .expect("inspect outbox after simulated process loss");
+    assert!(!first_state.get::<_, bool>(0));
+    assert_eq!(first_state.get::<_, i64>(1), 1);
+
+    // The retry must reclaim the same event. JetStream recognizes the stable
+    // Nats-Msg-Id and acknowledges it without storing a second copy.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let second_report = dispatcher
+        .dispatch_once()
+        .await
+        .expect("retry outbox event after simulated process loss");
+    assert_eq!(second_report.claimed(), 1);
+    assert_eq!(second_report.acknowledged(), 1);
+    assert_eq!(second_report.rescheduled(), 0);
+
+    let attempted_ids = capturing_publisher
+        .attempted_event_ids
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        attempted_ids,
+        vec![first_claim.event_id(), first_claim.event_id()]
+    );
+
+    let final_state = client
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts
+             FROM outbox_events WHERE event_id = $1",
+            &[&first_claim.event_id()],
+        )
+        .await
+        .expect("inspect successfully acknowledged outbox event");
+    assert!(final_state.get::<_, bool>(0));
+    assert_eq!(final_state.get::<_, i64>(1), 2);
+    drop(client);
 
     let mut messages = consumer.messages().await.expect("open pull message stream");
     let first = timeout(Duration::from_secs(5), messages.next())
@@ -176,9 +237,9 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let envelope: serde_json::Value =
         serde_json::from_slice(&first.payload).expect("decode published event envelope");
     assert_eq!(envelope["schema_version"], 1);
-    assert_eq!(envelope["event_id"], claim.event_id().to_string());
-    assert_eq!(envelope["event_type"], claim.event_type());
-    assert_eq!(envelope["aggregate_id"], claim.aggregate_id());
+    assert_eq!(envelope["event_id"], first_claim.event_id().to_string());
+    assert_eq!(envelope["event_type"], first_claim.event_type());
+    assert_eq!(envelope["aggregate_id"], first_claim.aggregate_id());
     first.ack().await.expect("acknowledge test message");
 
     // The duplicate publication must not create a second stored message within
