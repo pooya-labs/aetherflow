@@ -253,9 +253,7 @@ impl ExecutionLimits {
         if self.max_memory_bytes == 0 || self.max_memory_bytes > MAX_PLUGIN_MEMORY_BYTES {
             return Err(LimitConfigurationError::MemoryLimitOutOfRange);
         }
-        if self.max_core_instances == 0
-            || self.max_core_instances > MAX_PLUGIN_CORE_INSTANCES
-        {
+        if self.max_core_instances == 0 || self.max_core_instances > MAX_PLUGIN_CORE_INSTANCES {
             return Err(LimitConfigurationError::CoreInstancesOutOfRange);
         }
         if self.max_table_elements == 0 || self.max_table_elements > 10_000 {
