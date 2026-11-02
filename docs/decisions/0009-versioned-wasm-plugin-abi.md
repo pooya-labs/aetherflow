@@ -33,7 +33,7 @@ The workspace currently pins Rust 1.99.1 but declares Rust 1.85 as its package M
 
 ### Engine and isolation
 
-1. Use Wasmtime **48.0.8** with default features disabled and only the Component Model, runtime, standard-library, and Cranelift features enabled.
+1. Use Wasmtime **48.0.8** with default features disabled and only the Component Model, WIT parser/bindgen, runtime, standard-library, and Cranelift features enabled.
 2. Use the 48.x LTS line rather than the newest non-LTS release; update to patched 48.x releases deliberately and review advisories before each upgrade.
 3. Add the Wasmtime dependency with an explicit exact version. Raise the workspace `rust-version` to **1.95.0** in that same commit; the pinned Rust 1.99.1 toolchain already satisfies it.
 4. Do not add `wasmtime-wasi` in ABI v1. Components receive no ambient WASI capabilities.
@@ -55,6 +55,7 @@ The workspace currently pins Rust 1.99.1 but declares Rust 1.85 as its package M
 | Component-model handles | 1,024 | 10,000 |
 | Wall-clock execution | 2 s | 10 s |
 | One log message | 4 KiB | 4 KiB |
+| Log calls per invocation | 64 | 256 |
 
 These are host policy limits, not guarantees about total process RSS. Wasmtime's Store resource limiter controls guest-created memories/tables/instances; the embedder must also bound host allocations and concurrency.
 
