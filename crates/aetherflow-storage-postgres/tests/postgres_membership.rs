@@ -308,7 +308,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     // Keep the node lease short, but the task lease long. The old task lease is
     // still valid when the new process takes the node's next membership epoch.
     let old_node = membership
-        .join_node(&node_id, &old_incarnation, Duration::from_millis(350))
+        .join_node(&node_id, &old_incarnation, Duration::from_secs(5))
         .await
         .expect("old node incarnation joins");
     let old_registration = membership
@@ -316,7 +316,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
             &old_node,
             &old_worker_id,
             NonZeroU32::new(2).expect("positive worker capacity"),
-            Duration::from_millis(300),
+            Duration::from_secs(4),
         )
         .await
         .expect("old worker registration succeeds");
@@ -363,7 +363,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         aetherflow_core::domain::TaskStatus::Running
     );
 
-    tokio::time::sleep(Duration::from_millis(450)).await;
+    tokio::time::sleep(Duration::from_millis(5_200)).await;
     let new_node = membership
         .join_node(&node_id, &new_incarnation, Duration::from_secs(3))
         .await
