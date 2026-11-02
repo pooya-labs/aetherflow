@@ -1,6 +1,6 @@
 # PostgreSQL persistence transaction contract
 
-**Status:** M04 implementation contract. The accompanying initial migration, migration runner, and first task repository vertical slice are verified against PostgreSQL 18 in runs `41362986570` and `41365026199`; remaining operations are identified below as not yet implemented.
+**Status:** M04 implementation contract. The migration runner and durable task/workflow repository operations have passed PostgreSQL 18 integration CI (latest verification: run `41367694624`; Rust quality CI: run `41367694577`). The adapter is still a persistence vertical slice: it is not yet connected to a durable coordinator/worker loop or a real broker publisher/consumer.
 
 ## Source of truth and time
 
@@ -73,6 +73,22 @@ The same rule applies to failure, retry scheduling, timeout, cancellation, and w
 
 The outbox publisher claims pending rows with row locks, publishes outside the transaction, then marks an event published only when its claim token still matches. A crash after publish but before marking it published can cause redelivery. Delivery is therefore at-least-once; consumers deduplicate by stable `event_id`. The outbox prevents lost state-change notifications, but does not make external side effects exactly-once.
 
+## Durable failure, cancellation, timeout, and workflow aggregation
+
+A handler-reported failure is committed with its attempt outcome, task transition, and outbox event in one transaction. Retryable failures move to `retry_waiting` only while the retry budget persisted on the task row permits another attempt; otherwise the task becomes `failed`. Permanent failures become terminal immediately. The storage API accepts a typed `TaskFailure` with an application-defined kind, diagnostic message, and retryability classification.
+
+Explicit task cancellation and timeout are version-guarded terminal transitions. The transaction locks the task row and checks its expected version. For a running task, it also closes the matching active attempt with outcome `cancelled` or `timed_out`; it then clears the lease, increments the task version, records the terminal timestamp, and appends `task.cancelled` or `task.timed_out` to the outbox. A stale worker cannot heartbeat or complete after that transition because the task is no longer running and its version has changed. Cancelling a task that has not been claimed does not fabricate an attempt row.
+
+Workflow aggregation is an explicit `PgTaskRepository` operation; callers must invoke it after relevant task terminal transitions. It locks the workflow row and its task rows in a stable order. The workflow becomes `succeeded` only when every task run is `succeeded`. When a task has reached `failed`, `cancelled`, or `timed_out`, the aggregate outcome is selected from the earliest persisted terminal task timestamp, with task-run ID as a deterministic tie-breaker. The same transaction changes the workflow status, cancels every remaining non-terminal task, closes any active attempt as cancelled, clears active leases, and appends the corresponding task and workflow outbox events. The database timestamp ordering is the persisted arbitration rule; it should not be interpreted as a guarantee about external side-effect or physical commit ordering.
+
+The aggregation API is not yet invoked automatically by a durable coordinator. Wiring it into the future PostgreSQL-backed coordinator is a remaining M04 task.
+
+## Outbox dispatch boundary
+
+The repository exposes outbox claim, retry/reschedule, and acknowledgement operations. Claims have an expiry and a monotonically increasing claim token; retrying and reclaiming an event advances the token, so an old publisher cannot acknowledge a newer publisher's claim. These APIs are integration-tested against PostgreSQL 18, including stale-publisher rejection.
+
+The actual broker publish is deliberately outside the database transaction and is not yet implemented in this repository. The future publisher must publish after claiming and acknowledge only after the broker confirms acceptance. A crash between publish and acknowledgement can redeliver the event. Delivery is therefore at-least-once, and a consumer inbox or equivalent durable deduplication by stable `event_id` remains required. Do not describe outbox claim/ack support as a completed broker integration.
+
 ## Migration discipline
 
 - Each migration is ordered, immutable after release, and checksummed.
@@ -87,4 +103,4 @@ A lease is temporary permission to attempt work, not proof that the previous wor
 
 ## Implemented vertical slice and remaining scope
 
-The current `PgTaskRepository` implements atomic workflow/task/dependency creation, dependency-gated ready promotion, `SKIP LOCKED` claims, attempt creation, fenced heartbeat, successful completion/output persistence, expired-lease recovery, and outbox append in the same transaction for those transitions. PostgreSQL 18 run `41365026199` exercises this path including stale-worker rejection after lease reclamation. The adapter is not yet integrated with the async scheduler. Handler-reported permanent/retryable failure, explicit cancellation/timeout, workflow terminal aggregation, outbox publisher claim/ack/redelivery, and full process-restart coordinator recovery remain future work.
+The current `PgTaskRepository` implements atomic workflow/task/dependency creation, dependency-gated ready promotion, `SKIP LOCKED` claims, attempt creation, fenced heartbeat/completion, output persistence, expired-lease recovery, typed retryable/permanent handler failure, version-guarded cancellation/timeout, explicit workflow terminal aggregation, and outbox claim/retry/ack with stale-publisher fencing. PostgreSQL 18 run `41367694624` exercises these operations, including queued dependency cancellation, running sibling cancellation, active-attempt closure, rejection of stale worker completion, and workflow success/failure/cancel/timeout events. Rust CI run `41367694577` passed formatting, Clippy, tests, build, and documentation. The adapter is not yet integrated with a durable scheduler/coordinator. Real broker publishing, consumer inbox/deduplication, process-crash/restart tests, and transaction crash-window tests remain future work.
