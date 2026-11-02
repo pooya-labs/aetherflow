@@ -82,19 +82,10 @@ impl WasmPluginRuntime {
 
 /// A validated component compiled by one AetherFlow runtime instance.
 pub struct CompiledPlugin {
+    // Kept private so callers cannot bypass host linker policy or create an
+    // unbounded Store. The execution layer consumes this handle internally.
+    #[allow(dead_code)]
     component: Component,
-}
-
-impl CompiledPlugin {
-    /// Returns the validated component's compiled engine-independent metadata.
-    ///
-    /// The raw Wasmtime handle remains private so callers cannot bypass host
-    /// linker policy or create a Store without resource limits.
-    #[must_use]
-    pub fn is_compiled(&self) -> bool {
-        let _ = &self.component;
-        true
-    }
 }
 
 /// Errors produced while creating the engine or validating a component.
@@ -190,12 +181,13 @@ mod tests {
     fn rejects_oversized_artifacts_before_compilation() {
         let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
         let artifact = vec![0; MAX_PLUGIN_ARTIFACT_BYTES + 1];
-        assert_eq!(
+        assert!(matches!(
             runtime.compile_component(&artifact),
             Err(PluginRuntimeError::ArtifactTooLarge {
-                actual: MAX_PLUGIN_ARTIFACT_BYTES + 1,
-                maximum: MAX_PLUGIN_ARTIFACT_BYTES,
-            })
-        );
+                actual,
+                maximum,
+            }) if actual == MAX_PLUGIN_ARTIFACT_BYTES + 1
+                && maximum == MAX_PLUGIN_ARTIFACT_BYTES
+        ));
     }
 }
