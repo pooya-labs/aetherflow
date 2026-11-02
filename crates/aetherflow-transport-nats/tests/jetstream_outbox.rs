@@ -18,7 +18,6 @@ use aetherflow_transport_nats::{
 };
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
-use futures_util::StreamExt;
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_postgres::{Config, NoTls};
