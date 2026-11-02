@@ -155,9 +155,7 @@ fn parse_nats_seed_urls(urls: &str) -> Vec<async_nats::ServerAddr> {
     servers
 }
 
-async fn connect_to_nats(
-    urls: &str,
-) -> Result<async_nats::Client, async_nats::ConnectError> {
+async fn connect_to_nats(urls: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
     async_nats::connect(parse_nats_seed_urls(urls)).await
 }
 
