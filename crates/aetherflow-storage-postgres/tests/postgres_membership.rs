@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,7 +12,13 @@ use aetherflow_storage_postgres::{
     PgTaskRepository, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
-use tokio_postgres::{Config, NoTls};
+use tokio::{
+    io::copy_bidirectional,
+    net::{TcpListener, TcpStream},
+    sync::{mpsc, oneshot},
+    task::JoinSet,
+};
+use tokio_postgres::{config::Host, Config, NoTls};
 
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
@@ -20,6 +27,91 @@ fn unique_suffix() -> String {
         .as_nanos();
     format!("{}_{}", std::process::id(), nanos)
 }
+/// A local TCP relay used to isolate only the child worker's PostgreSQL path.
+/// Closing the gate aborts established streams and rejects new connections;
+/// the test controller and replacement incarnation keep using the direct DB URL.
+struct TcpDatabaseGate {
+    address: SocketAddr,
+    control: mpsc::UnboundedSender<(bool, oneshot::Sender<()>)>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl TcpDatabaseGate {
+    async fn start(upstream_host: String, upstream_port: u16) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind isolated PostgreSQL TCP gate");
+        let address = listener
+            .local_addr()
+            .expect("read isolated PostgreSQL TCP gate address");
+        let (control, mut commands) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut available = true;
+            let mut connections = JoinSet::new();
+            loop {
+                tokio::select! {
+                    command = commands.recv() => {
+                        match command {
+                            Some((next_available, acknowledged)) => {
+                                available = next_available;
+                                if !available {
+                                    // Closing the gate also tears down streams that
+                                    // were already established before the partition.
+                                    connections.abort_all();
+                                    while connections.join_next().await.is_some() {}
+                                }
+                                let _ = acknowledged.send(());
+                            }
+                            None => break,
+                        }
+                    }
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((mut client, _)) => {
+                                if !available {
+                                    continue;
+                                }
+                                let upstream_host = upstream_host.clone();
+                                connections.spawn(async move {
+                                    if let Ok(mut server) =
+                                        TcpStream::connect((upstream_host.as_str(), upstream_port)).await
+                                    {
+                                        let _ = copy_bidirectional(&mut client, &mut server).await;
+                                    }
+                                });
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    Some(_) = connections.join_next(), if !connections.is_empty() => {}
+                }
+            }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+        });
+        Self {
+            address,
+            control,
+            task,
+        }
+    }
+
+    async fn set_available(&self, available: bool) {
+        let (acknowledge, acknowledged) = oneshot::channel();
+        self.control
+            .send((available, acknowledge))
+            .expect("TCP database gate controller is still running");
+        acknowledged
+            .await
+            .expect("TCP database gate applied requested partition state");
+    }
+
+    async fn shutdown(self) {
+        drop(self.control);
+        let _ = self.task.await;
+    }
+}
+
 
 fn pool_from_url(database_url: &str, max_size: usize) -> Pool {
     let config: Config = database_url.parse().expect("valid PostgreSQL URL");
@@ -767,9 +859,33 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .await
         .expect("grant isolated worker database connection");
 
+    // Route only the old process through a TCP relay. The parent/replacement
+    // continue to use the direct database endpoint, so closing the relay
+    // partitions one worker without interrupting the controller.
+    let database_config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    let upstream_host = match database_config.get_hosts().first() {
+        Some(Host::Tcp(host)) => host.clone(),
+        Some(Host::Unix(_)) => panic!("TCP partition test requires a TCP PostgreSQL endpoint"),
+        None => panic!("TCP partition test requires an explicit PostgreSQL host"),
+    };
+    let upstream_port = database_config
+        .get_ports()
+        .first()
+        .copied()
+        .unwrap_or(5432);
+    let database_gate = TcpDatabaseGate::start(upstream_host, upstream_port).await;
+    let mut child_database_config = Config::new();
+    child_database_config
+        .user(&role_name)
+        .password(&role_password)
+        .dbname(&database_name)
+        .host("127.0.0.1")
+        .port(database_gate.address.port())
+        .connect_timeout(Duration::from_secs(2));
+    let child_database_url = child_database_config.to_string();
+
     // Run the old incarnation in a distinct OS process. It holds the claim
-    // and registration in its own address space while the controller revokes
-    // its PostgreSQL login and installs the replacement epoch.
+    // and registration in its own address space while the TCP relay is cut.
     let ready_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.ready"));
     let partition_path =
         std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.partition"));
@@ -787,12 +903,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "postgres_partition_old_worker_child_process",
             "--nocapture",
         ])
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", &database_url)
-        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
-        .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
-            &role_password,
-        )
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", &child_database_url)
         .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
         .env(
             "AETHERFLOW_PARTITION_CHILD_INCARNATION_ID",
@@ -838,21 +949,10 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .parse()
         .expect("old worker writes its node epoch after claiming");
 
-    // Revoke login and terminate every established backend for the child
-    // process. The child remains alive with its old registration and claim.
-    admin_client
-        .batch_execute(&format!("ALTER ROLE {quoted_role} NOLOGIN;"))
-        .await
-        .expect("disable old worker database login");
-    admin_client
-        .query(
-            "SELECT pg_terminate_backend(pid)
-             FROM pg_stat_activity
-             WHERE usename = $1 AND pid <> pg_backend_pid()",
-            &[&role_name],
-        )
-        .await
-        .expect("terminate old worker process database sessions");
+    // Sever the child process's TCP path. The gate aborts all established
+    // streams and rejects new connections while the parent stays connected
+    // directly to PostgreSQL.
+    database_gate.set_available(false).await;
     std::fs::write(&partition_path, "partition")
         .expect("signal the child process that PostgreSQL access is partitioned");
     let partition_ack_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -861,7 +961,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     }
     assert!(
         partition_ack_path.exists(),
-        "old worker process did not fail closed while PostgreSQL login was disabled"
+        "old worker process did not fail closed while its PostgreSQL TCP path was severed"
     );
 
     tokio::time::sleep(Duration::from_millis(3_300)).await;
@@ -930,10 +1030,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     // Reconnect the old OS process while the replacement owns attempt 2.
     // Both stale heartbeat and stale completion must be fenced before the new
     // owner is allowed to settle the task.
-    admin_client
-        .batch_execute(&format!("ALTER ROLE {quoted_role} LOGIN;"))
-        .await
-        .expect("restore old worker database login");
+    database_gate.set_available(true).await;
     std::fs::write(&resume_path, "resume")
         .expect("signal old worker process to reconnect while replacement owns task");
     let child_status = tokio::task::spawn_blocking(move || {
@@ -969,6 +1066,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .drain_node(&new_node)
         .await
         .expect("drain replacement partition-test node");
+    database_gate.shutdown().await;
 
     // Release the temporary role and its grants after the child process exits.
     let _ = admin_client
@@ -995,8 +1093,6 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
 async fn postgres_partition_old_worker_child_process() {
     let (
         Ok(database_url),
-        Ok(database_user),
-        Ok(database_password),
         Ok(node_id),
         Ok(incarnation_id),
         Ok(worker_id),
@@ -1009,8 +1105,6 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(resume_path),
     ) = (
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_URL"),
-        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_USER"),
-        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_NODE_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_INCARNATION_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_WORKER_ID"),
@@ -1026,9 +1120,7 @@ async fn postgres_partition_old_worker_child_process() {
         return;
     };
 
-    let mut child_config: Config = database_url.parse().expect("valid child PostgreSQL URL");
-    child_config.user(&database_user);
-    child_config.password(&database_password);
+    let child_config: Config = database_url.parse().expect("valid child PostgreSQL URL");
     let pool = pool_from_config(child_config, 4);
     let membership = PgMembershipRepository::from_pool(pool.clone());
     let tasks = PgTaskRepository::from_pool(pool.clone());
@@ -1085,7 +1177,7 @@ async fn postgres_partition_old_worker_child_process() {
             )
             .await
             .is_err(),
-        "old worker must fail closed while PostgreSQL login is disabled"
+        "old worker must fail closed while its PostgreSQL TCP path is severed"
     );
     std::fs::write(&partition_ack_path, "database-error-observed")
         .expect("acknowledge fail-closed behavior to parent");
@@ -1096,7 +1188,7 @@ async fn postgres_partition_old_worker_child_process() {
         }
     })
     .await
-    .expect("parent should restore DB access and resume the old process");
+    .expect("parent should restore the PostgreSQL TCP path and resume the old process");
 
     assert!(matches!(
         tasks
