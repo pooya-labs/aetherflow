@@ -916,18 +916,14 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await
         .expect("create broker-partition recovery consumer");
 
-    let partition_workflow_run_id =
-        WorkflowRunId::parse(format!("nats-partition-run-{suffix}"))
-            .expect("valid broker-partition workflow-run ID");
-    let partition_workflow_id =
-        WorkflowId::parse(format!("nats-partition-workflow-{suffix}"))
-            .expect("valid broker-partition workflow ID");
-    let partition_task_run_id =
-        TaskRunId::parse(format!("nats-partition-task-run-{suffix}"))
-            .expect("valid broker-partition task-run ID");
-    let partition_task_id =
-        TaskId::parse(format!("nats-partition-task-{suffix}"))
-            .expect("valid broker-partition task ID");
+    let partition_workflow_run_id = WorkflowRunId::parse(format!("nats-partition-run-{suffix}"))
+        .expect("valid broker-partition workflow-run ID");
+    let partition_workflow_id = WorkflowId::parse(format!("nats-partition-workflow-{suffix}"))
+        .expect("valid broker-partition workflow ID");
+    let partition_task_run_id = TaskRunId::parse(format!("nats-partition-task-run-{suffix}"))
+        .expect("valid broker-partition task-run ID");
+    let partition_task_id = TaskId::parse(format!("nats-partition-task-{suffix}"))
+        .expect("valid broker-partition task ID");
     repository
         .create_workflow(
             &partition_workflow_run_id,
@@ -1052,7 +1048,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .expect("read recovered broker event");
     let delivered_envelope: serde_json::Value =
         serde_json::from_slice(&delivered.payload).expect("decode recovered event envelope");
-    assert_eq!(delivered_envelope["event_id"], partition_event_id.to_string());
+    assert_eq!(
+        delivered_envelope["event_id"],
+        partition_event_id.to_string()
+    );
     delivered
         .double_ack()
         .await
@@ -1061,7 +1060,10 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         Err(_) | Ok(None) => {}
         Ok(Some(Err(error))) => panic!("broker-partition consumer failed: {error}"),
         Ok(Some(Ok(message))) => {
-            panic!("broker recovery produced a duplicate event: {:?}", message.subject)
+            panic!(
+                "broker recovery produced a duplicate event: {:?}",
+                message.subject
+            )
         }
     }
     drop(partition_messages);
