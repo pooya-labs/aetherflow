@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use aetherflow_core::EntityId;
 use aetherflow_wasm::{
-    Capability, CapabilitySet, ExecutionLimits, PluginExecutionContext, PluginRuntimeError,
-    WasmPluginRuntime, MAX_PLUGIN_FUEL,
+    Capability, CapabilitySet, ExecutionLimits, MAX_PLUGIN_FUEL, PluginExecutionContext,
+    PluginRuntimeError, WasmPluginRuntime,
 };
 
 fn replace_once(source: &mut String, needle: &str, replacement: &str) {
@@ -43,11 +43,7 @@ fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec
     // to result<list<u8>, plugin-error>. Zeroed memory at 0 is Ok(empty list).
     // Core import 0 is host.log: level, message pointer, length, result pointer.
     let execute_replacement = format!("{execute_body}\n  )");
-    replace_once(
-        &mut core_wat,
-        "    unreachable\n  )",
-        &execute_replacement,
-    );
+    replace_once(&mut core_wat, "    unreachable\n  )", &execute_replacement);
 
     // A monotonic aligned allocator handles the fixture's small host inputs.
     replace_once(
@@ -75,7 +71,6 @@ fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec
         .expect("encode and validate guest component")
 }
 
-
 fn valid_component_from_checked_in_wit() -> Vec<u8> {
     component_from_checked_in_wit(
         r#"    i32.const 2
@@ -95,8 +90,10 @@ fn fixture_data_segment(offset: u32, bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!(r#"\{byte:02x}"#))
         .collect::<String>();
-    format!(r#"  (data (i32.const {offset}) "{encoded}")
-"#)
+    format!(
+        r#"  (data (i32.const {offset}) "{encoded}")
+"#
+    )
 }
 
 fn component_returning_output(output: &[u8]) -> Vec<u8> {
@@ -211,8 +208,6 @@ fn checked_in_wit_component_compiles_instantiates_and_executes() {
         .expect("oversized host log is rejected without trapping the guest");
     assert!(bounded.logs.is_empty());
 }
-
-
 
 #[test]
 fn component_guest_errors_keep_their_typed_code_and_message() {
