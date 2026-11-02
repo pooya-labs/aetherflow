@@ -1698,3 +1698,339 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
         .await
         .expect("drain integration-test node");
 }
+
+#[tokio::test]
+async fn postgres_worker_process_death_recovers_inflight_task() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_TEST_DATABASE_URL is not set; skipping worker process-death recovery test"
+        );
+        return;
+    };
+
+    let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(8)
+        .build()
+        .expect("build PostgreSQL pool");
+    let store = PgStore::from_pool(pool.clone());
+    store
+        .migrate()
+        .await
+        .expect("ensure current PostgreSQL schema");
+
+    let repository = PgTaskRepository::from_pool(pool.clone());
+    let membership = PgMembershipRepository::from_pool(pool.clone());
+    let suffix = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos()
+    );
+    let workflow_id =
+        WorkflowId::parse(format!("worker-crash-workflow-{suffix}")).expect("valid workflow ID");
+    let workflow_run_id =
+        WorkflowRunId::parse(format!("worker-crash-run-{suffix}")).expect("valid workflow-run ID");
+    let task_id =
+        TaskId::parse(format!("worker-crash-task-{suffix}")).expect("valid task ID");
+    let task_run_id =
+        TaskRunId::parse(format!("worker-crash-task-run-{suffix}")).expect("valid task-run ID");
+    let old_node_id =
+        NodeId::parse(format!("worker-crash-node-{suffix}")).expect("valid node ID");
+    let old_incarnation =
+        NodeIncarnationId::parse(format!("worker-crash-old-incarnation-{suffix}"))
+            .expect("valid old incarnation");
+    let replacement_incarnation =
+        NodeIncarnationId::parse(format!("worker-crash-new-incarnation-{suffix}"))
+            .expect("valid replacement incarnation");
+    let old_worker_id =
+        WorkerId::parse(format!("worker-crash-old-worker-{suffix}")).expect("valid old worker ID");
+    let replacement_worker_id = WorkerId::parse(format!("worker-crash-new-worker-{suffix}"))
+        .expect("valid replacement worker ID");
+    let retry_policy =
+        RetryPolicy::new(NonZeroU32::new(2).expect("positive attempt budget"), 0, 0)
+            .expect("valid retry policy");
+
+    repository
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id.clone(),
+                task_id.clone(),
+                TaskInput::new(b"process-crash-input".to_vec()).expect("valid task input"),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() - Duration::from_secs(1),
+            )],
+        )
+        .await
+        .expect("create task for abrupt worker process-death test");
+    repository
+        .promote_due_tasks(8)
+        .await
+        .expect("promote task before spawning worker");
+
+    let handler_started_path =
+        std::env::temp_dir().join(format!("aetherflow-worker-crash-{suffix}.started"));
+    let _ = std::fs::remove_file(&handler_started_path);
+    let mut old_worker_process = Command::new(
+        std::env::current_exe().expect("current PostgreSQL integration test executable"),
+    )
+    .args([
+        "--exact",
+        "postgres_task_worker_crash_child_process",
+        "--nocapture",
+    ])
+    .env(
+        "AETHERFLOW_WORKER_CRASH_CHILD_DATABASE_URL",
+        &database_url,
+    )
+    .env("AETHERFLOW_WORKER_CRASH_CHILD_NODE_ID", old_node_id.as_str())
+    .env(
+        "AETHERFLOW_WORKER_CRASH_CHILD_INCARNATION_ID",
+        old_incarnation.as_str(),
+    )
+    .env(
+        "AETHERFLOW_WORKER_CRASH_CHILD_WORKER_ID",
+        old_worker_id.as_str(),
+    )
+    .env("AETHERFLOW_WORKER_CRASH_CHILD_TASK_ID", task_id.as_str())
+    .env(
+        "AETHERFLOW_WORKER_CRASH_CHILD_HANDLER_STARTED_PATH",
+        &handler_started_path,
+    )
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::inherit())
+    .spawn()
+    .expect("spawn old PostgreSQL task worker as a separate OS process");
+
+    let handler_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !handler_started_path.exists() && tokio::time::Instant::now() < handler_deadline {
+        if let Some(status) = old_worker_process
+            .try_wait()
+            .expect("poll old worker child process")
+        {
+            panic!("old worker exited before starting the handler: {status}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    if !handler_started_path.exists() {
+        let _ = old_worker_process.kill();
+        let _ = old_worker_process.wait();
+        panic!("old worker did not enter its task handler before timeout");
+    }
+
+    let diagnostic_client = pool
+        .get()
+        .await
+        .expect("get task connection before killing worker");
+    let old_task_state = diagnostic_client
+        .query_one(
+            "SELECT status, fencing_token, attempts_started
+             FROM task_runs WHERE task_run_id = $1",
+            &[&task_run_id.as_str()],
+        )
+        .await
+        .expect("read task state while old handler is running");
+    assert_eq!(old_task_state.get::<_, String>(0), "running");
+    let old_fencing_token: i64 = old_task_state.get(1);
+    assert_eq!(old_task_state.get::<_, i32>(2), 1);
+
+    // Kill the process rather than signalling graceful shutdown. Its in-memory
+    // handler future and cancellation handle disappear without settling task state.
+    old_worker_process
+        .kill()
+        .expect("kill worker process while handler is active");
+    let old_exit = old_worker_process
+        .wait()
+        .expect("wait for abruptly terminated worker process");
+    assert!(!old_exit.success(), "old worker should have been killed forcibly");
+    drop(diagnostic_client);
+
+    // Worker/node membership and task leases are independent durable clocks.
+    // Wait beyond the longest lease so replacement recovery is deterministic.
+    tokio::time::sleep(Duration::from_millis(3_700)).await;
+
+    let replacement_node = membership
+        .join_node(
+            &old_node_id,
+            &replacement_incarnation,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("replacement process takes over after old membership expires");
+    let replacement_registration = membership
+        .register_worker(
+            &replacement_node,
+            &replacement_worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_secs(20),
+        )
+        .await
+        .expect("register replacement process worker");
+
+    let recovered = repository
+        .recover_expired_leases_registered(&replacement_registration, 8)
+        .await
+        .expect("replacement process recovers the abandoned task");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].task_run().status(), TaskStatus::RetryWaiting);
+
+    repository
+        .promote_due_tasks_registered(&replacement_registration, 8)
+        .await
+        .expect("promote process-crash recovery task");
+    let replacement_attempt =
+        AttemptId::parse(format!("worker-crash-replacement-attempt-{suffix}"))
+            .expect("valid replacement attempt ID");
+    let replacement_claim = repository
+        .claim_next_registered_for_tasks(
+            &replacement_registration,
+            std::slice::from_ref(&task_id),
+            &replacement_attempt,
+            Duration::from_secs(3),
+        )
+        .await
+        .expect("replacement worker claims recovered task")
+        .expect("recovered task is ready");
+    assert_eq!(replacement_claim.attempt_number().get(), 2);
+    assert!(replacement_claim.fencing_token() > old_fencing_token as u64);
+
+    let completed = repository
+        .complete_registered(
+            &task_run_id,
+            &replacement_registration,
+            replacement_claim.task_run().version(),
+            replacement_claim.fencing_token(),
+            TaskOutput::new(b"completed-after-worker-process-death".to_vec())
+                .expect("valid replacement output"),
+        )
+        .await
+        .expect("replacement worker completes recovered task");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run_registered(&workflow_run_id, &replacement_registration)
+            .await
+            .expect("aggregate workflow after replacement completion"),
+        WorkflowStatus::Succeeded
+    );
+
+    membership
+        .drain_node(&replacement_node)
+        .await
+        .expect("drain replacement worker-crash test node");
+    let _ = std::fs::remove_file(&handler_started_path);
+}
+
+#[tokio::test]
+async fn postgres_task_worker_crash_child_process() {
+    let (
+        Ok(database_url),
+        Ok(node_id),
+        Ok(incarnation_id),
+        Ok(worker_id),
+        Ok(task_id),
+        Ok(handler_started_path),
+    ) = (
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_DATABASE_URL"),
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_NODE_ID"),
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_INCARNATION_ID"),
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_WORKER_ID"),
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_TASK_ID"),
+        std::env::var("AETHERFLOW_WORKER_CRASH_CHILD_HANDLER_STARTED_PATH"),
+    )
+    else {
+        return;
+    };
+
+    let config: Config = database_url.parse().expect("valid child PostgreSQL URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(6)
+        .build()
+        .expect("build child PostgreSQL pool");
+    let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
+    let membership = Arc::new(PgMembershipRepository::from_pool(pool));
+    let node_id = NodeId::parse(node_id).expect("valid child node ID");
+    let incarnation_id =
+        NodeIncarnationId::parse(incarnation_id).expect("valid child incarnation ID");
+    let worker_id = WorkerId::parse(worker_id).expect("valid child worker ID");
+    let task_id = TaskId::parse(task_id).expect("valid child task ID");
+
+    let node = membership
+        .join_node(&node_id, &incarnation_id, Duration::from_secs(3))
+        .await
+        .expect("child process joins old node incarnation");
+    let registration = membership
+        .register_worker(
+            &node,
+            &worker_id,
+            NonZeroU32::new(1).expect("positive child worker capacity"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("child process registers old worker");
+    let ready_path_for_handler = handler_started_path.clone();
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(task_id, move |_context: TaskContext| {
+            let ready_path = ready_path_for_handler.clone();
+            async move {
+                std::fs::write(ready_path, "handler-started")
+                    .expect("write child handler started marker");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(TaskOutput::empty())
+            }
+        })
+        .expect("register long-running crash-test handler");
+    let worker_config = PostgresWorkerConfig::new(
+        NonZeroUsize::new(1).expect("positive child worker concurrency"),
+        Duration::from_millis(10),
+        Duration::from_secs(3),
+        Duration::from_millis(200),
+        None,
+    )
+    .expect("valid child process worker configuration");
+    let worker = PostgresTaskWorker::new(
+        Arc::clone(&repository),
+        Arc::clone(&membership),
+        registration,
+        registry,
+        worker_config,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
+
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !std::path::Path::new(&handler_started_path).exists() {
+            if worker_handle.is_finished() {
+                panic!("worker exited before entering the long-running handler");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("child worker should enter the long-running handler");
+
+    // Do not request shutdown: the parent test kills this process while the
+    // handler is still in flight, exercising OS-level abrupt process loss.
+    std::future::pending::<()>().await;
+}
