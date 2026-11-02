@@ -155,10 +155,10 @@ fn parse_nats_seed_urls(urls: &str) -> Vec<async_nats::ServerAddr> {
     servers
 }
 
-async fn connect_to_nats(urls: &str) -> async_nats::Client {
-    async_nats::connect(parse_nats_seed_urls(urls))
-        .await
-        .expect("connect using the configured NATS seed server pool")
+async fn connect_to_nats(
+    urls: &str,
+) -> Result<async_nats::Client, async_nats::ConnectError> {
+    async_nats::connect(parse_nats_seed_urls(urls)).await
 }
 
 #[test]
@@ -185,7 +185,9 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let stream_name = format!("AFLOW_TEST_{}", suffix.replace('_', ""));
     let consumer_name = format!("aflow_test_{}", suffix.replace('_', ""));
 
-    let client = connect_to_nats(&nats_url).await;
+    let client = connect_to_nats(&nats_url)
+        .await
+        .expect("connect to NATS seed server pool");
     let jetstream = jetstream::new(client);
     let stream = jetstream
         .create_stream(jetstream::stream::Config {
@@ -1237,7 +1239,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
 
         let ready = timeout(Duration::from_secs(15), async {
             loop {
-                if let Ok(client) =
+                if let Ok(Ok(client)) =
                     timeout(Duration::from_millis(300), connect_to_nats(&nats_url)).await
                 {
                     drop(client);
@@ -1360,7 +1362,9 @@ async fn jetstream_child_process_exits_after_broker_storage_before_outbox_ack() 
     let claim = &claims[0];
     assert_eq!(claim.event_id(), expected_event_id);
 
-    let client = connect_to_nats(&nats_url).await;
+    let client = connect_to_nats(&nats_url)
+        .await
+        .expect("connect publisher child to NATS seed server pool");
     let publisher = NatsJetStreamPublisher::new(jetstream::new(client), subject);
     publisher
         .publish(claim)
@@ -1413,7 +1417,9 @@ async fn jetstream_child_process_exits_after_inbox_commit_before_broker_ack() {
         .build()
         .expect("build consumer child database pool");
     let inbox = PgInboxRepository::from_pool(pool.clone());
-    let client = connect_to_nats(&nats_url).await;
+    let client = connect_to_nats(&nats_url)
+        .await
+        .expect("connect consumer child to NATS seed server pool");
     let jetstream = jetstream::new(client);
     let stream = jetstream
         .get_stream(stream_name)
