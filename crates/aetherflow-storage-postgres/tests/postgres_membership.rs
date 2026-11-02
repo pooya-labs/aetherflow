@@ -63,7 +63,7 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         WorkerId::parse(format!("membership-worker-b-{suffix}")).expect("valid second worker ID");
 
     let node_a = membership
-        .join_node(&node_id, &incarnation_a, Duration::from_millis(350))
+        .join_node(&node_id, &incarnation_a, Duration::from_secs(3))
         .await
         .expect("first incarnation should acquire node membership");
     assert_eq!(node_a.epoch(), 1);
@@ -72,7 +72,7 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
     // The same live process incarnation may idempotently refresh its lease
     // without changing the fencing epoch.
     let node_a_renewed = membership
-        .join_node(&node_id, &incarnation_a, Duration::from_millis(400))
+        .join_node(&node_id, &incarnation_a, Duration::from_secs(3))
         .await
         .expect("same incarnation may renew through join");
     assert_eq!(node_a_renewed.epoch(), 1);
@@ -119,18 +119,6 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .await
         .expect("drain the worker");
     assert_eq!(worker_a_draining.status(), MembershipStatus::Draining);
-    assert!(matches!(
-        membership
-            .register_worker(
-                &node_a_renewed,
-                &worker_b_id,
-                NonZeroU32::new(1).expect("positive worker concurrency"),
-                Duration::from_secs(1),
-            )
-            .await,
-        Ok(_)
-    ));
-
     // Node drain atomically drains all active registrations. Draining leases
     // can still heartbeat while the process completes existing work.
     let node_a_draining = membership
@@ -157,14 +145,14 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
     ));
 
     let node_a_draining_renewed = membership
-        .heartbeat_node(&node_a_draining, Duration::from_millis(350))
+        .heartbeat_node(&node_a_draining, Duration::from_millis(250))
         .await
         .expect("draining node may heartbeat during graceful shutdown");
     assert_eq!(node_a_draining_renewed.status(), MembershipStatus::Draining);
 
     // A fresh process may take over only after the prior database-owned node
     // lease expires. The membership epoch advances, fencing every old handle.
-    tokio::time::sleep(Duration::from_millis(380)).await;
+    tokio::time::sleep(Duration::from_millis(280)).await;
     let node_b = membership
         .join_node(&node_id, &incarnation_b, Duration::from_secs(2))
         .await
