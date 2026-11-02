@@ -68,9 +68,10 @@ Overall status: **M04 in progress; M00–M03 complete and hosted-verified**
 - [x] Implement dependency-aware promotion and atomic `FOR UPDATE SKIP LOCKED` claims with attempt/outbox creation.
 - [x] Implement fenced heartbeat and successful completion with output persistence and same-transaction outbox records.
 - [x] Implement expired-lease recovery to retry-waiting/failed state; verify stale worker heartbeat/completion is rejected and fencing token increases on reclaim.
-- [ ] Implement durable handler-reported retryable/permanent failure, cancellation, and timeout transitions.
+- [x] Implement transactional retryable/permanent worker-failure recording with attempt history and outbox events (initial API and integration tests added; hosted verification pending).
+- [ ] Implement durable task cancellation and timeout transitions.
 - [ ] Aggregate task outcomes into durable workflow-run terminal status.
-- [ ] Implement outbox claim/publish/ack/retry and duplicate-delivery consumer contract.
+- [ ] Implement outbox claim/publish/ack/retry and duplicate-delivery consumer contract (claim, reschedule, acknowledgement, and stale publisher token guards added; integration verification pending).
 - [ ] Add process-crash/restart and transaction crash-window integration tests; connect the adapter to a durable coordinator/worker loop.
 
 ### M05 — Distributed coordination and event delivery
@@ -116,7 +117,7 @@ Overall status: **M04 in progress; M00–M03 complete and hosted-verified**
 
 **In progress:** M04 durable persistence. PostgreSQL 18 schema and migration bootstrap are verified: the initial migration applies with a checksum ledger in one transaction; advisory locking serializes concurrent startup; checksum drift, untracked migration history, unsupported newer schema, payload bounds, invalid leases, and duplicate dependency edges are rejected. The async `PgTaskRepository` vertical slice is now hosted-verified. It atomically creates workflow/task/dependency rows, promotes only tasks whose direct dependencies succeeded, claims with `FOR UPDATE SKIP LOCKED`, persists attempts and fencing tokens, extends leases with owner/version/fencing checks, commits successful outputs and outbox events together, and recovers expired leases to retry-waiting or failed state.
 
-**Next action:** Add durable handler failure/retry and cancellation/timeout commands; aggregate task outcomes into workflow-run terminal states; implement outbox publisher claiming, publish acknowledgement, retry and duplicate-delivery semantics. Then add crash-window/process-restart tests and connect the async PostgreSQL repository to a durable worker/coordinator loop without reusing process-local monotonic timestamps.
+**Next action:** Verify the new durable handler failure/retry and outbox claim/retry/ack APIs in PostgreSQL 18 CI. Then implement durable task cancellation/timeout and workflow terminal aggregation. Add crash-window/process-restart tests and connect the async PostgreSQL repository to a durable worker/coordinator loop without reusing process-local monotonic timestamps.
 
 **Verification:** M01 run `41353166515`; M03 repository/server run `41353963000`; async scheduler run `41354805491`; DAG validation run `41355173212`; workflow coordinator run `41356396516`; cooperative cancellation run `41357065422`; bounded shutdown run `41357506821`; payload I/O run `41358509174`; direct-dependency dataflow run `41359053561`; PostgreSQL migration-runner hardening run `41362986570`; latest Rust workspace run `41365026218`; and PostgreSQL 18 durable task repository run `41365026199` all completed successfully. Rust CI passed locked dependency resolution, formatting, Clippy, 53 workspace tests (15 core, 35 runtime, 2 server, 1 storage unit), release build, and docs. The PostgreSQL 18 job executed both storage integration tests: migration bootstrap/fail-closed checks and the durable task flow covering workflow creation, dependency gating, claim, heartbeat, output completion, lease expiry/recovery, retry attempt 2, strictly higher fencing token, stale-worker write rejection, and transactional outbox records. It also passed the six-table/eight-index inventory and SQL constraint fixtures.
 

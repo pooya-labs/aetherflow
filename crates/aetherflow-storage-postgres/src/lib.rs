@@ -10,7 +10,7 @@ use std::fmt;
 mod task_repository;
 
 pub use task_repository::{
-    DurableTaskRun, NewTaskRun, PgTaskClaim, PgTaskRepository, RecoveredLease,
+    DurableTaskRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository, RecoveredLease,
 };
 
 const INITIAL_MIGRATION_SQL: &str =

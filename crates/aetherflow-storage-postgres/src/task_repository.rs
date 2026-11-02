@@ -226,6 +226,65 @@ impl RecoveredLease {
     }
 }
 
+
+/// A claimed outbox event. Publish it outside the database transaction, then
+/// acknowledge or reschedule it with the same owner and claim token.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutboxClaim {
+    event_id: i64,
+    aggregate_type: String,
+    aggregate_id: String,
+    aggregate_version: u64,
+    event_type: String,
+    payload: serde_json::Value,
+    publisher_id: WorkerId,
+    claim_token: u64,
+    claim_expires_at: SystemTime,
+    publish_attempts: u32,
+}
+
+impl OutboxClaim {
+    /// Returns the stable database event ID.
+    #[must_use]
+    pub fn event_id(&self) -> i64 { self.event_id }
+
+    /// Returns the aggregate category.
+    #[must_use]
+    pub fn aggregate_type(&self) -> &str { &self.aggregate_type }
+
+    /// Returns the aggregate identifier.
+    #[must_use]
+    pub fn aggregate_id(&self) -> &str { &self.aggregate_id }
+
+    /// Returns the aggregate lifecycle version.
+    #[must_use]
+    pub fn aggregate_version(&self) -> u64 { self.aggregate_version }
+
+    /// Returns the event type.
+    #[must_use]
+    pub fn event_type(&self) -> &str { &self.event_type }
+
+    /// Returns the structured event payload.
+    #[must_use]
+    pub fn payload(&self) -> &serde_json::Value { &self.payload }
+
+    /// Returns the publisher that owns this claim.
+    #[must_use]
+    pub fn publisher_id(&self) -> &WorkerId { &self.publisher_id }
+
+    /// Returns the fencing token for this outbox claim.
+    #[must_use]
+    pub fn claim_token(&self) -> u64 { self.claim_token }
+
+    /// Returns the lease expiry assigned by PostgreSQL.
+    #[must_use]
+    pub fn claim_expires_at(&self) -> SystemTime { self.claim_expires_at }
+
+    /// Returns how many times this event has been claimed for publication.
+    #[must_use]
+    pub fn publish_attempts(&self) -> u32 { self.publish_attempts }
+}
+
 /// PostgreSQL-backed task repository with atomic claims and fencing.
 #[derive(Clone)]
 pub struct PgTaskRepository {
@@ -706,6 +765,138 @@ impl PgTaskRepository {
         Ok(snapshot)
     }
 
+    /// Records a worker-reported failure and schedules retry or commits terminal failure.
+    ///
+    /// The task state, attempt outcome, and outbox event commit atomically. A
+    /// retryable error only schedules another attempt while the persisted budget
+    /// permits it; otherwise the task becomes failed.
+    pub async fn record_failure(
+        &self,
+        task_run_id: &TaskRunId,
+        worker_id: &WorkerId,
+        expected_version: u64,
+        fencing_token: u64,
+        retryable: bool,
+        error_kind: &str,
+        error_message: &str,
+    ) -> Result<DurableTaskRun, StorageError> {
+        let expected_version = sql_i64(expected_version)?;
+        let fencing_token = sql_i64(fencing_token)?;
+        let mut client = self.pool.get().await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client.transaction().await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        let row = transaction.query_opt(
+            "SELECT attempts_started, max_attempts, initial_backoff_ms, max_backoff_ms \
+             FROM task_runs \
+             WHERE task_run_id = $1 AND status = 'running' AND claimed_by = $2 \
+               AND version = $3 AND fencing_token = $4 \
+               AND lease_expires_at > clock_timestamp() \
+             FOR UPDATE",
+            &[
+                &task_run_id.as_str(),
+                &worker_id.as_str(),
+                &expected_version,
+                &fencing_token,
+            ],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?
+         .ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
+
+        let attempts_started: i32 = row.get(0);
+        let max_attempts: i32 = row.get(1);
+        let initial_backoff_ms: i64 = row.get(2);
+        let max_backoff_ms: i64 = row.get(3);
+        let attempts = u32::try_from(attempts_started)
+            .map_err(|_| StorageError::InvalidStoredValue("negative attempt count".to_owned()))?;
+        let max_attempts = u32::try_from(max_attempts)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| StorageError::InvalidStoredValue("invalid retry budget".to_owned()))?;
+        let policy = RetryPolicy::new(
+            max_attempts,
+            u64::try_from(initial_backoff_ms)
+                .map_err(|_| StorageError::InvalidStoredValue("negative initial backoff".to_owned()))?,
+            u64::try_from(max_backoff_ms)
+                .map_err(|_| StorageError::InvalidStoredValue("negative maximum backoff".to_owned()))?,
+        ).map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?;
+
+        let will_retry = retryable && policy.permits_retry(attempts);
+        let retry_delay_seconds = if will_retry {
+            let retry_number = NonZeroU32::new(attempts)
+                .ok_or_else(|| StorageError::InvalidStoredValue("running task has no attempts".to_owned()))?;
+            Duration::from_millis(policy.backoff_ms(retry_number)).as_secs_f64()
+        } else {
+            0.0
+        };
+        let attempt_outcome = if retryable { "retryable_failure" } else { "permanent_failure" };
+        let attempt_updated = transaction.execute(
+            "UPDATE task_attempts \
+             SET outcome = $5, finished_at = clock_timestamp(), error_kind = $6, error_message = $7 \
+             WHERE task_run_id = $1 AND attempt_number = $2 AND worker_id = $3 \
+               AND fencing_token = $4 AND outcome = 'running'",
+            &[
+                &task_run_id.as_str(),
+                &attempts_started,
+                &worker_id.as_str(),
+                &fencing_token,
+                &attempt_outcome,
+                &error_kind,
+                &error_message,
+            ],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        if attempt_updated != 1 {
+            return Err(StorageError::InconsistentState(
+                "task failure did not match one running attempt".to_owned(),
+            ));
+        }
+
+        let next_status = if will_retry { "retry_waiting" } else { "failed" };
+        let updated = transaction.query_one(
+            "UPDATE task_runs \
+             SET status = $5, claimed_by = NULL, lease_expires_at = NULL, \
+                 available_at = CASE WHEN $5 = 'retry_waiting' \
+                     THEN clock_timestamp() + make_interval(secs => $6) \
+                     ELSE available_at END, \
+                 version = version + 1, updated_at = clock_timestamp(), \
+                 finished_at = CASE WHEN $5 = 'failed' THEN clock_timestamp() ELSE NULL END, \
+                 last_error_kind = $7, last_error_message = $8 \
+             WHERE task_run_id = $1 AND status = 'running' AND version = $2 \
+               AND claimed_by = $3 AND fencing_token = $4 \
+             RETURNING version",
+            &[
+                &task_run_id.as_str(),
+                &expected_version,
+                &worker_id.as_str(),
+                &fencing_token,
+                &next_status,
+                &retry_delay_seconds,
+                &error_kind,
+                &error_message,
+            ],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        let version: i64 = updated.get(0);
+        let event_type = if will_retry { "task.retry_scheduled" } else { "task.failed" };
+        append_outbox(
+            &transaction,
+            "task_run",
+            task_run_id.as_str(),
+            version,
+            event_type,
+            json!({
+                "task_run_id": task_run_id.as_str(),
+                "status": next_status,
+                "error_kind": error_kind,
+                "error_message": error_message,
+                "version": version
+            }),
+        ).await?;
+        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        transaction.commit().await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(snapshot)
+    }
+
     /// Recovers expired leases in bounded batches. A later claim gets a larger fencing token.
     pub async fn recover_expired_leases(
         &self,
@@ -827,6 +1018,140 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(recovered)
+    }
+
+    /// Claims pending outbox events for publication using row locks and claim fencing.
+    ///
+    /// Return these events to the caller, publish outside the transaction, then
+    /// call acknowledge_outbox_event or retry_outbox_event with the returned token.
+    pub async fn claim_outbox_events(
+        &self,
+        publisher_id: &WorkerId,
+        limit: i64,
+        lease_duration: Duration,
+    ) -> Result<Vec<OutboxClaim>, StorageError> {
+        if limit <= 0 {
+            return Ok(Vec::new());
+        }
+        let lease_seconds = lease_seconds(lease_duration)?;
+        let mut client = self.pool.get().await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client.transaction().await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let rows = transaction.query(
+            "WITH candidates AS ( \
+                SELECT event_id \
+                FROM outbox_events \
+                WHERE published_at IS NULL AND available_at <= clock_timestamp() \
+                  AND (claim_expires_at IS NULL OR claim_expires_at <= clock_timestamp()) \
+                ORDER BY available_at, event_id \
+                LIMIT $1 FOR UPDATE SKIP LOCKED \
+            ) \
+            UPDATE outbox_events AS event \
+            SET claim_owner = $2, claim_token = event.claim_token + 1, \
+                claim_expires_at = clock_timestamp() + make_interval(secs => $3), \
+                publish_attempts = event.publish_attempts + 1 \
+            FROM candidates \
+            WHERE event.event_id = candidates.event_id \
+            RETURNING event.event_id, event.aggregate_type, event.aggregate_id, \
+                      event.aggregate_version, event.event_type, event.payload, \
+                      event.claim_owner, event.claim_token, event.claim_expires_at, \
+                      event.publish_attempts",
+            &[&limit, &publisher_id.as_str(), &lease_seconds],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+
+        let mut claims = Vec::with_capacity(rows.len());
+        for row in rows {
+            let event_id: i64 = row.get(0);
+            let aggregate_type: String = row.get(1);
+            let aggregate_id: String = row.get(2);
+            let aggregate_version: i64 = row.get(3);
+            let event_type: String = row.get(4);
+            let payload: serde_json::Value = row.get(5);
+            let owner: String = row.get(6);
+            let claim_token: i64 = row.get(7);
+            let claim_expires_at: SystemTime = row.get(8);
+            let publish_attempts: i32 = row.get(9);
+            claims.push(OutboxClaim {
+                event_id,
+                aggregate_type,
+                aggregate_id,
+                aggregate_version: u64::try_from(aggregate_version)
+                    .map_err(|_| StorageError::InvalidStoredValue("negative outbox aggregate version".to_owned()))?,
+                event_type,
+                payload,
+                publisher_id: WorkerId::parse(owner)
+                    .map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
+                claim_token: u64::try_from(claim_token)
+                    .map_err(|_| StorageError::InvalidStoredValue("negative outbox claim token".to_owned()))?,
+                claim_expires_at,
+                publish_attempts: u32::try_from(publish_attempts)
+                    .map_err(|_| StorageError::InvalidStoredValue("negative outbox publish count".to_owned()))?,
+            });
+        }
+        claims.sort_by_key(OutboxClaim::event_id);
+        transaction.commit().await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(claims)
+    }
+
+    /// Marks an event delivered only while the publisher still owns an unexpired claim.
+    pub async fn acknowledge_outbox_event(
+        &self,
+        event_id: i64,
+        publisher_id: &WorkerId,
+        claim_token: u64,
+    ) -> Result<(), StorageError> {
+        let claim_token = sql_i64(claim_token)?;
+        let client = self.pool.get().await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let updated = client.execute(
+            "UPDATE outbox_events \
+             SET published_at = clock_timestamp(), claim_owner = NULL, claim_expires_at = NULL \
+             WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
+               AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
+            &[&event_id, &publisher_id.as_str(), &claim_token],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        if updated != 1 {
+            return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
+        }
+        Ok(())
+    }
+
+    /// Releases a failed publication attempt and schedules another delivery.
+    ///
+    /// A zero delay makes the event immediately eligible. The next claim receives
+    /// a larger token, so a stale publisher cannot acknowledge the new attempt.
+    pub async fn retry_outbox_event(
+        &self,
+        event_id: i64,
+        publisher_id: &WorkerId,
+        claim_token: u64,
+        retry_delay: Duration,
+        error_message: &str,
+    ) -> Result<(), StorageError> {
+        let claim_token = sql_i64(claim_token)?;
+        let retry_delay_seconds = retry_delay.as_secs_f64();
+        let client = self.pool.get().await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let updated = client.execute(
+            "UPDATE outbox_events \
+             SET available_at = clock_timestamp() + make_interval(secs => $4), \
+                 claim_owner = NULL, claim_expires_at = NULL, last_error = $5 \
+             WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
+               AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
+            &[
+                &event_id,
+                &publisher_id.as_str(),
+                &claim_token,
+                &retry_delay_seconds,
+                &error_message,
+            ],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        if updated != 1 {
+            return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
+        }
+        Ok(())
     }
 
     /// Loads a durable task-run snapshot, including direct dependency references.
