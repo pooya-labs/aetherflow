@@ -305,22 +305,6 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     let new_worker_id =
         WorkerId::parse(format!("stale-task-worker-new-{suffix}")).expect("valid new worker ID");
 
-    // Keep the node lease short, but the task lease long. The old task lease is
-    // still valid when the new process takes the node's next membership epoch.
-    let old_node = membership
-        .join_node(&node_id, &old_incarnation, Duration::from_secs(5))
-        .await
-        .expect("old node incarnation joins");
-    let old_registration = membership
-        .register_worker(
-            &old_node,
-            &old_worker_id,
-            NonZeroU32::new(2).expect("positive worker capacity"),
-            Duration::from_secs(4),
-        )
-        .await
-        .expect("old worker registration succeeds");
-
     let workflow_id =
         WorkflowId::parse(format!("stale-task-wf-{suffix}")).expect("valid workflow ID");
     let workflow_run_id =
@@ -350,6 +334,22 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .promote_due_tasks(8)
         .await
         .expect("promote ready task");
+
+    // Start the short membership lease after the task fixture is ready so
+    // setup time cannot consume the epoch-fencing test's active lease window.
+    let old_node = membership
+        .join_node(&node_id, &old_incarnation, Duration::from_secs(5))
+        .await
+        .expect("old node incarnation joins");
+    let old_registration = membership
+        .register_worker(
+            &old_node,
+            &old_worker_id,
+            NonZeroU32::new(2).expect("positive worker capacity"),
+            Duration::from_secs(4),
+        )
+        .await
+        .expect("old worker registration succeeds");
 
     let attempt_id =
         AttemptId::parse(format!("stale-task-attempt-{suffix}")).expect("valid attempt ID");
