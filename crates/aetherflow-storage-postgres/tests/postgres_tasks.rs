@@ -959,7 +959,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
                 TaskInput::empty(),
                 Vec::new(),
                 retry_policy,
-                due_time,
+                SystemTime::now() + Duration::from_secs(300),
             )],
         )
         .await
