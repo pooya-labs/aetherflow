@@ -191,7 +191,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await
         .expect("inspect outbox after simulated process loss");
     assert!(!first_state.get::<_, bool>(0));
-    assert_eq!(first_state.get::<_, i64>(1), 1);
+    assert_eq!(first_state.get::<_, i32>(1), 1);
 
     // The retry must reclaim the same event. JetStream recognizes the stable
     // Nats-Msg-Id and acknowledges it without storing a second copy.
@@ -223,7 +223,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await
         .expect("inspect successfully acknowledged outbox event");
     assert!(final_state.get::<_, bool>(0));
-    assert_eq!(final_state.get::<_, i64>(1), 2);
+    assert_eq!(final_state.get::<_, i32>(1), 2);
     drop(client);
 
     let mut messages = consumer.messages().await.expect("open pull message stream");
