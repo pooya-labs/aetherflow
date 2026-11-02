@@ -47,8 +47,8 @@ impl WasmPluginRuntime {
         config.wasm_memory64(false);
         config.wasm_multi_memory(false);
 
-        let engine = Engine::new(&config)
-            .map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
+        let engine =
+            Engine::new(&config).map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
         let epoch_ticker = EpochTicker::new(engine.clone())?;
 
         Ok(Self {
@@ -62,10 +62,7 @@ impl WasmPluginRuntime {
     /// This deliberately does not use unsafe deserialization of cached native
     /// artifacts. A component must still match the generated v1 WIT bindings
     /// when it is instantiated by the host linker.
-    pub fn compile_component(
-        &self,
-        artifact: &[u8],
-    ) -> Result<CompiledPlugin, PluginRuntimeError> {
+    pub fn compile_component(&self, artifact: &[u8]) -> Result<CompiledPlugin, PluginRuntimeError> {
         if artifact.len() > MAX_PLUGIN_ARTIFACT_BYTES {
             return Err(PluginRuntimeError::ArtifactTooLarge {
                 actual: artifact.len(),
@@ -109,9 +106,14 @@ pub enum PluginRuntimeError {
 impl fmt::Display for PluginRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Engine(message) => write!(formatter, "failed to create Wasmtime engine: {message}"),
+            Self::Engine(message) => {
+                write!(formatter, "failed to create Wasmtime engine: {message}")
+            }
             Self::EpochTicker(message) => {
-                write!(formatter, "failed to start Wasmtime epoch ticker: {message}")
+                write!(
+                    formatter,
+                    "failed to start Wasmtime epoch ticker: {message}"
+                )
             }
             Self::ArtifactTooLarge { actual, maximum } => write!(
                 formatter,
