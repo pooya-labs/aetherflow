@@ -151,11 +151,7 @@ fn ungranted_wasi_componentization_error() -> String {
     (func $wasi_fd_write (param i32 i32 i32 i32) (result i32)))
   "#;
     let memory_declaration = format!("{extra_import}(memory (;0;) 0)");
-    replace_once(
-        &mut core_wat,
-        "(memory (;0;) 0)",
-        &memory_declaration,
-    );
+    replace_once(&mut core_wat, "(memory (;0;) 0)", &memory_declaration);
 
     let mut module = wat::parse_str(&core_wat).expect("assemble guest module with WASI import");
     wit_component::embed_component_metadata(
