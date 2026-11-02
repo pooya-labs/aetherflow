@@ -9,14 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aetherflow_core::domain::{AttemptId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId};
+use aetherflow_core::domain::{AttemptId, TaskRunId, TaskStatus, WorkerId};
 use aetherflow_runtime::repository::{
     TaskDependencyOutput, TaskExecutionClaim, TaskExecutionSnapshot,
 };
 use aetherflow_runtime::scheduler::{
     TaskCancellationTrigger, TaskContext, TaskExecutionError, TaskFuture, TaskHandler, TaskRegistry,
 };
-use sha2::Digest;
 use sha2::Digest;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
