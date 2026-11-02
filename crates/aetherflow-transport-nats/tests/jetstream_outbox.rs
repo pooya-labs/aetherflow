@@ -314,7 +314,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let second_consumer = NatsJetStreamConsumer::new(
         consumer,
         inbox,
-        logical_consumer,
+        logical_consumer.clone(),
         WorkerId::parse(format!("nats-consumer-b-{suffix}")).expect("valid consumer worker ID"),
         Duration::from_millis(300),
         handler,
