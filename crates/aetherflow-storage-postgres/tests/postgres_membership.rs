@@ -236,19 +236,13 @@ async fn postgres_concurrent_node_join_has_one_winning_incarnation() {
         membership.join_node(&node_id, &incarnation_a, Duration::from_secs(2)),
         membership.join_node(&node_id, &incarnation_b, Duration::from_secs(2)),
     );
-    let outcomes = [a, b];
-    let winners = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
-    let busy = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, Err(StorageError::NodeLeaseBusy(_))))
-        .count();
-    assert_eq!(winners, 1, "exactly one incarnation must acquire the node");
-    assert_eq!(busy, 1, "the concurrent losing incarnation must be fenced");
-
-    let winner = outcomes
-        .into_iter()
-        .find_map(Result::ok)
-        .expect("one incarnation must win the membership race");
+    let winner = match (a, b) {
+        (Ok(winner), Err(StorageError::NodeLeaseBusy(_)))
+        | (Err(StorageError::NodeLeaseBusy(_)), Ok(winner)) => winner,
+        (first, second) => panic!(
+            "expected exactly one membership winner and one fenced loser; got {first:?} and {second:?}"
+        ),
+    };
     membership
         .drain_node(&winner)
         .await
