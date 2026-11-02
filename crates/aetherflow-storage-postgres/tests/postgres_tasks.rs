@@ -777,9 +777,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .expect("rollback task is ready");
     client
         .batch_execute(
-            "ALTER TABLE outbox_events \\
-             ADD CONSTRAINT aetherflow_test_reject_outbox_aggregate \\
-             CHECK (aggregate_id <> 'durable-outbox-rollback-task-run') NOT VALID",
+            "ALTER TABLE outbox_events ADD CONSTRAINT aetherflow_test_reject_outbox_aggregate CHECK (aggregate_id <> 'durable-outbox-rollback-task-run') NOT VALID",
         )
         .await
         .expect("install temporary outbox failure constraint");
