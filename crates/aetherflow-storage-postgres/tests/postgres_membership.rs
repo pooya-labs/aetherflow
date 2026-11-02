@@ -325,7 +325,7 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
             None,
             &[NewTaskRun::new(
                 task_run_id.clone(),
-                task_id,
+                task_id.clone(),
                 TaskInput::new(b"membership-fenced-input".to_vec()).expect("valid task input"),
                 Vec::new(),
                 retry_policy,
@@ -358,7 +358,12 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     let attempt_id =
         AttemptId::parse(format!("stale-task-attempt-{suffix}")).expect("valid attempt ID");
     let claim = tasks
-        .claim_next_registered(&old_registration, &attempt_id, Duration::from_secs(15))
+        .claim_next_registered_for_tasks(
+            &old_registration,
+            std::slice::from_ref(&task_id),
+            &attempt_id,
+            Duration::from_secs(15),
+        )
         .await
         .expect("registered worker may claim while its epoch is active")
         .expect("ready task is claimed");
@@ -504,8 +509,9 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     let replacement_attempt = AttemptId::parse(format!("stale-task-attempt-new-{suffix}"))
         .expect("valid replacement attempt ID");
     let replacement_claim = tasks
-        .claim_next_registered(
+        .claim_next_registered_for_tasks(
             &new_registration,
+            std::slice::from_ref(&task_id),
             &replacement_attempt,
             Duration::from_secs(15),
         )
