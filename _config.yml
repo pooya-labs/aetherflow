@@ -1,0 +1,13 @@
+title: AetherFlow
+description: Durable workflow orchestration built with Rust, PostgreSQL, and NATS JetStream.
+url: https://pooya16pg-spec.github.io
+baseurl: /aetherflow
+markdown: kramdown
+permalink: pretty
+exclude:
+  - Cargo.lock
+  - Cargo.toml
+  - apps
+  - crates
+  - target
+  - vendor
