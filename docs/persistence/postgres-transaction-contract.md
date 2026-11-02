@@ -1,6 +1,6 @@
 # PostgreSQL persistence transaction contract
 
-**Status:** M04 is complete. The first M05 membership persistence slice is implemented and passed PostgreSQL 18 `41382505310` and Rust CI `41382505507`: additive migration v3, node/worker lease repository, concurrent join fencing, node takeover and drain tests. Membership is not yet enforced inside task claim/settlement transactions; see [ADR-0008](../decisions/0008-node-membership-and-worker-ownership.md).
+**Status:** M04 is complete. M05 registered-worker transaction gates, node-epoch fencing, graceful drain, and handler-capability-filtered claims are implemented on `main` and hosted-verified by PostgreSQL 18 + NATS run `41386154586` and Rust CI `41386154607`. Multi-node database/broker partition, rejoin, and worker-loss chaos tests remain open; see [ADR-0008](../decisions/0008-node-membership-and-worker-ownership.md) and the master [roadmap](../../ROADMAP.md).
 
 ## Source of truth and time
 
@@ -39,6 +39,8 @@ In that same transaction, update the selected row to `running`, increment `versi
 
 PostgreSQL documents `SKIP LOCKED` as producing an inconsistent view unsuitable for general-purpose reads, while identifying queue-like multi-consumer access as an appropriate use. It skips rows whose row-level locks cannot be acquired immediately; it does not provide general fairness or eliminate starvation. See the official `SELECT` locking-clause documentation: https://www.postgresql.org/docs/current/sql-select.html.
 
+For a registered cluster worker, membership is checked in the same transaction before the task row is locked: lock the parent node (matching node ID, process incarnation, membership epoch, and unexpired lease), then lock the worker registration (matching worker ID, parent node/epoch, and unexpired lease). A new claim requires both records to be `active`. The production `PostgresTaskWorker` also passes the stable task-definition IDs present in its `TaskRegistry`; the claim query adds `AND task.task_id = ANY($1::text[])`. An empty capability list therefore claims no work. A task with no capable worker remains ready rather than being leased and permanently failed by an unrelated worker. The legacy unregistered repository API remains a low-level/local primitive; the cluster worker uses the membership- and capability-guarded API.
+
 ## Heartbeat and fencing
 
 A heartbeat extends a lease only when all of these still match: task-run ID, `status = 'running'`, `claimed_by`, the current `fencing_token`, and a lease that has not already expired according to database time. The same transaction updates the active attempt's `heartbeat_at`.
@@ -46,6 +48,8 @@ A heartbeat extends a lease only when all of these still match: task-run ID, `st
 Every worker completion/failure write includes worker ID, fencing token, expected task-run version, and `lease_expires_at > clock_timestamp()`. A zero-row update means the worker no longer owns the task. It must discard the result and must not write an outbox event.
 
 A new claim always increments the fencing token. If worker A pauses, loses its lease, and worker B reclaims the task, A's old token cannot commit after B takes ownership, even if A later resumes.
+
+Registered cluster heartbeats and settlement operations first validate the parent node incarnation/epoch and the worker registration under row locks in the same transaction as the task update. In-flight work may continue to heartbeat and settle while the worker or node is `draining`, provided both database leases remain live and the task fencing token/version still match; a stale epoch or expired membership lease is rejected. The worker loop renews node and worker membership while handlers are in flight. On shutdown it persists `draining` before stopping new claims, then performs bounded graceful drain and cooperative cancellation.
 
 ## Lease expiry and recovery
 
@@ -82,6 +86,8 @@ Explicit task cancellation and timeout are version-guarded terminal transitions.
 Workflow aggregation is an explicit `PgTaskRepository` operation. It locks the workflow row and its task rows in a stable order. The workflow becomes `succeeded` only when every task run is `succeeded`. When a task has reached `failed`, `cancelled`, or `timed_out`, the aggregate outcome is selected from the earliest persisted terminal task timestamp, with task-run ID as a deterministic tie-breaker. The same transaction changes the workflow status, cancels every remaining non-terminal task, closes any active attempt as cancelled, clears active leases, and appends the corresponding task and workflow outbox events. The database timestamp ordering is the persisted arbitration rule; it should not be interpreted as a guarantee about external side-effect or physical commit ordering.
 
 The PostgreSQL worker invokes aggregation after task completion, handler failure, timeout, and recovered lease outcomes. Operators may also call it explicitly, for example after an administrative transition.
+
+Registered recovery, due-task promotion, workflow aggregation, cancellation, and timeout operations use the same membership validation boundary before their durable task/attempt/outbox changes. Claims require active membership; operations settling already-owned work may proceed during drain but never from a stale incarnation or epoch. The registered cancellation API applies the same task fencing token and expected-version guard as other terminal transitions.
 
 ## Durable workflow coordinator and worker
 
@@ -141,7 +147,11 @@ Node and worker states are `active` and `draining`. A draining node can heartbea
 
 PostgreSQL 18 membership tests verify same-incarnation renewal without epoch change, rejection of a competing live incarnation, worker registration and lease capping, worker/node drain, renewed draining leases, takeover after expiry with epoch 1→2, stale node/worker heartbeat rejection, active-worker discovery after takeover, and concurrent first join where exactly one incarnation wins (run `41382505310`; Rust CI `41382505507`).
 
-**Current enforcement boundary:** These persistence APIs are implemented, but `PostgresTaskWorker` and the task repository's claim/completion/failure/cancellation/timeout/recovery SQL do not yet enforce membership. Until the follow-up transaction gate is implemented, per-task leases and fencing remain the only task-write guard. The required lock order is node → worker → task → attempt/outbox, with node and worker validation in the same short transaction as each task mutation. Node supervisor renew/drain orchestration, partition/rejoin, task rejection after epoch takeover, and multi-node worker-loss tests remain open M05 work.
+**Current enforcement boundary:** Membership is enforced by the registered task repository APIs and the production `PostgresTaskWorker`. Claim, heartbeat, completion, failure, cancellation, timeout, expired-lease recovery, promotion, and workflow aggregation validate the node ID/incarnation/epoch and worker registration in the same transaction as the durable task mutation. The lock order is node → worker → task → attempt/outbox. Claims require active node and worker status; draining workers can settle work they already own but cannot admit new claims. The worker periodically renews both node and worker leases, persists drain on shutdown, and uses bounded graceful drain/cancellation. Claim candidates are restricted to task IDs present in that worker process's `TaskRegistry`; empty capability sets claim nothing.
+
+PostgreSQL 18 + NATS run `41386154586` verifies storage integration, the explicit worker-capability claim regression, migration v1-v3 ledger and schema invariants, and real JetStream integration. Rust CI run `41386154607` verifies format, Clippy, all workspace tests, release build, and docs. The takeover regression verifies stale old-epoch heartbeat/completion/failure/cancellation/timeout/recovery/promotion/aggregation rejection, then replacement-epoch recovery, a new attempt/fencing token, and successful completion.
+
+**Remaining M05 work:** multi-node PostgreSQL partition, worker process loss/rejoin, broker partition/recovery, and end-to-end convergence/duplicate-effect assertions. A dedicated deployment-level cluster supervisor/control plane is not present yet; each Postgres worker currently renews its own node and worker membership.
 
 ## Migration discipline
 
@@ -157,4 +167,4 @@ A lease is temporary permission to attempt work, not proof that the previous wor
 
 ## Implemented vertical slice and remaining scope
 
-M04 is complete: the repository includes `PgTaskRepository`, `PgWorkflowCoordinator`, `PostgresTaskWorker`, `PostgresOutboxDispatcher`, `PgInboxRepository`, and the isolated `aetherflow-transport-nats` crate. PostgreSQL 18 + NATS run `41380067612` verifies both OS-process broker crash windows and Rust CI `41380067843` passed the full workspace checks. The first M05 membership persistence slice is now implemented: migration v3, `PgMembershipRepository`, concurrent node join fencing, worker lease renewal/drain, expired takeover and stale-incarnation rejection. PostgreSQL 18 run `41382505310` and Rust CI `41382505507` verify this slice. Task claim and settlement transactions are not yet membership-gated; multi-node partition and worker-loss failover remain open.
+M04 is complete: the repository includes `PgTaskRepository`, `PgWorkflowCoordinator`, `PostgresTaskWorker`, `PostgresOutboxDispatcher`, `PgInboxRepository`, and `aetherflow-transport-nats`; process-crash windows were verified by PostgreSQL 18 + NATS `41380067612` and Rust CI `41380067843`. M05 membership persistence and transaction enforcement are implemented: migration v3, node/worker registration leases, epoch takeover, registered task-transaction gates, worker-owned lease renewal and draining, and TaskRegistry capability-filtered claims. PostgreSQL 18 + NATS `41386154586` and Rust CI `41386154607` passed these changes. Remaining M05 scope is true multi-node partition/rejoin, worker-loss failover, and broker-partition chaos verification.

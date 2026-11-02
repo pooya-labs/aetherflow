@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-02  
 Current branch: `main`  
 Current milestone: **M05 — Distributed coordination and event delivery**  
-Overall status: **M00–M04 complete and hosted-verified; M05 in progress. Owner license selection remains open in M00.**
+Overall status: **M00–M04 complete; M05 membership fencing and capability-aware claims implemented and hosted-verified; multi-node partition/worker-loss chaos tests remain. 25 roadmap items remain, including the owner license decision and deferred property tests.**
 
 ## Progress rules
 
@@ -15,6 +15,46 @@ Overall status: **M00–M04 complete and hosted-verified; M05 in progress. Owner
 - [x] Keep this file current at every milestone boundary and before ending a work session.
 - [x] Prefer small, reviewable commits and explicit limitations.
 - [x] Record blockers, assumptions, and manual actions explicitly.
+
+
+## Session recovery, verification, and rollback protocol
+
+This project is developed directly on `main`. The branch is the canonical source of truth; do not create parallel implementation branches or switch to another repository unless the owner explicitly asks.
+
+### Checkpoint fields that must survive every interruption
+
+Before ending a work session, update **Current checkpoint** with:
+- exact `main` HEAD SHA and the last fully verified source SHA (these can differ);
+- latest Rust CI, PostgreSQL/NATS CI, and Pages run IDs, URLs, head SHAs, and conclusions;
+- completed milestone slice, first unchecked task, next concrete action, and known limitations;
+- any failing/cancelled run, root cause, corrective commit, and the run that verified the fix;
+- manual decisions or owner-only actions that block release.
+
+A commit is not a verified checkpoint merely because it is on `main`. A cancelled, queued, pending, or in-progress run is never a pass. Only mark a verification task complete when the required workflow has concluded successfully for that exact source tree. A Pages deployment proves publishing succeeded; it does not replace Rust or PostgreSQL integration tests.
+
+### Resume procedure
+
+1. Read this file first, then read the current checkpoint and the latest session/incident log entry.
+2. Fetch `refs/heads/main`; compare its SHA with the documented source and verified SHAs. Inspect the intervening commit list and changed files before editing.
+3. Inspect the newest Actions runs and their `head_sha`. Ignore stale runs from older commits; do not treat cancelled runs as failures or successes.
+4. If a newer commit appeared during recovery, fetch the latest file/blob SHAs and reconcile against it. Never write using a stale file SHA.
+5. Continue from the first unchecked task. Do not redo a completed task unless a regression or missing verification is demonstrated.
+6. Commit the implementation and its tests in small units; once the final source snapshot is ready, let its required CI matrix finish before adding more commits.
+7. Update this roadmap and the incident log before closing the session.
+
+### Safe rollback and database recovery
+
+- Default to **fix forward**. Preserve commit history; never force-push, reset the shared branch, or delete later commits to hide a regression.
+- For a bad code commit, identify the exact culprit and dependent commits. Prefer a corrective commit; use `git revert <sha>` only when reverting that change is semantically safe, then run the full required CI matrix again.
+- Applied PostgreSQL migrations are immutable. Never edit or delete an applied migration or its checksum-ledger row. Correct schema mistakes with a new additive migration and explicit forward data repair.
+- Before any destructive or production data operation, require a verified backup and a restore rehearsal in an isolated database. Do not infer that a backup is usable merely because a backup command returned success.
+- Keep test databases isolated per workflow. Never run destructive test cleanup against a non-test database.
+- If PostgreSQL or NATS is unavailable, fail closed: do not bypass membership/fencing checks or acknowledge an event without its durable inbox outcome. Recover from persisted leases/outbox/inbox state after connectivity returns.
+- Do not commit credentials, tokens, private endpoints, or environment files. Record required variable names and setup instructions, never secret values.
+
+### Incident record format
+
+For every material regression, record: detection time; affected commit and Actions run URL; exact failing job/test and useful log excerpt; user-visible/data-integrity impact; root cause; corrective commit; successful verification run; and any remaining follow-up. Keep the failed run linked rather than rewriting history so a later session can understand why a correction exists.
 
 ## Milestones
 
@@ -84,10 +124,17 @@ Overall status: **M00–M04 complete and hosted-verified; M05 in progress. Owner
 ### M05 — Distributed coordination and event delivery
 - [x] Define node membership and worker ownership model in ADR-0008: PostgreSQL-backed node incarnations/epochs, worker registrations, draining, fail-closed partitions, and task-lease fencing.
 - [x] Implement additive PostgreSQL v3 `cluster_nodes` and `worker_registrations` schema plus `PgMembershipRepository` for join/takeover, heartbeats, worker registration, drain, active-worker discovery and stale-epoch fencing (PostgreSQL 18 `41382505310`; Rust CI `41382505507`).
-- [ ] Gate durable task claims and worker heartbeat/completion/failure/cancellation/timeout/recovery writes on a live worker registration and matching node epoch in the same PostgreSQL transaction.
+- [x] Gate durable task claims and worker heartbeat/completion/failure/cancellation/timeout/recovery/promotion/aggregation writes on a live worker registration and matching node epoch in the same PostgreSQL transaction; filter claims by the worker's registered `TaskRegistry` capabilities (PostgreSQL 18 + NATS run `41386154586`; Rust CI `41386154607`).
 - [x] Add transactional outbox/inbox where required (implemented and PostgreSQL 18 verified in M04).
 - [x] Integrate NATS JetStream after transport-independent contracts stabilize (isolated publisher/consumer crate and real PostgreSQL 18 + NATS integration in M04).
 - [ ] Extend redelivery and lease-expiry coverage to multi-node database/broker partitions, node-epoch takeover, and worker loss (single-process redelivery, lease recovery, and OS-process death windows are already verified in M04).
+
+**M05 chaos-test exit criteria (all still open):**
+1. Run two logical nodes and multiple workers against one PostgreSQL cluster; pause or disconnect node A long enough for its database-owned membership lease to expire.
+2. Let node B take over the same logical node ID with a strictly higher membership epoch; prove A cannot heartbeat, claim, complete, fail, cancel, timeout, promote, recover, or aggregate through its stale registration.
+3. Expire A's task lease and let B recover/reclaim it; assert the attempt number and task fencing token advance and the task reaches one terminal state.
+4. Partition NATS while PostgreSQL remains healthy; prove outbox retry preserves the event ID, inbox dedup suppresses duplicate logical effects, and delivery resumes after the broker returns.
+5. Restore connectivity to A and the broker; prove stale work is fenced, no task remains permanently stuck, no event is silently lost, and the workflow state matches its task history.
 - [x] Document current at-least-once delivery guarantees and operational limits in the PostgreSQL transaction contract; extend with membership/partition behavior as M05 implementation lands.
 
 ### M06 — WASM extension runtime
@@ -122,21 +169,33 @@ Overall status: **M00–M04 complete and hosted-verified; M05 in progress. Owner
 
 ## Current checkpoint
 
-**Completed:** M00 architecture baseline (owner license selection remains open); M01 Rust workspace foundation; M02 execution domain/state machines; M03 single-node runtime; and M04 durable persistence are implemented and hosted-verified. M04 includes PostgreSQL v1/v2 migrations, durable task repository/coordinator/worker, transactional outbox dispatcher, PostgreSQL consumer inbox, real NATS JetStream publisher and pull consumer, durable retries, workflow aggregation, and OS-process crash recovery at both publisher/outbox-ack and consumer/inbox-commit/broker-ack windows.
+**Canonical branch:** `main`  
+**Current main HEAD:** `3090267b4b4e99eebb5dcefa2bde94296909cda6` (CI-generated rustfmt-only commit after capability test commit `c892a8d25330b91b5bfbc6a08289a9502a67e8a2`).  
+**Last fully verified implementation snapshot:** `c892a8d25330b91b5bfbc6a08289a9502a67e8a2`; the Rust CI applied rustfmt and committed the formatting-only tree as `3090267`, then completed successfully.  
+**Current milestone:** M05 — Distributed coordination and event delivery.  
+**Next task:** M05 multi-node partition, epoch-takeover, and worker-loss chaos coverage.
 
-**M05 membership persistence implemented:** ADR-0008 is backed by additive PostgreSQL migration v3. The `cluster_nodes` table stores stable node IDs, process incarnation IDs, membership epochs, active/draining state, heartbeat and database-owned lease expiry. `worker_registrations` stores worker ID, parent node/epoch, concurrency capacity, lifecycle state and a lease capped by the parent node. `PgMembershipRepository` supports same-incarnation renewal, competing-incarnation rejection, expired-lease takeover with epoch increment, node/worker heartbeat, worker registration, worker/node drain, and active-worker discovery. A node heartbeat that shortens the parent lease atomically caps child worker leases. PostgreSQL time is authoritative; old epoch handles are fenced after takeover.
+**Completed baseline:** M00 architecture baseline (owner license selection remains open); M01 Rust workspace foundation; M02 execution domain/state machines (property-based transition tests deferred); M03 single-node runtime; and M04 durable persistence are implemented and hosted-verified. M04 includes PostgreSQL v1/v2 migrations, durable task repository/coordinator/worker, transactional outbox dispatcher, PostgreSQL consumer inbox, real NATS JetStream publisher and pull consumer, durable retries, workflow aggregation, and OS-process crash recovery at publisher/outbox-ack and consumer/inbox-commit/broker-ack windows.
 
-**Verification:** PostgreSQL 18 run `41382505310` and Rust CI run `41382505507` passed on commit `79c5b690`. The PG18 workflow verified migration v1-v3 checksums, 9 required tables, 13 indexes and membership constraints. Two membership integration tests passed: one covers registration, heartbeat, drain, lease cap, expiry, takeover (epoch 1→2), stale node/worker rejection and active-worker discovery; the second verifies exactly one winner when two different incarnations join the same unowned node concurrently. The same PG18 run also passed existing PostgreSQL task/migration and real NATS JetStream integration tests. Rust CI passed format, Clippy, workspace tests, full build and documentation build. M04 process-crash verification remains PG18 + NATS `41380067612` and Rust CI `41380067843`.
+**M05 membership and fencing implementation:** ADR-0008 is backed by PostgreSQL migration v3 and `PgMembershipRepository`. Node membership uses a stable logical node ID, process incarnation, database-owned lease, and monotonically increasing membership epoch. Worker registrations are bound to the parent node and epoch; worker leases are capped by the node lease. Same-incarnation renewal, competing-incarnation rejection, expiry takeover, drain, and active-worker discovery are implemented. PostgreSQL time is authoritative.
 
-**In progress:** M05 distributed coordination and event delivery. Membership persistence is implemented and tested, but `PostgresTaskWorker` and the task repository's claim/heartbeat/completion/failure/cancellation/timeout/recovery transactions do not yet require a live worker registration and matching node epoch. PostgreSQL is still the membership/time authority and NATS remains transport only.
+**M05 task-transaction enforcement is now implemented:** registered task claims validate the live node incarnation/epoch and worker registration inside the same transaction as the claim. Registered heartbeat, completion, failure, cancellation, timeout, expired-lease recovery, due promotion, and workflow aggregation validate membership before task/attempt/outbox mutation. Node and worker rows are locked before task rows. Claims require active membership; a draining worker may finish or cancel work already assigned to it but cannot claim new work. `PostgresTaskWorker` renews node and worker leases while handlers are active, persists draining on shutdown, and uses bounded graceful drain/cancellation. The worker passes the stable, sorted task-ID set from its `TaskRegistry` into the SQL claim filter; an empty registry claims nothing, and a worker cannot lease a task for which it has no handler.
 
-**Next action:** Add membership-aware task repository operations. Task claim must lock and validate the live active node and worker registration before locking a ready task. Heartbeat and all settlement/recovery paths must validate the same node ID, incarnation, epoch and worker status in the same short transaction. Preserve a single lock order (node → worker → task → attempt/outbox) to avoid deadlocks. Wire `PostgresTaskWorker` to own and renew a `WorkerRegistration`, stop claims when node/worker state is draining or a database lease is lost, and reject stale writes after takeover. Then test database partitions, rejoin, multi-node worker loss and fail-closed behavior.
+**Verification for the current implementation:** PostgreSQL 18 + NATS run [41386154586](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154586) passed on `c892a8d`: PostgreSQL storage integration tests (including the explicit empty-capability/matching-capability claim test), schema migration/checksum/table/index validation, real JetStream transport integration, and schema invariants. Rust CI [41386154607](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154607) passed format, Clippy, workspace tests, release workspace build, documentation build, and lockfile artifact upload; its rustfmt step created the formatting-only `3090267` commit on `main`. Pages deployment [41386206466](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386206466) passed on the current `3090267` HEAD. The live page is https://pooya16pg-spec.github.io/aetherflow/.
 
-**Known limitations:** Membership persistence is implemented but is not yet enforced inside task claim or settlement SQL. There is no long-running node supervisor for periodic node/worker renewals or graceful drain orchestration; multi-node partition, rejoin and worker-loss chaos tests remain open. Until task transaction gates land, existing per-task fencing is the only enforced task-write guard. The process-local `TaskScheduler` remains for local development/tests. NATS deployment must provision streams/subjects, durable pull consumers, credentials, retention, explicit acknowledgements and suitable `AckWait`. Delivery remains at-least-once; external side effects require downstream idempotency or a transaction shared with inbox completion. Task payloads remain opaque bytes capped at 1 MiB.
+**Still open in M05:** Full fault-injection across multiple live nodes is not yet verified. In particular, simulate an old node losing PostgreSQL connectivity until leases expire, a replacement incarnation taking over, stale-node reconnection, task recovery/reclaim under a higher fencing token, and an NATS partition with eventual outbox/inbox recovery. Assert no stale state writes, no permanently stuck tasks, no lost events, and no duplicate logical effects. Do not close M05 or start M06 until these scenarios pass.
 
-**Blockers:** No migration, repository or CI blocker remains for the membership persistence slice. The next M05 implementation boundary is wiring membership checks into task repository transactions. License selection remains with the repository owner.
+**Known limitations:** Delivery is at-least-once; external side effects still require downstream idempotency or a transaction shared with inbox completion. A task remains ready if no live worker advertises a handler for its task ID; capability visibility/alerting is future operational work. There is no full multi-node network-partition/rejoin chaos suite yet. The local in-memory `TaskScheduler` remains for development/tests and is not a distributed ownership mechanism. NATS deployment still requires streams/subjects, durable consumers, credentials, retention, explicit acknowledgements, and suitable `AckWait`. Payloads remain opaque bytes capped at 1 MiB.
 
-**Manual action required from owner:** Choose a project license before public release; no legal terms have been assumed.
+**Next concrete actions:**
+1. Build deterministic two-node PostgreSQL failover tests using distinct process incarnations and real expiry/takeover; prove every stale registered write is rejected and the replacement can recover, reclaim, and complete the task.
+2. Add broker-partition tests with PostgreSQL healthy; verify same event ID on outbox retry, inbox deduplication, and exactly one logical handler effect after NATS returns.
+3. Add process/worker-loss and stale-node-rejoin cases; verify no work is stuck and all task/workflow/outbox/inbox state converges.
+4. Only after the above are hosted-verified, close M05 and begin M06 (WASM ABI and sandbox).
+
+**Recovery instructions:** Follow the “Session recovery, verification, and rollback protocol” above. If a session stops unexpectedly, fetch `main`, compare its SHA to this checkpoint, inspect newer commits and Actions runs, then continue from the first unchecked milestone task. Never infer success from a pending/cancelled run.
+
+**Owner-only blocker:** Choose an explicit project license before public release. No legal terms have been assumed.
 
 ## Session log
 
@@ -169,10 +228,12 @@ Overall status: **M00–M04 complete and hosted-verified; M05 in progress. Owner
 
 | 2026-11-02 | M05 | Added PostgreSQL migration v3 and `PgMembershipRepository` for node incarnation/epoch leases, worker registration/capacity, heartbeat, drain, active-worker discovery, expired-lease takeover and stale-epoch fencing. PostgreSQL 18 run `41382505310` and Rust CI `41382505507` passed; migration ledger v1-v3, 9 tables, 13 indexes, and concurrent membership tests were verified. |
 
+| 2026-11-02 | M05 | Enforced membership/epoch guards on registered claims and task state transitions; added registry capability-filtered claims, shutdown-drain persistence, stale-epoch cancellation coverage, and a direct PostgreSQL capability-filter test. PostgreSQL 18 + NATS run [41386154586](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154586) and Rust CI [41386154607](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386154607) passed; Pages deploy [41386206466](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41386206466) passed. Source HEAD after CI rustfmt commit: `3090267b4b4e99eebb5dcefa2bde94296909cda6`. |
+
 ## Resume instructions
 
-1. Open this file on the default branch.
-2. Read **Current checkpoint**.
-3. Inspect the latest commit and active milestone artifacts.
-4. Continue from the first unchecked task; do not repeat completed work.
-5. Update this file with verified outcomes before stopping.
+1. Open this file on `main` and follow **Session recovery, verification, and rollback protocol**.
+2. Compare the current `main` SHA with **Current checkpoint**; inspect any newer commits.
+3. Match every CI result to its exact `head_sha`; pending/cancelled runs are not verification.
+4. Read the current checkpoint and continue from the first unchecked task; do not repeat completed work.
+5. Update this file with verified outcomes, failure causes, corrective commits, and next actions before stopping.
