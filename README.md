@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** Architecture and foundation phase. APIs and implementation details are not yet stable.
+> **Project status:** M04 durable persistence is in progress. APIs and implementation details remain experimental; the complete distributed workflow engine is not production-ready.
 
 ## Why AetherFlow?
 
@@ -45,7 +45,7 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, bounded Tokio task scheduler, and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handlers, bounded concurrency, retry and per-attempt timeout policies, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and access to successful direct-dependency outputs. M03 is hosted-verified. The M04 PostgreSQL storage crate now includes a configured pool boundary, checksum/advisory-lock migration runner, and a verified async durable task-repository vertical slice. PostgreSQL 18 CI has exercised atomic workflow/dependency creation, dependency-aware promotion, SKIP LOCKED claims, fenced heartbeat/completion, output persistence, expired-lease recovery, stale-worker rejection, and transactional outbox writes. Durable handler failure/cancel/timeout, workflow terminal aggregation, outbox publishing, and full process-restart recovery remain under development; the in-memory repository remains non-durable. See the roadmap for exact verification status.
+The Rust workspace contains an infrastructure-independent core, a single-node runtime with a process-local in-memory repository, a bounded Tokio task scheduler and workflow DAG coordinator, plus a minimal bootstrap health server. The runtime supports typed handlers, bounded concurrency, retry and per-attempt timeout policies, cooperative cancellation, bounded two-stage shutdown, 1 MiB input/output payloads, and successful direct-dependency output access. M03 is hosted-verified. The M04 PostgreSQL adapter includes a checksum/advisory-lock migration runner and a durable task repository for atomic workflow/dependency creation, dependency-gated promotion, SKIP LOCKED claims, fenced heartbeat/completion, lease recovery, typed retryable/permanent failure recording, version-guarded cancellation/timeout, workflow terminal aggregation, and transactional outbox claim/retry/ack. PostgreSQL 18 integration CI has verified these paths, including cancellation of queued dependencies and running siblings and rejection of stale worker writes. The adapter is not yet connected to a durable coordinator/worker loop; a real broker publisher, consumer inbox/deduplication, and process-crash/restart recovery tests remain outstanding. The in-memory repository remains process-local. See [ROADMAP.md](ROADMAP.md) for the authoritative checkpoint and verification runs.
 
 ## License
 
@@ -53,4 +53,4 @@ License selection is pending; no license grant is made yet.
 
 ## Persistence status
 
-The PostgreSQL storage crate and initial schema are under active M04 verification. The schema, async migration runner, and initial durable task operations have passed PostgreSQL 18 CI. The complete durable workflow engine is not yet production-ready because handler failure/cancel/timeout commands, workflow aggregation, outbox delivery, and full crash/restart recovery are still pending. See [the PostgreSQL transaction contract](docs/persistence/postgres-transaction-contract.md).
+The PostgreSQL storage crate and initial schema have passed PostgreSQL 18 CI. Durable handler failure recording, task cancellation/timeout, workflow terminal aggregation, and outbox claim/retry/ack are implemented and integration-tested. Workflow aggregation succeeds only when all tasks succeed; on a terminal failure, cancellation, or timeout it cancels remaining non-terminal tasks and closes active attempts transactionally. Remaining M04 work is to connect these repository operations to a durable coordinator/worker loop, add a real broker publisher and idempotent consumer/inbox, and verify process-restart and transaction crash windows. Until those pieces are complete, this is a verified persistence vertical slice—not a production-ready distributed workflow engine. See [the PostgreSQL transaction contract](docs/persistence/postgres-transaction-contract.md).
