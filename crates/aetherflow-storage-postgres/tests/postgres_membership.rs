@@ -27,6 +27,111 @@ fn unique_suffix() -> String {
         .as_nanos();
     format!("{}_{}", std::process::id(), nanos)
 }
+/// A world-writable, test-scoped directory so a child running as `nobody`
+/// can publish readiness and control markers. The parent owns directory cleanup.
+struct PartitionTestDirectory(std::path::PathBuf);
+
+impl PartitionTestDirectory {
+    fn new(suffix: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("aetherflow-packet-partition-{suffix}"));
+        std::fs::create_dir(&path).expect("create packet-partition test directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777))
+                .expect("allow the restricted child to write test markers");
+        }
+        Self(path)
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for PartitionTestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Packet-level OUTPUT rule matching only the dedicated child UID. The
+/// controller and replacement worker run under the runner UID and retain DB
+/// access while the child is isolated.
+struct IptablesOwnerFilter {
+    uid: String,
+    port: u16,
+    installed: bool,
+}
+
+impl IptablesOwnerFilter {
+    fn new(uid: String, port: u16) -> Self {
+        Self {
+            uid,
+            port,
+            installed: false,
+        }
+    }
+
+    fn run_rule(&self, operation: &str) -> std::process::Output {
+        let port = self.port.to_string();
+        std::process::Command::new("sudo")
+            .args([
+                "-n",
+                "iptables",
+                operation,
+                "OUTPUT",
+                "-m",
+                "owner",
+                "--uid-owner",
+                self.uid.as_str(),
+                "-p",
+                "tcp",
+                "--dport",
+                port.as_str(),
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            ])
+            .output()
+            .expect("run sudo iptables owner rule")
+    }
+
+    fn install(&mut self) {
+        assert!(!self.installed, "packet filter is already installed");
+        let output = self.run_rule("-I");
+        assert!(
+            output.status.success(),
+            "failed to install packet-level DB partition rule: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.installed = true;
+    }
+
+    fn remove(&mut self) {
+        if !self.installed {
+            return;
+        }
+        let output = self.run_rule("-D");
+        assert!(
+            output.status.success(),
+            "failed to remove packet-level DB partition rule: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.installed = false;
+    }
+}
+
+impl Drop for IptablesOwnerFilter {
+    fn drop(&mut self) {
+        if self.installed {
+            let _ = self.run_rule("-D");
+            self.installed = false;
+        }
+    }
+}
+
 /// A local TCP relay used to isolate only the child worker's PostgreSQL path.
 /// Closing the gate aborts established streams and rejects new connections;
 /// the test controller and replacement incarnation keep using the direct DB URL.
@@ -896,22 +1001,67 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         None => panic!("TCP partition test requires an explicit PostgreSQL host"),
     };
     let upstream_port = database_config.get_ports().first().copied().unwrap_or(5432);
-    let database_gate = TcpDatabaseGate::start(upstream_host, upstream_port).await;
-    // Run the old incarnation in a distinct OS process. It holds the claim
-    // and registration in its own address space while the TCP relay is cut.
-    let ready_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.ready"));
-    let partition_path =
-        std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.partition"));
-    let partition_ack_path =
-        std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.partition-ack"));
-    let resume_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.resume"));
-    let _ = std::fs::remove_file(&ready_path);
-    let _ = std::fs::remove_file(&partition_path);
-    let _ = std::fs::remove_file(&partition_ack_path);
-    let _ = std::fs::remove_file(&resume_path);
+    let packet_partition =
+        std::env::var("AETHERFLOW_TEST_PACKET_PARTITION").is_ok_and(|value| value == "1");
+    let database_gate = if packet_partition {
+        None
+    } else {
+        Some(TcpDatabaseGate::start(upstream_host.clone(), upstream_port).await)
+    };
+    let child_database_host = if packet_partition {
+        upstream_host
+    } else {
+        "127.0.0.1".to_owned()
+    };
+    let child_database_port = database_gate
+        .as_ref()
+        .map(|gate| gate.address.port())
+        .unwrap_or(upstream_port);
+
+    // In packet-partition mode the child runs under a distinct UID so Linux's
+    // owner match can block only its PostgreSQL packets. This prerequisite is
+    // mandatory in CI; local runs use the TCP gate unless explicitly opted in.
+    let mut packet_filter = if packet_partition {
+        let nobody_uid = std::process::Command::new("id")
+            .args(["-u", "nobody"])
+            .output()
+            .expect("read dedicated nobody UID");
+        assert!(nobody_uid.status.success(), "nobody user must exist for packet test");
+        let uid = String::from_utf8_lossy(&nobody_uid.stdout).trim().to_owned();
+        let sudo_check = std::process::Command::new("sudo")
+            .args(["-n", "-u", "nobody", "--", "id", "-u"])
+            .output()
+            .expect("check passwordless sudo for packet test child");
+        assert!(
+            sudo_check.status.success(),
+            "CI packet-partition test requires passwordless sudo: {}",
+            String::from_utf8_lossy(&sudo_check.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&sudo_check.stdout).trim(),
+            uid,
+            "sudo child UID must match the iptables owner filter"
+        );
+        Some(IptablesOwnerFilter::new(uid, upstream_port))
+    } else {
+        None
+    };
+
+    let shared_markers = PartitionTestDirectory::new(&suffix);
+    let ready_path = shared_markers.join("old-worker.ready");
+    let partition_path = shared_markers.join("partition");
+    let partition_ack_path = shared_markers.join("partition-ack");
+    let resume_path = shared_markers.join("resume");
     let child_executable = std::env::current_exe().expect("current integration-test executable");
-    let mut old_worker_process = KillOnDropChild(
+    let mut child_command = if packet_partition {
+        let mut command = std::process::Command::new("sudo");
+        command.args(["-n", "-u", "nobody", "--"]).arg(child_executable);
+        command
+    } else {
         std::process::Command::new(child_executable)
+    };
+    let mut old_worker_process = KillOnDropChild(
+        child_command
             .args([
                 "--exact",
                 "postgres_partition_old_worker_child_process",
@@ -923,9 +1073,10 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
                 &role_password,
             )
             .env("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME", &database_name)
+            .env("AETHERFLOW_PARTITION_CHILD_DATABASE_HOST", &child_database_host)
             .env(
                 "AETHERFLOW_PARTITION_CHILD_DATABASE_PORT",
-                database_gate.address.port().to_string(),
+                child_database_port.to_string(),
             )
             .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
             .env(
@@ -973,10 +1124,14 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .parse()
         .expect("old worker writes its node epoch after claiming");
 
-    // Sever the child process's TCP path. The gate aborts all established
-    // streams and rejects new connections while the parent stays connected
-    // directly to PostgreSQL.
-    database_gate.set_available(false).await;
+    // Sever only the child process's DB path. CI uses a packet-level
+    // iptables OUTPUT rule matching the child UID; local runs use the TCP relay.
+    if let Some(filter) = packet_filter.as_mut() {
+        filter.install();
+    }
+    if let Some(gate) = database_gate.as_ref() {
+        gate.set_available(false).await;
+    }
     std::fs::write(&partition_path, "partition")
         .expect("signal the child process that PostgreSQL access is partitioned");
     let partition_ack_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -985,7 +1140,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     }
     assert!(
         partition_ack_path.exists(),
-        "old worker process did not fail closed while its PostgreSQL TCP path was severed"
+        "old worker process did not fail closed while its PostgreSQL network path was partitioned"
     );
 
     tokio::time::sleep(Duration::from_millis(3_300)).await;
@@ -1054,7 +1209,12 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     // Reconnect the old OS process while the replacement owns attempt 2.
     // Both stale heartbeat and stale completion must be fenced before the new
     // owner is allowed to settle the task.
-    database_gate.set_available(true).await;
+    if let Some(gate) = database_gate.as_ref() {
+        gate.set_available(true).await;
+    }
+    if let Some(filter) = packet_filter.as_mut() {
+        filter.remove();
+    }
     std::fs::write(&resume_path, "resume")
         .expect("signal old worker process to reconnect while replacement owns task");
     let child_status = tokio::time::timeout(Duration::from_secs(5), async {
@@ -1097,7 +1257,9 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .drain_node(&new_node)
         .await
         .expect("drain replacement partition-test node");
-    database_gate.shutdown().await;
+    if let Some(gate) = database_gate {
+        gate.shutdown().await;
+    }
 
     // Release the temporary role and its grants after the child process exits.
     let _ = admin_client
@@ -1126,6 +1288,7 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(database_user),
         Ok(database_password),
         Ok(database_name),
+        Ok(database_host),
         Ok(database_port),
         Ok(node_id),
         Ok(incarnation_id),
@@ -1141,6 +1304,7 @@ async fn postgres_partition_old_worker_child_process() {
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_USER"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_NAME"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_HOST"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PORT"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_NODE_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_INCARNATION_ID"),
@@ -1162,7 +1326,7 @@ async fn postgres_partition_old_worker_child_process() {
         .user(&database_user)
         .password(&database_password)
         .dbname(&database_name)
-        .host("127.0.0.1")
+        .host(&database_host)
         .port(database_port.parse().expect("valid child PostgreSQL port"))
         .connect_timeout(Duration::from_secs(2));
     let pool = pool_from_config(child_config, 4);

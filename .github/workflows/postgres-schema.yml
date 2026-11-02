@@ -52,6 +52,7 @@ jobs:
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
       AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224
       AETHERFLOW_TEST_NATS_CONTAINER: aetherflow-nats-1
+      AETHERFLOW_TEST_PACKET_PARTITION: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@v6
