@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::time::Duration;
 
-use aetherflow_core::EntityId;
+use aetherflow_core::{TaskRunId, WorkflowRunId};
 
 /// Current host-supported plugin ABI version.
 pub const PLUGIN_ABI_V1: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 0 };
@@ -122,9 +122,9 @@ impl CapabilitySet {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginExecutionContext {
     /// Stable workflow run identifier.
-    pub workflow_run_id: EntityId,
+    pub workflow_run_id: WorkflowRunId,
     /// Stable task run identifier.
-    pub task_run_id: EntityId,
+    pub task_run_id: TaskRunId,
     /// One-based durable attempt number.
     pub attempt: u32,
     /// Optional Unix timestamp deadline in milliseconds.
@@ -134,8 +134,8 @@ pub struct PluginExecutionContext {
 impl PluginExecutionContext {
     /// Creates a context, rejecting attempt zero.
     pub fn new(
-        workflow_run_id: EntityId,
-        task_run_id: EntityId,
+        workflow_run_id: WorkflowRunId,
+        task_run_id: TaskRunId,
         attempt: u32,
         deadline_unix_ms: Option<u64>,
     ) -> Result<Self, ContextError> {
@@ -389,6 +389,28 @@ mod tests {
             PluginAbiVersion { major: 1, minor: 2 }
                 .supports(PluginAbiVersion { major: 1, minor: 1 })
         );
+    }
+
+    #[test]
+    fn plugin_context_requires_a_one_based_attempt() {
+        let workflow_run_id =
+            aetherflow_core::WorkflowRunId::parse("workflow-run-1").expect("valid workflow run id");
+        let task_run_id =
+            aetherflow_core::TaskRunId::parse("task-run-1").expect("valid task run id");
+        assert!(super::PluginExecutionContext::new(
+            workflow_run_id.clone(),
+            task_run_id.clone(),
+            0,
+            None,
+        )
+        .is_err());
+        assert!(super::PluginExecutionContext::new(
+            workflow_run_id,
+            task_run_id,
+            1,
+            Some(1_800_000_000_000),
+        )
+        .is_ok());
     }
 
     #[test]
