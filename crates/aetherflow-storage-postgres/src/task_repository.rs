@@ -521,6 +521,23 @@ impl PgTaskRepository {
 
     /// Promotes due pending/retry-waiting tasks after every direct dependency succeeds.
     pub async fn promote_due_tasks(&self, limit: i64) -> Result<Vec<TaskRunId>, StorageError> {
+        self.promote_due_tasks_inner(None, limit).await
+    }
+
+    /// Promotes tasks only while the supplied worker registration is active.
+    pub async fn promote_due_tasks_registered(
+        &self,
+        registration: &WorkerRegistration,
+        limit: i64,
+    ) -> Result<Vec<TaskRunId>, StorageError> {
+        self.promote_due_tasks_inner(Some(registration), limit).await
+    }
+
+    async fn promote_due_tasks_inner(
+        &self,
+        registration: Option<&WorkerRegistration>,
+        limit: i64,
+    ) -> Result<Vec<TaskRunId>, StorageError> {
         if limit <= 0 {
             return Ok(Vec::new());
         }
@@ -533,6 +550,9 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, true).await?;
+        }
         let rows = transaction.query(
             "WITH candidates AS ( \
                 SELECT task.task_run_id \
@@ -1196,7 +1216,7 @@ impl PgTaskRepository {
         task_run_id: &TaskRunId,
         expected_version: u64,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.terminate_task_run(task_run_id, expected_version, "cancelled")
+        self.terminate_task_run(task_run_id, expected_version, "cancelled", None, None)
             .await
     }
 
@@ -1209,8 +1229,27 @@ impl PgTaskRepository {
         task_run_id: &TaskRunId,
         expected_version: u64,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.terminate_task_run(task_run_id, expected_version, "timed_out")
+        self.terminate_task_run(task_run_id, expected_version, "timed_out", None, None)
             .await
+    }
+
+    /// Times out a running task only while the registered worker still owns its
+    /// current task fencing token and its parent node epoch remains live.
+    pub async fn timeout_task_run_registered(
+        &self,
+        task_run_id: &TaskRunId,
+        registration: &WorkerRegistration,
+        expected_version: u64,
+        fencing_token: u64,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run(
+            task_run_id,
+            expected_version,
+            "timed_out",
+            Some(registration),
+            Some(fencing_token),
+        )
+        .await
     }
 
     async fn terminate_task_run(
@@ -1218,6 +1257,8 @@ impl PgTaskRepository {
         task_run_id: &TaskRunId,
         expected_version: u64,
         next_status: &str,
+        registration: Option<&WorkerRegistration>,
+        expected_fencing_token: Option<u64>,
     ) -> Result<DurableTaskRun, StorageError> {
         let expected_version = sql_i64(expected_version)?;
         let (attempt_outcome, event_type, error_kind, error_message) = match next_status {
@@ -1250,6 +1291,10 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, false).await?;
+        }
+
         let row = transaction
             .query_opt(
                 "SELECT status, attempts_started, version, claimed_by, fencing_token \
@@ -1265,6 +1310,20 @@ impl PgTaskRepository {
         let actual_version: i64 = row.get(2);
         let claimed_by: Option<String> = row.get(3);
         let fencing_token: i64 = row.get(4);
+
+        if let Some(registration) = registration {
+            let expected_fencing_token = expected_fencing_token.ok_or_else(|| {
+                StorageError::InconsistentState(
+                    "registered timeout is missing a task fencing token".to_owned(),
+                )
+            })?;
+            if current_status != "running"
+                || claimed_by.as_deref() != Some(registration.worker_id().as_str())
+                || u64::try_from(fencing_token).ok() != Some(expected_fencing_token)
+            {
+                return Err(StorageError::ClaimLost(task_run_id.as_str().to_owned()));
+            }
+        }
 
         if actual_version != expected_version {
             return Err(StorageError::ClaimLost(format!(
@@ -1382,6 +1441,24 @@ impl PgTaskRepository {
         &self,
         limit: i64,
     ) -> Result<Vec<RecoveredLease>, StorageError> {
+        self.recover_expired_leases_inner(None, limit).await
+    }
+
+    /// Recovers expired leases only while this worker has a live active node
+    /// and worker registration in the same PostgreSQL transaction.
+    pub async fn recover_expired_leases_registered(
+        &self,
+        registration: &WorkerRegistration,
+        limit: i64,
+    ) -> Result<Vec<RecoveredLease>, StorageError> {
+        self.recover_expired_leases_inner(Some(registration), limit).await
+    }
+
+    async fn recover_expired_leases_inner(
+        &self,
+        registration: Option<&WorkerRegistration>,
+        limit: i64,
+    ) -> Result<Vec<RecoveredLease>, StorageError> {
         if limit <= 0 {
             return Ok(Vec::new());
         }
@@ -1394,6 +1471,9 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, true).await?;
+        }
         let expired = transaction
             .query(
                 "SELECT task_run_id, attempts_started, max_attempts, initial_backoff_ms, \
@@ -1669,6 +1749,25 @@ impl PgTaskRepository {
         &self,
         workflow_run_id: &WorkflowRunId,
     ) -> Result<WorkflowStatus, StorageError> {
+        self.aggregate_workflow_run_inner(workflow_run_id, None).await
+    }
+
+    /// Aggregates workflow state after a registered worker transition.
+    /// Draining workers may settle work that was already in flight.
+    pub async fn aggregate_workflow_run_registered(
+        &self,
+        workflow_run_id: &WorkflowRunId,
+        registration: &WorkerRegistration,
+    ) -> Result<WorkflowStatus, StorageError> {
+        self.aggregate_workflow_run_inner(workflow_run_id, Some(registration))
+            .await
+    }
+
+    async fn aggregate_workflow_run_inner(
+        &self,
+        workflow_run_id: &WorkflowRunId,
+        registration: Option<&WorkerRegistration>,
+    ) -> Result<WorkflowStatus, StorageError> {
         let mut client = self
             .pool
             .get()
@@ -1678,6 +1777,10 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, false).await?;
+        }
 
         let workflow_row = transaction
             .query_opt(
