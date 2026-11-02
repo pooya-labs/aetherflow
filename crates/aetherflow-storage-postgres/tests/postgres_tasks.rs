@@ -792,8 +792,8 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     drop(store);
     drop(pool);
 
-    let database_url =
-        std::env::var("AETHERFLOW_TEST_DATABASE_URL").expect("database URL was checked at test start");
+    let database_url = std::env::var("AETHERFLOW_TEST_DATABASE_URL")
+        .expect("database URL was checked at test start");
     let child_status = Command::new(std::env::current_exe().expect("current test executable"))
         .args([
             "--exact",
@@ -802,7 +802,10 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         ])
         .env("AETHERFLOW_RESTART_TEST_DATABASE_URL", database_url)
         .env("AETHERFLOW_RESTART_TASK_RUN_ID", restart_task_run.as_str())
-        .env("AETHERFLOW_RESTART_WORKFLOW_RUN_ID", restart_workflow_run.as_str())
+        .env(
+            "AETHERFLOW_RESTART_WORKFLOW_RUN_ID",
+            restart_workflow_run.as_str(),
+        )
         .status()
         .expect("spawn a fresh recovery test process");
     assert!(
@@ -810,7 +813,6 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         "fresh process failed to recover the persisted task (exit: {child_status})"
     );
 }
-
 
 /// Runs in a separate OS process when launched by the durable task integration
 /// test. During the normal test pass it is a no-op because the restart-specific
@@ -868,8 +870,8 @@ async fn postgres_restart_child_process_recovers_expired_task() {
         vec![task_run_id.clone()]
     );
     let worker = WorkerId::parse("durable-process-restart-worker-b").expect("valid worker ID");
-    let attempt = AttemptId::parse("durable-process-restart-attempt-two")
-        .expect("valid attempt ID");
+    let attempt =
+        AttemptId::parse("durable-process-restart-attempt-two").expect("valid attempt ID");
     let claim = repository
         .claim_next(&worker, &attempt, Duration::from_secs(30))
         .await
