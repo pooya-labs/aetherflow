@@ -370,6 +370,8 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         TaskRunId::parse("durable-failure-task-run-001").expect("valid task-run ID");
     let failure_child_run =
         TaskRunId::parse("durable-failure-child-run-001").expect("valid task-run ID");
+    let failure_sibling_run =
+        TaskRunId::parse("durable-failure-sibling-run-001").expect("valid task-run ID");
     repository
         .create_workflow(
             &failure_workflow_run,
@@ -392,6 +394,14 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
                     retry_policy,
                     due_time,
                 ),
+                NewTaskRun::new(
+                    failure_sibling_run.clone(),
+                    TaskId::parse("durable-failure-sibling-001").expect("valid task ID"),
+                    TaskInput::empty(),
+                    Vec::new(),
+                    retry_policy,
+                    due_time,
+                ),
             ],
         )
         .await
@@ -407,6 +417,17 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .await
         .expect("claim first failure attempt")
         .expect("task is ready");
+    let failure_sibling_attempt =
+        AttemptId::parse("durable-failure-sibling-attempt").expect("valid attempt ID");
+    let failure_sibling_claim = repository
+        .claim_next(
+            &worker_b,
+            &failure_sibling_attempt,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("claim independent sibling")
+        .expect("sibling is ready");
     let retrying_failure = repository
         .record_failure(
             &failure_task_run,
@@ -456,6 +477,38 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             .status(),
         TaskStatus::Cancelled
     );
+    assert_eq!(
+        repository
+            .get_task_run(&failure_sibling_run)
+            .await
+            .expect("read cancelled running sibling")
+            .status(),
+        TaskStatus::Cancelled
+    );
+    assert!(matches!(
+        repository
+            .complete(
+                &failure_sibling_run,
+                &worker_b,
+                failure_sibling_claim.task_run().version(),
+                failure_sibling_claim.fencing_token(),
+                TaskOutput::empty(),
+            )
+            .await,
+        Err(StorageError::ClaimLost(_))
+    ));
+    let sibling_attempt_outcome: String = pool
+        .get()
+        .await
+        .expect("get PostgreSQL connection")
+        .query_one(
+            "SELECT outcome FROM task_attempts WHERE task_run_id = $1",
+            &[&failure_sibling_run.as_str()],
+        )
+        .await
+        .expect("read cancelled sibling attempt")
+        .get(0);
+    assert_eq!(sibling_attempt_outcome, "cancelled");
 
     // Durable cancellation of a running task closes its attempt and fences late
     // worker writes in the same transaction as the task.cancelled event.
