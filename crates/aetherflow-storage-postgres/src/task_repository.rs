@@ -737,7 +737,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         lease_duration: Duration,
     ) -> Result<SystemTime, StorageError> {
-        self.heartbeat_inner(task_run_id, worker_id, expected_version, fencing_token, lease_duration, None).await
+        self.heartbeat_inner(
+            task_run_id,
+            worker_id,
+            expected_version,
+            fencing_token,
+            lease_duration,
+            None,
+        )
+        .await
     }
 
     /// Heartbeats an existing attempt while its worker registration remains current.
@@ -750,7 +758,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         lease_duration: Duration,
     ) -> Result<SystemTime, StorageError> {
-        self.heartbeat_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, lease_duration, Some(registration)).await
+        self.heartbeat_inner(
+            task_run_id,
+            registration.worker_id(),
+            expected_version,
+            fencing_token,
+            lease_duration,
+            Some(registration),
+        )
+        .await
     }
 
     async fn heartbeat_inner(
@@ -839,7 +855,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         output: TaskOutput,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.complete_inner(task_run_id, worker_id, expected_version, fencing_token, output, None).await
+        self.complete_inner(
+            task_run_id,
+            worker_id,
+            expected_version,
+            fencing_token,
+            output,
+            None,
+        )
+        .await
     }
 
     /// Completes an attempt only while the worker and parent node epoch remain current.
@@ -852,7 +876,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         output: TaskOutput,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.complete_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, output, Some(registration)).await
+        self.complete_inner(
+            task_run_id,
+            registration.worker_id(),
+            expected_version,
+            fencing_token,
+            output,
+            Some(registration),
+        )
+        .await
     }
 
     async fn complete_inner(
@@ -958,7 +990,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         failure: TaskFailure,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.record_failure_inner(task_run_id, worker_id, expected_version, fencing_token, failure, None).await
+        self.record_failure_inner(
+            task_run_id,
+            worker_id,
+            expected_version,
+            fencing_token,
+            failure,
+            None,
+        )
+        .await
     }
 
     /// Records a handler failure while validating its worker and node epoch.
@@ -971,7 +1011,15 @@ impl PgTaskRepository {
         fencing_token: u64,
         failure: TaskFailure,
     ) -> Result<DurableTaskRun, StorageError> {
-        self.record_failure_inner(task_run_id, registration.worker_id(), expected_version, fencing_token, failure, Some(registration)).await
+        self.record_failure_inner(
+            task_run_id,
+            registration.worker_id(),
+            expected_version,
+            fencing_token,
+            failure,
+            Some(registration),
+        )
+        .await
     }
 
     async fn record_failure_inner(
