@@ -459,7 +459,7 @@ impl PgTaskRepository {
         attempt_id: &AttemptId,
         lease_duration: Duration,
     ) -> Result<Option<PgTaskClaim>, StorageError> {
-        let lease_millis = lease_millis(lease_duration)?;
+        let lease_seconds = lease_seconds(lease_duration)?;
         let mut client = self
             .pool
             .get()
@@ -506,11 +506,11 @@ impl PgTaskRepository {
              SET status = 'running', version = version + 1, \
                  attempts_started = attempts_started + 1, fencing_token = fencing_token + 1, \
                  claimed_by = $2, \
-                 lease_expires_at = clock_timestamp() + ($3 * INTERVAL '1 millisecond'), \
+                 lease_expires_at = clock_timestamp() + make_interval(secs => $3), \
                  started_at = COALESCE(started_at, clock_timestamp()), updated_at = clock_timestamp() \
              WHERE task_run_id = $1 AND status = 'ready' \
              RETURNING attempts_started, fencing_token, version",
-            &[&task_run_id, &worker_id.as_str(), &lease_millis],
+            &[&task_run_id, &worker_id.as_str(), &lease_seconds],
         ).await.map_err(|error| StorageError::Database(error.to_string()))?
          .ok_or_else(|| StorageError::InconsistentState(
              "locked ready task disappeared before claim update".to_owned(),
@@ -569,7 +569,7 @@ impl PgTaskRepository {
         fencing_token: u64,
         lease_duration: Duration,
     ) -> Result<SystemTime, StorageError> {
-        let lease_millis = lease_millis(lease_duration)?;
+        let lease_seconds = lease_seconds(lease_duration)?;
         let expected_version = sql_i64(expected_version)?;
         let fencing_token = sql_i64(fencing_token)?;
         let mut client = self
@@ -584,7 +584,7 @@ impl PgTaskRepository {
         let row = transaction
             .query_opt(
                 "UPDATE task_runs \
-             SET lease_expires_at = clock_timestamp() + ($5 * INTERVAL '1 millisecond') \
+             SET lease_expires_at = clock_timestamp() + make_interval(secs => $5) \
              WHERE task_run_id = $1 AND status = 'running' AND claimed_by = $2 \
                AND version = $3 AND fencing_token = $4 \
                AND lease_expires_at > clock_timestamp() \
@@ -594,7 +594,7 @@ impl PgTaskRepository {
                     &worker_id.as_str(),
                     &expected_version,
                     &fencing_token,
-                    &lease_millis,
+                    &lease_seconds,
                 ],
             )
             .await
@@ -769,8 +769,7 @@ impl PgTaskRepository {
                 let retry_number = NonZeroU32::new(attempts_u32).ok_or_else(|| {
                     StorageError::InvalidStoredValue("running task has no attempts".to_owned())
                 })?;
-                i64::try_from(policy.backoff_ms(retry_number))
-                    .map_err(|_| StorageError::InvalidRetryPolicy)?
+                Duration::from_millis(policy.backoff_ms(retry_number)).as_secs_f64()
             } else {
                 0
             };
@@ -801,7 +800,7 @@ impl PgTaskRepository {
                 "UPDATE task_runs \
                  SET status = $2, claimed_by = NULL, lease_expires_at = NULL, \
                      available_at = CASE WHEN $2 = 'retry_waiting' \
-                         THEN clock_timestamp() + ($3 * INTERVAL '1 millisecond') \
+                         THEN clock_timestamp() + make_interval(secs => $3) \
                          ELSE available_at END, \
                      version = version + 1, updated_at = clock_timestamp(), \
                      finished_at = CASE WHEN $2 = 'failed' THEN clock_timestamp() ELSE NULL END, \
@@ -857,12 +856,12 @@ fn validate_retry_policy(policy: RetryPolicy) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn lease_millis(duration: Duration) -> Result<i64, StorageError> {
+fn lease_seconds(duration: Duration) -> Result<f64, StorageError> {
     let millis = duration.as_millis();
     if millis == 0 || millis > MAX_LEASE_MILLIS {
         return Err(StorageError::InvalidLeaseDuration);
     }
-    i64::try_from(millis).map_err(|_| StorageError::InvalidLeaseDuration)
+    Ok(duration.as_secs_f64())
 }
 
 fn sql_i64(value: u64) -> Result<i64, StorageError> {
