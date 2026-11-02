@@ -158,10 +158,11 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
         .await
         .expect("draining node may heartbeat during graceful shutdown");
     assert_eq!(node_a_draining_renewed.status(), MembershipStatus::Draining);
-    let persisted_worker_expiry_is_capped: bool = pool
+    let lease_client = pool
         .get()
         .await
-        .expect("get lease verification connection")
+        .expect("get lease verification connection");
+    let persisted_worker_expiry_is_capped: bool = lease_client
         .query_one(
             "SELECT worker.lease_expires_at <= node.lease_expires_at
              FROM worker_registrations AS worker
