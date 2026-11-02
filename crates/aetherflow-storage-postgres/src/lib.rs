@@ -11,6 +11,7 @@ mod task_repository;
 
 pub use task_repository::{
     DurableTaskRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository, RecoveredLease,
+    TaskFailure,
 };
 
 const INITIAL_MIGRATION_SQL: &str =
