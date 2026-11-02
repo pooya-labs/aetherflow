@@ -1057,8 +1057,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let partition_path = shared_markers.join("partition");
     let partition_ack_path = shared_markers.join("partition-ack");
     let resume_path = shared_markers.join("resume");
-    let original_executable =
-        std::env::current_exe().expect("current integration-test executable");
+    let original_executable = std::env::current_exe().expect("current integration-test executable");
     let child_env = vec![
         (
             "AETHERFLOW_PARTITION_CHILD_DATABASE_USER",
