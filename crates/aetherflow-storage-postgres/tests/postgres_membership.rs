@@ -689,19 +689,16 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let task_run_id =
         TaskRunId::parse(format!("partition-task-run-{suffix}")).expect("valid task run ID");
     let node_id = NodeId::parse(format!("partition-node-{suffix}")).expect("valid node ID");
-    let old_incarnation =
-        NodeIncarnationId::parse(format!("partition-old-incarnation-{suffix}"))
-            .expect("valid old incarnation");
-    let new_incarnation =
-        NodeIncarnationId::parse(format!("partition-new-incarnation-{suffix}"))
-            .expect("valid new incarnation");
+    let old_incarnation = NodeIncarnationId::parse(format!("partition-old-incarnation-{suffix}"))
+        .expect("valid old incarnation");
+    let new_incarnation = NodeIncarnationId::parse(format!("partition-new-incarnation-{suffix}"))
+        .expect("valid new incarnation");
     let old_worker_id =
         WorkerId::parse(format!("partition-old-worker-{suffix}")).expect("valid old worker ID");
     let new_worker_id =
         WorkerId::parse(format!("partition-new-worker-{suffix}")).expect("valid new worker ID");
-    let retry_policy =
-        RetryPolicy::new(NonZeroU32::new(2).expect("positive retry budget"), 0, 0)
-            .expect("valid retry policy");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(2).expect("positive retry budget"), 0, 0)
+        .expect("valid retry policy");
 
     admin_tasks
         .create_workflow(
@@ -711,8 +708,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             &[NewTaskRun::new(
                 task_run_id.clone(),
                 task_id.clone(),
-                TaskInput::new(b"partition-recovery-input".to_vec())
-                    .expect("valid task input"),
+                TaskInput::new(b"partition-recovery-input".to_vec()).expect("valid task input"),
                 Vec::new(),
                 retry_policy,
                 SystemTime::now() - Duration::from_secs(1),
@@ -785,8 +781,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         )
         .await
         .expect("old isolated worker registers");
-    let old_attempt = AttemptId::parse(format!("partition-old-attempt-{suffix}"))
-        .expect("valid old attempt ID");
+    let old_attempt =
+        AttemptId::parse(format!("partition-old-attempt-{suffix}")).expect("valid old attempt ID");
     let old_claim = old_tasks
         .claim_next_registered_for_tasks(
             &old_registration,
@@ -911,8 +907,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         .promote_due_tasks_registered(&new_registration, 8)
         .await
         .expect("replacement epoch promotes recovered task");
-    let new_attempt = AttemptId::parse(format!("partition-new-attempt-{suffix}"))
-        .expect("valid new attempt ID");
+    let new_attempt =
+        AttemptId::parse(format!("partition-new-attempt-{suffix}")).expect("valid new attempt ID");
     let new_claim = admin_tasks
         .claim_next_registered_for_tasks(
             &new_registration,
