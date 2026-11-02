@@ -284,7 +284,10 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
     let pool = pool_from_url(&database_url, 8);
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
-        store.migrate().await.expect("ensure current PostgreSQL schema"),
+        store
+            .migrate()
+            .await
+            .expect("ensure current PostgreSQL schema"),
         MigrationOutcome::Applied { version: 3, .. }
             | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
@@ -318,19 +321,15 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .await
         .expect("old worker registration succeeds");
 
-    let workflow_id = WorkflowId::parse(format!("stale-task-wf-{suffix}"))
-        .expect("valid workflow ID");
-    let workflow_run_id = WorkflowRunId::parse(format!("stale-task-run-{suffix}"))
-        .expect("valid workflow-run ID");
+    let workflow_id =
+        WorkflowId::parse(format!("stale-task-wf-{suffix}")).expect("valid workflow ID");
+    let workflow_run_id =
+        WorkflowRunId::parse(format!("stale-task-run-{suffix}")).expect("valid workflow-run ID");
     let task_id = TaskId::parse(format!("stale-task-def-{suffix}")).expect("valid task ID");
     let task_run_id =
         TaskRunId::parse(format!("stale-task-exec-{suffix}")).expect("valid task-run ID");
-    let retry_policy = RetryPolicy::new(
-        NonZeroU32::new(2).expect("positive retry budget"),
-        0,
-        0,
-    )
-    .expect("valid retry policy");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(2).expect("positive retry budget"), 0, 0)
+        .expect("valid retry policy");
     tasks
         .create_workflow(
             &workflow_run_id,
@@ -359,7 +358,10 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .await
         .expect("registered worker may claim while its epoch is active")
         .expect("ready task is claimed");
-    assert_eq!(claim.task_run().status(), aetherflow_core::domain::TaskStatus::Running);
+    assert_eq!(
+        claim.task_run().status(),
+        aetherflow_core::domain::TaskStatus::Running
+    );
 
     tokio::time::sleep(Duration::from_millis(450)).await;
     let new_node = membership
@@ -447,7 +449,10 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .get_task_run(&task_run_id)
         .await
         .expect("read task after stale write attempts");
-    assert_eq!(unchanged.status(), aetherflow_core::domain::TaskStatus::Running);
+    assert_eq!(
+        unchanged.status(),
+        aetherflow_core::domain::TaskStatus::Running
+    );
     assert_eq!(unchanged.version(), claim.task_run().version());
     assert_eq!(unchanged.fencing_token(), claim.fencing_token());
     assert_eq!(
@@ -467,4 +472,3 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
         .expect("drain replacement test node");
     assert_eq!(new_registration.node().epoch(), new_node.epoch());
 }
-
