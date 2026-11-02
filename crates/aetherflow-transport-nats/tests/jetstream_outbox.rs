@@ -138,6 +138,34 @@ fn unique_suffix() -> String {
     format!("{}_{nanos}", std::process::id())
 }
 
+fn parse_nats_seed_urls(urls: &str) -> Vec<async_nats::ServerAddr> {
+    let servers = urls
+        .split(',')
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|url| {
+            url.parse::<async_nats::ServerAddr>()
+                .expect("valid NATS seed server URL")
+        })
+        .collect::<Vec<_>>();
+    assert!(!servers.is_empty(), "at least one NATS seed URL is required");
+    servers
+}
+
+async fn connect_to_nats(urls: &str) -> async_nats::Client {
+    async_nats::connect(parse_nats_seed_urls(urls))
+        .await
+        .expect("connect using the configured NATS seed server pool")
+}
+
+#[test]
+fn nats_seed_url_list_parses_all_cluster_members() {
+    let servers = parse_nats_seed_urls(
+        "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224",
+    );
+    assert_eq!(servers.len(), 3);
+}
+
 #[tokio::test]
 async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids() {
     let (Ok(database_url), Ok(nats_url)) = (
@@ -155,9 +183,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let stream_name = format!("AFLOW_TEST_{}", suffix.replace('_', ""));
     let consumer_name = format!("aflow_test_{}", suffix.replace('_', ""));
 
-    let client = async_nats::connect(nats_url.clone())
-        .await
-        .expect("connect to NATS");
+    let client = connect_to_nats(&nats_url).await;
     let jetstream = jetstream::new(client);
     let stream = jetstream
         .create_stream(jetstream::stream::Config {
@@ -1184,18 +1210,16 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             tokio::time::sleep(Duration::from_millis(850)).await;
             timeout(Duration::from_secs(10), async {
                 loop {
-                    let report = restart_dispatcher
-                        .dispatch_once()
-                        .await
-                        .expect("retry outbox against surviving JetStream quorum");
-                    if report.acknowledged() == 1 {
-                        break report;
+                    if let Ok(report) = restart_dispatcher.dispatch_once().await {
+                        if report.acknowledged() == 1 {
+                            break true;
+                        }
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             })
             .await
-            .is_ok()
+            .unwrap_or(false)
         };
 
         // Restore node 1 before assertions and cleanup, even if quorum failed.
@@ -1213,7 +1237,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             loop {
                 if let Ok(Ok(client)) = timeout(
                     Duration::from_millis(300),
-                    async_nats::connect(nats_url.clone()),
+                    connect_to_nats(&nats_url),
                 )
                 .await
                 {
@@ -1337,9 +1361,7 @@ async fn jetstream_child_process_exits_after_broker_storage_before_outbox_ack() 
     let claim = &claims[0];
     assert_eq!(claim.event_id(), expected_event_id);
 
-    let client = async_nats::connect(nats_url)
-        .await
-        .expect("connect publisher child to NATS");
+    let client = connect_to_nats(&nats_url).await;
     let publisher = NatsJetStreamPublisher::new(jetstream::new(client), subject);
     publisher
         .publish(claim)
@@ -1392,9 +1414,7 @@ async fn jetstream_child_process_exits_after_inbox_commit_before_broker_ack() {
         .build()
         .expect("build consumer child database pool");
     let inbox = PgInboxRepository::from_pool(pool.clone());
-    let client = async_nats::connect(nats_url)
-        .await
-        .expect("connect consumer child to NATS");
+    let client = connect_to_nats(&nats_url).await;
     let jetstream = jetstream::new(client);
     let stream = jetstream
         .get_stream(stream_name)
