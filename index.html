@@ -166,7 +166,7 @@
     .progress-number { font-size: 54px; font-weight: 820; letter-spacing: -.075em; line-height: 1.1; margin: 20px 0 5px; }
     .progress-number span { font-size: 20px; color: var(--subtle); font-weight: 600; letter-spacing: 0; }
     .progress-track { width: 100%; height: 8px; background: var(--bg-soft); border-radius: 99px; overflow: hidden; margin: 20px 0 11px; }
-    .progress-fill { height: 100%; width: 95%; border-radius: 99px; background: linear-gradient(90deg, var(--cyan), var(--blue), var(--violet)); }
+    .progress-fill { height: 100%; width: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--cyan), var(--blue), var(--violet)); }
     .progress-caption { color: var(--muted); font-size: 11px; }
     .milestones { display: grid; gap: 0; }
     .milestone { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -302,7 +302,7 @@
       <div class="shell">
         <div class="metrics">
           <div class="metric"><div class="metric-label">Milestone</div><div class="metric-value">M04</div><div class="metric-note">Durable persistence</div></div>
-          <div class="metric"><div class="metric-label">Roadmap tasks</div><div class="metric-value">20 / 21</div><div class="metric-note">Verified in active milestone</div></div>
+          <div class="metric"><div class="metric-label">Roadmap tasks</div><div class="metric-value">21 / 21</div><div class="metric-note">M04 complete · hosted verified</div></div>
           <div class="metric"><div class="metric-label">Payload limit</div><div class="metric-value">1 MiB</div><div class="metric-note">Bounded task input / output</div></div>
           <div class="metric"><div class="metric-label">Delivery model</div><div class="metric-value">At-least-once</div><div class="metric-note">Idempotency is explicit</div></div>
         </div>
@@ -365,10 +365,10 @@
         </div>
         <div class="status-grid">
           <div class="status-card">
-            <div class="kicker">M04 completion</div>
-            <div class="progress-number">95<span>%</span></div>
+            <div class="kicker">M04 · complete</div>
+            <div class="progress-number">100<span>%</span></div>
             <div class="progress-track"><div class="progress-fill"></div></div>
-            <div class="progress-caption">20 of 21 M04 tasks checked. One process-termination test group remains.</div>
+            <div class="progress-caption">All 21 M04 tasks are verified. M05 distributed coordination is now underway.</div>
             <div style="margin-top:23px"><a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Read the full roadmap ↗</a></div>
           </div>
           <div class="status-card">
@@ -377,8 +377,8 @@
               <div class="milestone"><span class="milestone-code">M01</span><span><strong>Rust workspace</strong><small>Crates, CI, health endpoint</small></span><span class="state">Complete</span></div>
               <div class="milestone"><span class="milestone-code">M02</span><span><strong>Execution domain</strong><small>Typed IDs, lifecycle, retry semantics</small></span><span class="state">Complete</span></div>
               <div class="milestone"><span class="milestone-code">M03</span><span><strong>Single-node runtime</strong><small>Scheduler, DAGs, cancellation, shutdown</small></span><span class="state">Complete</span></div>
-              <div class="milestone current"><span class="milestone-code">M04</span><span><strong>Durable persistence</strong><small>PostgreSQL, outbox, inbox, JetStream</small></span><span class="state current">In progress</span></div>
-              <div class="milestone"><span class="milestone-code">M05</span><span><strong>Distributed coordination</strong><small>Membership, worker ownership, partitions</small></span><span class="state" style="color:var(--subtle)">Planned</span></div>
+              <div class="milestone"><span class="milestone-code">M04</span><span><strong>Durable persistence</strong><small>PostgreSQL, outbox, inbox, JetStream, process recovery</small></span><span class="state">Complete</span></div>
+              <div class="milestone current"><span class="milestone-code">M05</span><span><strong>Distributed coordination</strong><small>Node membership, worker registration, partition fencing</small></span><span class="state current">In progress</span></div>
             </div>
           </div>
         </div>
