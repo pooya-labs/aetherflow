@@ -57,13 +57,18 @@ impl OutboxPublisher for CrashWindowPublisher {
 
 struct CountingHandler {
     calls: Arc<AtomicUsize>,
+    delay: Duration,
 }
 
 impl JetStreamEventHandler for CountingHandler {
     fn handle<'a>(&'a self, event: &'a JetStreamEvent) -> EventHandlerFuture<'a> {
         let calls = Arc::clone(&self.calls);
         let event_id = event.event_id().to_owned();
+        let delay = self.delay;
         Box::pin(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             if event_id.is_empty() {
                 return Err("event identity must not be empty".to_owned());
             }
@@ -115,6 +120,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .create_consumer(PullConsumerConfig {
             durable_name: Some(consumer_name),
             filter_subject: subject.clone(),
+            ack_wait: Duration::from_millis(250),
+            max_ack_pending: 1,
             ..Default::default()
         })
         .await
@@ -251,6 +258,7 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let handler_calls = Arc::new(AtomicUsize::new(0));
     let handler = Arc::new(CountingHandler {
         calls: Arc::clone(&handler_calls),
+        delay: Duration::from_millis(700),
     });
     let logical_consumer = format!("billing_{}", suffix.replace('_', ""));
     let first_consumer = NatsJetStreamConsumer::new(
@@ -280,8 +288,14 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         .await
         .expect("join first consumer")
         .expect("first consumer should stop cleanly");
+    // Keep the durable consumer open beyond AckWait. Progress acknowledgements
+    // must prevent JetStream from redelivering the event while the handler is
+    // still working, and the PostgreSQL inbox lease must stay owned as well.
+    tokio::time::sleep(Duration::from_millis(350)).await;
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_eq!(first_metrics.snapshot().processed, 1);
+    assert_eq!(first_metrics.snapshot().duplicates, 0);
+    assert_eq!(first_metrics.snapshot().busy, 0);
 
     // Republish the same logical event ID under a different NATS message ID.
     // This simulates a broker redelivery after the inbox commit: the inbox must
