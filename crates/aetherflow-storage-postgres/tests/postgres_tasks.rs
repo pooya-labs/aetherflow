@@ -260,7 +260,38 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .drain_node(&durable_node)
         .await
         .expect("drain durable integration-test node");
-    assert_eq!(durable_workflow_status, WorkflowStatus::Succeeded);
+    if durable_workflow_status != WorkflowStatus::Succeeded {
+        let diagnostic_client = pool
+            .get()
+            .await
+            .expect("get durable task diagnostic connection");
+        let diagnostics = diagnostic_client
+            .query(
+                "SELECT task_run_id, status, last_error_kind, last_error_message,
+                        attempts_started, claimed_by, version, fencing_token
+                 FROM task_runs
+                 WHERE workflow_run_id = $1
+                 ORDER BY task_id",
+                &[&durable_worker_workflow_run.as_str()],
+            )
+            .await
+            .expect("read durable task failure diagnostics")
+            .into_iter()
+            .map(|row| (
+                row.get::<_, String>(0),
+                row.get::<_, String>(1),
+                row.get::<_, Option<String>>(2),
+                row.get::<_, Option<String>>(3),
+                row.get::<_, i32>(4),
+                row.get::<_, Option<String>>(5),
+                row.get::<_, i64>(6),
+                row.get::<_, i64>(7),
+            ))
+            .collect::<Vec<_>>();
+        panic!(
+            "durable worker workflow did not succeed ({durable_workflow_status:?}); task diagnostics: {diagnostics:?}"
+        );
+    }
     assert_eq!(child_execution_count.load(Ordering::SeqCst), 1);
     let durable_root_run_id = durable_submission
         .task_run_id(&durable_root_task_id)
@@ -1616,10 +1647,17 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
         worker_config,
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
+    let mut worker_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
 
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !handler_started.load(Ordering::SeqCst) {
+        loop {
+            if handler_started.load(Ordering::SeqCst) {
+                break;
+            }
+            if worker_handle.is_finished() {
+                let result = (&mut worker_handle).await;
+                panic!("registered worker exited before starting its handler: {result:?}");
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -1629,7 +1667,7 @@ async fn registered_worker_keeps_membership_alive_while_draining_inflight_task()
     shutdown_tx
         .send(true)
         .expect("request graceful worker shutdown while handler is running");
-    tokio::time::timeout(Duration::from_secs(5), worker_handle)
+    tokio::time::timeout(Duration::from_secs(5), &mut worker_handle)
         .await
         .expect("worker drains the active handler before exiting")
         .expect("join registered worker task")
