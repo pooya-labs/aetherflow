@@ -139,8 +139,8 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Document current at-least-once delivery guarantees and operational limits in the PostgreSQL transaction contract; extend with membership/partition behavior as M05 implementation lands.
 
 ### M06 — WASM extension runtime
-- [ ] Define versioned plugin ABI and capability model.
-- [ ] Integrate Wasmtime with fuel, memory, and execution limits.
+- [x] Define versioned plugin ABI and capability model. ADR-0009, the WIT package `aetherflow:plugin@1.0.0`, and the `aetherflow-wasm` crate establish same-major/minor compatibility, typed task context, default-deny capabilities, and bounded input/output/resource policies. Unit tests cover ABI compatibility, default-deny grants, and hard resource ceilings.
+- [ ] Integrate Wasmtime 48.0.8 LTS with fuel, host-call transfer fuel, memory/table/component-handle limits, and an actively interruptible execution deadline. Raise workspace MSRV from 1.85 to 1.95 in the same dependency change.
 - [ ] Add host-call authorization and deterministic error mapping.
 - [ ] Test traps, resource exhaustion, and untrusted modules.
 - [ ] Publish a minimal plugin example.
@@ -171,15 +171,15 @@ For every material regression, record: detection time; affected commit and Actio
 ## Current checkpoint
 
 **Canonical branch:** `main`. Fetch the live tip before every edit and compare its parent history; never assume the SHA below is still current after a session interruption.  
-**Main HEAD before this checkpoint documentation update:** `fe8d36e4d0fc1385a74c0443c56b8de27f5e3781` (README/roadmap documentation-only commits after the verified source; no Rust or SQL implementation changes).
+**Main HEAD before this checkpoint update:** `a936db66852990efe4755f159fa808621b3d957e` (M06 ABI crate, WIT contract, ADR, workspace registration, and documentation are present; Wasmtime engine integration has not yet landed).
 **Main source tip at verification:** `9ae2d4c8a65a3b033b75deeecdeda232940300ed` (a rustfmt-only commit after the verified implementation source `03e023a330947251a0b5caf8a6523ec1d5a95550`).  
 **Last fully hosted-verified implementation source:** `03e023a330947251a0b5caf8a6523ec1d5a95550`.  
 **Hosted verification:** PostgreSQL 18 + NATS [run 41402000557](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000557) passed the full workflow on implementation source `03e023a`, including PostgreSQL storage/migrations, packet-level partition, two-round combined chaos, three-member NATS quorum recovery, outbox convergence, inbox deduplication, and schema invariants. Rust CI [run 41402000570](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000570) passed formatting, Clippy, all workspace tests, release build, docs, and lockfile artifact upload; its rustfmt step produced the formatting-only main tip `9ae2d4c`. GitHub Pages [run 41402037576](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402037576) passed on `9ae2d4c`. The source difference between the tested implementation and current main is formatting-only. Live page: https://pooya16pg-spec.github.io/aetherflow/.
 
-**Current milestone:** M05 complete — Distributed coordination and event delivery. M06 is next.  
-**Next task:** begin M06 — define the versioned WASM plugin ABI and capability model, then integrate Wasmtime with fuel, memory, and execution limits.
+**Current milestone:** M06 — WASM extension runtime. The versioned ABI/capability contract is complete; the Wasmtime host runtime is next.  
+**Next task:** integrate Wasmtime 48.0.8 LTS into `aetherflow-wasm`, enable only the Component Model/Cranelift/runtime features needed, configure fuel + host-call fuel + Store limits + epoch interruption, and raise workspace MSRV to 1.95.0 in the same commit.
 
-**Completed baseline:** M00 architecture baseline (owner license selection remains open); M01 Rust workspace foundation; M02 execution domain/state machines (property-based transition tests deferred); M03 single-node runtime; M04 durable persistence; M05 distributed coordination, membership fencing, packet partition/takeover, active-worker loss, NATS quorum loss, and combined chaos recovery. M04 includes PostgreSQL v1/v2 migrations, durable task repository/coordinator/worker, transactional outbox dispatcher, PostgreSQL consumer inbox, real NATS JetStream publisher and pull consumer, durable retries, workflow aggregation, and OS-process crash recovery at publisher/outbox-ack and consumer/inbox-commit/broker-ack windows.
+**Completed baseline:** M00 architecture baseline (owner license selection remains open); M01 Rust workspace foundation; M02 execution domain/state machines (property-based transition tests deferred); M03 single-node runtime; M04 durable persistence; M05 distributed coordination, membership fencing, packet partition/takeover, active-worker loss, NATS quorum loss, and combined chaos recovery; M06 versioned WIT ABI and default-deny capability/resource contract. M04 includes PostgreSQL v1/v2 migrations, durable task repository/coordinator/worker, transactional outbox dispatcher, PostgreSQL consumer inbox, real NATS JetStream publisher and pull consumer, durable retries, workflow aggregation, and OS-process crash recovery at publisher/outbox-ack and consumer/inbox-commit/broker-ack windows.
 
 **M05 membership and fencing implementation:** ADR-0008 is backed by PostgreSQL migration v3 and `PgMembershipRepository`. Node membership uses a stable logical node ID, process incarnation, database-owned lease, and monotonically increasing membership epoch. Worker registrations are bound to the parent node and epoch; worker leases are capped by the node lease. Same-incarnation renewal, competing-incarnation rejection, expiry takeover, drain, and active-worker discovery are implemented. PostgreSQL time is authoritative.
 
@@ -214,6 +214,7 @@ For every material regression, record: detection time; affected commit and Actio
 | Date | Milestone | Result |
 |---|---|---|
 | 2026-11-02 | M05 complete | Hosted-verified the two-round combined PostgreSQL partition, active-worker process-group kill, and NATS member-loss campaign. PostgreSQL 18 + NATS `41402000557`, Rust CI `41402000570`, and Pages `41402037576` passed; M06 is next. |
+| 2026-11-02 | M06 ABI foundation | Added `aetherflow-wasm`, WIT ABI `aetherflow:plugin@1.0.0`, default-deny `log.write` capability set, typed execution context, and hard input/output/memory/fuel/host-call/handle/deadline budgets. Accepted ADR-0009; Wasmtime runtime integration remains next. |
 | 2026-11-02 | M00 | Repository verified; charter, architecture, ADR, policies, and persistent roadmap committed |
 | 2026-11-02 | M01 | Rust 1.99.1 workspace, core primitive, bootstrap health server, CI, and development guide committed; hosted CI verified successfully in run `41353166515` |
 | 2026-11-02 | M02 | Typed IDs and idempotency keys, lifecycle state machines, retry contract, ADR-0002, exhaustive transition matrices, terminal-race and overflow tests committed; hosted CI passed all quality checks on `832e3fc` |
