@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
@@ -736,4 +737,167 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             .get(0);
         assert_eq!(event_count, 1, "expected one {event_type} event");
     }
+
+    // Persist one more running attempt, expire its lease, then discard every
+    // pool/repository handle before starting a separate test process. The child
+    // receives only identifiers and the database URL; all state is reloaded
+    // from PostgreSQL after the simulated process crash.
+    let restart_workflow_run =
+        WorkflowRunId::parse("durable-process-restart-workflow-run").expect("valid workflow ID");
+    let restart_workflow =
+        WorkflowId::parse("durable-process-restart-workflow").expect("valid workflow ID");
+    let restart_task_run =
+        TaskRunId::parse("durable-process-restart-task-run").expect("valid task-run ID");
+    repository
+        .create_workflow(
+            &restart_workflow_run,
+            &restart_workflow,
+            None,
+            &[NewTaskRun::new(
+                restart_task_run.clone(),
+                TaskId::parse("durable-process-restart-task").expect("valid task ID"),
+                TaskInput::new(b"survive-process-restart".to_vec()).expect("valid input"),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create process-restart workflow");
+    assert_eq!(
+        repository
+            .promote_due_tasks(10)
+            .await
+            .expect("promote process-restart task"),
+        vec![restart_task_run.clone()]
+    );
+    let restart_attempt_one =
+        AttemptId::parse("durable-process-restart-attempt-one").expect("valid attempt ID");
+    let restart_claim = repository
+        .claim_next(&worker_a, &restart_attempt_one, Duration::from_secs(30))
+        .await
+        .expect("claim process-restart task")
+        .expect("process-restart task is ready");
+    assert_eq!(restart_claim.fencing_token(), 1);
+    client
+        .execute(
+            "UPDATE task_runs SET lease_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE task_run_id = $1",
+            &[&restart_task_run.as_str()],
+        )
+        .await
+        .expect("expire lease before process restart");
+
+    drop(client);
+    drop(repository);
+    drop(store);
+    drop(pool);
+
+    let database_url =
+        std::env::var("AETHERFLOW_TEST_DATABASE_URL").expect("database URL was checked at test start");
+    let child_status = Command::new(std::env::current_exe().expect("current test executable"))
+        .args([
+            "--exact",
+            "postgres_restart_child_process_recovers_expired_task",
+            "--nocapture",
+        ])
+        .env("AETHERFLOW_RESTART_TEST_DATABASE_URL", database_url)
+        .env("AETHERFLOW_RESTART_TASK_RUN_ID", restart_task_run.as_str())
+        .env("AETHERFLOW_RESTART_WORKFLOW_RUN_ID", restart_workflow_run.as_str())
+        .status()
+        .expect("spawn a fresh recovery test process");
+    assert!(
+        child_status.success(),
+        "fresh process failed to recover the persisted task (exit: {child_status})"
+    );
+}
+
+
+/// Runs in a separate OS process when launched by the durable task integration
+/// test. During the normal test pass it is a no-op because the restart-specific
+/// environment is not set.
+#[tokio::test]
+async fn postgres_restart_child_process_recovers_expired_task() {
+    let (Ok(database_url), Ok(task_run_id), Ok(workflow_run_id)) = (
+        std::env::var("AETHERFLOW_RESTART_TEST_DATABASE_URL"),
+        std::env::var("AETHERFLOW_RESTART_TASK_RUN_ID"),
+        std::env::var("AETHERFLOW_RESTART_WORKFLOW_RUN_ID"),
+    ) else {
+        return;
+    };
+
+    let config: Config = database_url
+        .parse()
+        .expect("valid PostgreSQL connection URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(4)
+        .build()
+        .expect("build fresh-process PostgreSQL pool");
+    let store = PgStore::from_pool(pool.clone());
+    assert!(matches!(
+        store.migrate().await.expect("verify schema after restart"),
+        MigrationOutcome::AlreadyCurrent { version: 1, .. }
+    ));
+    let repository = PgTaskRepository::from_pool(pool);
+
+    let task_run_id = TaskRunId::parse(task_run_id).expect("valid persisted task-run ID");
+    let workflow_run_id =
+        WorkflowRunId::parse(workflow_run_id).expect("valid persisted workflow-run ID");
+    let recovered = repository
+        .recover_expired_leases(100)
+        .await
+        .expect("recover leases after process restart");
+    let recovered_task = recovered
+        .iter()
+        .find(|lease| lease.task_run().task_run_id() == &task_run_id)
+        .expect("expired task is recovered from PostgreSQL");
+    assert!(recovered_task.was_retried());
+    assert_eq!(recovered_task.task_run().status(), TaskStatus::RetryWaiting);
+
+    assert_eq!(
+        repository
+            .promote_due_tasks(10)
+            .await
+            .expect("promote recovered task"),
+        vec![task_run_id.clone()]
+    );
+    let worker = WorkerId::parse("durable-process-restart-worker-b").expect("valid worker ID");
+    let attempt = AttemptId::parse("durable-process-restart-attempt-two")
+        .expect("valid attempt ID");
+    let claim = repository
+        .claim_next(&worker, &attempt, Duration::from_secs(30))
+        .await
+        .expect("claim recovered task in fresh process")
+        .expect("recovered task is ready");
+    assert_eq!(claim.attempt_number().get(), 2);
+    assert_eq!(claim.fencing_token(), 2);
+    assert_eq!(
+        claim.task_run().input().as_bytes(),
+        b"survive-process-restart"
+    );
+
+    let completed = repository
+        .complete(
+            &task_run_id,
+            &worker,
+            claim.task_run().version(),
+            claim.fencing_token(),
+            TaskOutput::new(b"completed-after-restart".to_vec()).expect("valid output"),
+        )
+        .await
+        .expect("complete recovered task in fresh process");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&workflow_run_id)
+            .await
+            .expect("aggregate workflow in fresh process"),
+        WorkflowStatus::Succeeded
+    );
 }
