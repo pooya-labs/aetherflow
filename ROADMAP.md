@@ -76,7 +76,6 @@ Overall status: **M04 in progress; M00–M03 complete and hosted-verified**
 - [x] Add a process-restart integration test that drops the original pool/repository and starts a separate OS test process to recover an expired lease, reclaim with a higher fencing token, and finish the task (PostgreSQL 18 run `41368104662`).
 - [x] Inject an outbox insert failure in PostgreSQL 18 and prove task state, attempt outcome, and event insertion roll back atomically; after removing the failing constraint, the same valid claim completes successfully (PostgreSQL 18 run `41368359268`; Rust CI run `41368358899`).
 - [x] Connect `PgWorkflowCoordinator` and `PostgresTaskWorker` to the shared runtime `TaskRegistry`/`TaskContext`: materialize deterministic task-run IDs from validated DAGs, execute with bounded concurrency, PostgreSQL leases/heartbeats/fencing, durable retries/timeouts, dependency outputs, and automatic workflow aggregation (Rust CI `41369526772`; PostgreSQL 18 `41369526661`).
-- [ ] Integrate a real broker publisher and idempotent inbox/consumer deduplication; verify publish/ack crash-window redelivery.
 - [ ] Test process termination across database commit and broker publish/ack crash windows.
 
 ### M05 — Distributed coordination and event delivery
