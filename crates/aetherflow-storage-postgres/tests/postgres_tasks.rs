@@ -7,7 +7,7 @@ use aetherflow_core::domain::{
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, StorageError,
+    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, StorageError, TaskFailure,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio_postgres::{Config, NoTls};
@@ -387,9 +387,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             &worker_a,
             failure_claim_a.task_run().version(),
             failure_claim_a.fencing_token(),
-            true,
-            "temporary",
-            "transient downstream error",
+            TaskFailure::retryable("temporary", "transient downstream error"),
         )
         .await
         .expect("persist retryable failure");
@@ -412,9 +410,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
             &worker_b,
             failure_claim_b.task_run().version(),
             failure_claim_b.fencing_token(),
-            false,
-            "permanent",
-            "non-retryable business error",
+            TaskFailure::permanent("permanent", "non-retryable business error"),
         )
         .await
         .expect("persist permanent failure");
