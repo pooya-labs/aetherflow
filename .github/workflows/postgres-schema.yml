@@ -185,7 +185,7 @@ jobs:
       - name: Create isolated database and test real JetStream transport
         run: |
           createdb --host 127.0.0.1 --username aetherflow aetherflow_nats_test
-          cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked
+          cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
 
       - name: Verify schema records and reject invalid invariants
         run: |
