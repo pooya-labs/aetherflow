@@ -10,5 +10,9 @@ description = "Versioned WebAssembly plugin ABI and capability contracts for Aet
 aetherflow-core = { path = "../aetherflow-core" }
 wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std", "wit-parser"] }
 
+[dev-dependencies]
+wit-component = { version = "=0.254.2", features = ["dummy-module"] }
+wit-parser = "=0.254.2"
+
 [lints]
 workspace = true
