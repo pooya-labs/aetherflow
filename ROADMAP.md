@@ -127,12 +127,12 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Gate durable task claims and worker heartbeat/completion/failure/cancellation/timeout/recovery/promotion/aggregation writes on a live worker registration and matching node epoch in the same PostgreSQL transaction; filter claims by the worker's registered `TaskRegistry` capabilities (PostgreSQL 18 + NATS run `41386154586`; Rust CI `41386154607`).
 - [x] Add transactional outbox/inbox where required (implemented and PostgreSQL 18 verified in M04).
 - [x] Integrate NATS JetStream after transport-independent contracts stabilize (isolated publisher/consumer crate and real PostgreSQL 18 + NATS integration in M04).
-- [ ] Extend redelivery and lease-expiry coverage to multi-node database/broker partitions, node-epoch takeover, and worker loss (single-process redelivery, lease recovery, and OS-process death windows are already verified in M04).
+- [ ] Extend redelivery and lease-expiry coverage to real multi-process database/broker partitions, node rejoin, and worker loss. Transaction-level stale-epoch takeover and replacement-worker recovery are verified; separate OS processes and network partitions remain open.
 
-**M05 chaos-test exit criteria (all still open):**
+**M05 chaos-test exit criteria (transaction-level takeover/recovery verified; process-level chaos remains):**
 1. Run two logical nodes and multiple workers against one PostgreSQL cluster; pause or disconnect node A long enough for its database-owned membership lease to expire.
-2. Let node B take over the same logical node ID with a strictly higher membership epoch; prove A cannot heartbeat, claim, complete, fail, cancel, timeout, promote, recover, or aggregate through its stale registration.
-3. Expire A's task lease and let B recover/reclaim it; assert the attempt number and task fencing token advance and the task reaches one terminal state.
+2. [x] At the PostgreSQL transaction level, a higher epoch fences the old registration: stale heartbeat, claim, completion, failure, cancellation, timeout, promotion, recovery and aggregation are rejected without mutating the task row (PostgreSQL 18 run 41386154586). The full two-process partition/takeover version remains tied to criterion 1.
+3. [x] Expire the old task lease and let a replacement-epoch worker recover/reclaim it; assert attempt 2, a higher task fencing token, and successful terminal completion (PostgreSQL 18 run 41386154586).
 4. Partition NATS while PostgreSQL remains healthy; prove outbox retry preserves the event ID, inbox dedup suppresses duplicate logical effects, and delivery resumes after the broker returns.
 5. Restore connectivity to A and the broker; prove stale work is fenced, no task remains permanently stuck, no event is silently lost, and the workflow state matches its task history.
 - [x] Document current at-least-once delivery guarantees and operational limits in the PostgreSQL transaction contract; extend with membership/partition behavior as M05 implementation lands.
