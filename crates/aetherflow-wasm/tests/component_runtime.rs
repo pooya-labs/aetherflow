@@ -167,8 +167,8 @@ fn ungranted_wasi_componentization_error() -> String {
         .expect("register guest core module")
         .validate(true)
         .encode()
-        .expect_err("the v1 WIT world must reject an undeclared WASI core import")
-        .to_string()
+        .expect_err("the v1 WIT world must reject an undeclared WASI core import");
+    format!("{error:#}")
 }
 
 fn component_returning_guest_error(code: &str, message: &str) -> Vec<u8> {
