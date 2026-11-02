@@ -992,6 +992,196 @@ impl PgTaskRepository {
         Ok(snapshot)
     }
 
+    /// Commits task cancellation, attempt completion, and its outbox event atomically.
+    ///
+    /// Cancellation is version-guarded. A terminal task or stale version cannot
+    /// overwrite a completion, timeout, or another cancellation.
+    pub async fn cancel_task_run(
+        &self,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run(task_run_id, expected_version, "cancelled")
+            .await
+    }
+
+    /// Commits a task timeout, attempt completion, and its outbox event atomically.
+    ///
+    /// The runtime decides when a timeout deadline elapses; PostgreSQL serializes
+    /// the terminal transition against concurrent completion and cancellation.
+    pub async fn timeout_task_run(
+        &self,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run(task_run_id, expected_version, "timed_out")
+            .await
+    }
+
+    async fn terminate_task_run(
+        &self,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+        next_status: &str,
+    ) -> Result<DurableTaskRun, StorageError> {
+        let expected_version = sql_i64(expected_version)?;
+        let (attempt_outcome, event_type, error_kind, error_message) = match next_status {
+            "cancelled" => (
+                "cancelled",
+                "task.cancelled",
+                "cancelled",
+                "task cancellation requested",
+            ),
+            "timed_out" => (
+                "timed_out",
+                "task.timed_out",
+                "timeout",
+                "task attempt timed out",
+            ),
+            other => {
+                return Err(StorageError::InvalidStoredValue(format!(
+                    "unsupported terminal task status: {other}"
+                )));
+            }
+        };
+
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        let row = transaction
+            .query_opt(
+                "SELECT status, attempts_started, version, claimed_by, fencing_token \\
+                 FROM task_runs WHERE task_run_id = $1 FOR UPDATE",
+                &[&task_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| StorageError::TaskRunNotFound(task_run_id.as_str().to_owned()))?;
+
+        let current_status: String = row.get(0);
+        let attempts_started: i32 = row.get(1);
+        let actual_version: i64 = row.get(2);
+        let claimed_by: Option<String> = row.get(3);
+        let fencing_token: i64 = row.get(4);
+
+        if actual_version != expected_version {
+            return Err(StorageError::ClaimLost(format!(
+                "task run {} is at version {}, expected {}",
+                task_run_id.as_str(),
+                actual_version,
+                expected_version
+            )));
+        }
+        if !matches!(
+            current_status.as_str(),
+            "pending" | "ready" | "running" | "retry_waiting"
+        ) {
+            return Err(StorageError::ClaimLost(format!(
+                "task run {} is already terminal ({current_status})",
+                task_run_id.as_str()
+            )));
+        }
+
+        if current_status == "running" {
+            let attempt_number = attempts_started;
+            if attempt_number <= 0 {
+                return Err(StorageError::InconsistentState(format!(
+                    "running task {} has no recorded attempt",
+                    task_run_id.as_str()
+                )));
+            }
+            let worker_id = claimed_by.ok_or_else(|| {
+                StorageError::InconsistentState(format!(
+                    "running task {} has no lease owner",
+                    task_run_id.as_str()
+                ))
+            })?;
+            if fencing_token <= 0 {
+                return Err(StorageError::InconsistentState(format!(
+                    "running task {} has an invalid fencing token",
+                    task_run_id.as_str()
+                )));
+            }
+
+            let attempt_updated = transaction
+                .execute(
+                    "UPDATE task_attempts \\
+                     SET outcome = $4, finished_at = clock_timestamp(), \\
+                         error_kind = $5, error_message = $6 \\
+                     WHERE task_run_id = $1 AND attempt_number = $2 \\
+                       AND worker_id = $3 AND fencing_token = $7 AND outcome = 'running'",
+                    &[
+                        &task_run_id.as_str(),
+                        &attempt_number,
+                        &worker_id,
+                        &attempt_outcome,
+                        &error_kind,
+                        &error_message,
+                        &fencing_token,
+                    ],
+                )
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+            if attempt_updated != 1 {
+                return Err(StorageError::InconsistentState(format!(
+                    "terminal transition for task {} did not match one running attempt",
+                    task_run_id.as_str()
+                )));
+            }
+        }
+
+        let updated = transaction
+            .query_one(
+                "UPDATE task_runs \\
+                 SET status = $3, claimed_by = NULL, lease_expires_at = NULL, \\
+                     version = version + 1, updated_at = clock_timestamp(), \\
+                     finished_at = clock_timestamp(), \\
+                     last_error_kind = CASE WHEN $3 = 'timed_out' THEN $4 ELSE last_error_kind END, \\
+                     last_error_message = CASE WHEN $3 = 'timed_out' THEN $5 ELSE last_error_message END \\
+                 WHERE task_run_id = $1 AND version = $2 AND status = $6 \\
+                 RETURNING version",
+                &[
+                    &task_run_id.as_str(),
+                    &expected_version,
+                    &next_status,
+                    &error_kind,
+                    &error_message,
+                    &current_status,
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let version: i64 = updated.get(0);
+
+        append_outbox(
+            &transaction,
+            "task_run",
+            task_run_id.as_str(),
+            version,
+            event_type,
+            json!({
+                "task_run_id": task_run_id.as_str(),
+                "status": next_status,
+                "version": version
+            }),
+        )
+        .await?;
+
+        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(snapshot)
+    }
+
     /// Recovers expired leases in bounded batches. A later claim gets a larger fencing token.
     pub async fn recover_expired_leases(
         &self,
