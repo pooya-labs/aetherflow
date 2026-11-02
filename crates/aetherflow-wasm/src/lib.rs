@@ -316,6 +316,8 @@ impl std::error::Error for LimitConfigurationError {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
         Capability, CapabilitySet, ExecutionLimits, LimitConfigurationError,
         MAX_PLUGIN_PAYLOAD_BYTES, PLUGIN_ABI_V1, PluginAbiVersion,
@@ -329,7 +331,7 @@ mod tests {
 
         capabilities.grant(Capability::LogWrite);
         assert!(capabilities.allows(Capability::LogWrite));
-        assert_eq!(capabilities.iter().collect::<Vec<_>>(), [Capability::LogWrite]);
+        assert_eq!(capabilities.iter().collect::<Vec<_>>(), vec![Capability::LogWrite]);
     }
 
     #[test]
