@@ -109,7 +109,12 @@ impl WasmPluginRuntime {
             .map_err(|error| PluginRuntimeError::Linker(error.to_string()))?;
 
         let bindings = bindings::TaskPlugin::instantiate(&mut store, &plugin.component, &linker)
-            .map_err(map_wasmtime_error)?;
+            .map_err(|error| match map_wasmtime_error(error) {
+                PluginRuntimeError::Wasmtime(message) => {
+                    PluginRuntimeError::Instantiation(message)
+                }
+                other => other,
+            })?;
 
         let wit_context = bindings::aetherflow::plugin::types::TaskContext {
             workflow_run_id: context.workflow_run_id.as_str().to_owned(),
