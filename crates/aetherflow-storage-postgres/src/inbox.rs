@@ -254,6 +254,63 @@ impl PgInboxRepository {
         Err(inbox_claim_lost(claim))
     }
 
+    /// Extends a live inbox claim using database time.
+    ///
+    /// A claim can be renewed only by its current worker and fencing token,
+    /// before the existing lease expires. Once a lease has expired, it cannot
+    /// be revived; the caller must let another worker reclaim it.
+    pub async fn renew(
+        &self,
+        claim: &InboxClaim,
+        lease_duration: Duration,
+    ) -> Result<(), StorageError> {
+        let lease_millis = lease_duration.as_millis();
+        if lease_millis == 0 || lease_millis > MAX_LEASE_MILLIS {
+            return Err(StorageError::InvalidLeaseDuration);
+        }
+        let lease_millis =
+            i64::try_from(lease_millis).map_err(|_| StorageError::InvalidLeaseDuration)?;
+        let claim_token = i64::try_from(claim.claim_token).map_err(|_| {
+            StorageError::InvalidStoredValue(
+                "consumer inbox claim token is outside the supported range".to_owned(),
+            )
+        })?;
+
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let updated = client
+            .execute(
+                "UPDATE consumer_inbox
+                 SET lease_expires_at =
+                         clock_timestamp() + ($5::BIGINT * INTERVAL '1 millisecond'),
+                     updated_at = clock_timestamp()
+                 WHERE consumer_name = $1
+                   AND event_id = $2
+                   AND status = 'processing'
+                   AND claim_owner = $3
+                   AND claim_token = $4
+                   AND lease_expires_at > clock_timestamp()",
+                &[
+                    &claim.consumer_name,
+                    &claim.event_id,
+                    &claim.worker_id.as_str(),
+                    &claim_token,
+                    &lease_millis,
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(inbox_claim_lost(claim))
+        }
+    }
+
     /// Releases a failed claim for immediate redelivery.
     ///
     /// The next owner receives a higher fencing token. The caller should avoid
