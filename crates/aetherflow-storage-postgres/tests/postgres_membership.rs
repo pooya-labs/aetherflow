@@ -774,12 +774,6 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     let resume_path = std::env::temp_dir().join(format!("aetherflow-partition-{suffix}.resume"));
     let _ = std::fs::remove_file(&ready_path);
     let _ = std::fs::remove_file(&resume_path);
-    let child_database_url = {
-        let mut config: Config = database_url.parse().expect("valid PostgreSQL URL");
-        config.user(&role_name);
-        config.password(&role_password);
-        config.to_string()
-    };
     let child_executable = std::env::current_exe().expect("current integration-test executable");
     let mut old_worker_process = std::process::Command::new(child_executable)
         .args([
@@ -787,9 +781,11 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "postgres_partition_old_worker_child_process",
             "--nocapture",
         ])
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_URL", &database_url)
+        .env("AETHERFLOW_PARTITION_CHILD_DATABASE_USER", &role_name)
         .env(
-            "AETHERFLOW_PARTITION_CHILD_DATABASE_URL",
-            child_database_url,
+            "AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD",
+            &role_password,
         )
         .env("AETHERFLOW_PARTITION_CHILD_NODE_ID", node_id.as_str())
         .env(
@@ -973,6 +969,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
 async fn postgres_partition_old_worker_child_process() {
     let (
         Ok(database_url),
+        Ok(database_user),
+        Ok(database_password),
         Ok(node_id),
         Ok(incarnation_id),
         Ok(worker_id),
@@ -983,6 +981,8 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(resume_path),
     ) = (
         std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_URL"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_USER"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_DATABASE_PASSWORD"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_NODE_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_INCARNATION_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_WORKER_ID"),
@@ -996,7 +996,12 @@ async fn postgres_partition_old_worker_child_process() {
         return;
     };
 
-    let pool = pool_from_url(&database_url, 4);
+    let mut child_config: Config = database_url
+        .parse()
+        .expect("valid child PostgreSQL URL");
+    child_config.user(&database_user);
+    child_config.password(&database_password);
+    let pool = pool_from_config(child_config, 4);
     let membership = PgMembershipRepository::from_pool(pool.clone());
     let tasks = PgTaskRepository::from_pool(pool.clone());
     let node_id = NodeId::parse(node_id).expect("valid child node ID");
