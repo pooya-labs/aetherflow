@@ -19,6 +19,9 @@ pub const MAX_PLUGIN_PAYLOAD_BYTES: usize = 1024 * 1024;
 /// Maximum guest-provided log message accepted by the v1 host interface (4 KiB).
 pub const MAX_LOG_MESSAGE_BYTES: usize = 4 * 1024;
 
+/// Maximum host log calls permitted during one plugin invocation.
+pub const MAX_PLUGIN_LOG_MESSAGES: u32 = 256;
+
 /// Maximum linear memory permitted for one plugin invocation (64 MiB).
 pub const MAX_PLUGIN_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 
@@ -184,6 +187,8 @@ pub struct ExecutionLimits {
     pub wall_clock_timeout: Duration,
     /// Maximum UTF-8 log message size.
     pub max_log_message_bytes: usize,
+    /// Maximum number of host log calls during one invocation.
+    pub max_log_messages: u32,
 }
 
 impl Default for ExecutionLimits {
@@ -198,6 +203,7 @@ impl Default for ExecutionLimits {
             max_component_handles: 1_024,
             wall_clock_timeout: Duration::from_secs(2),
             max_log_message_bytes: MAX_LOG_MESSAGE_BYTES,
+            max_log_messages: 64,
         }
     }
 }
@@ -235,6 +241,9 @@ impl ExecutionLimits {
         }
         if self.max_log_message_bytes == 0 || self.max_log_message_bytes > MAX_LOG_MESSAGE_BYTES {
             return Err(LimitConfigurationError::LogLimitOutOfRange);
+        }
+        if self.max_log_messages == 0 || self.max_log_messages > MAX_PLUGIN_LOG_MESSAGES {
+            return Err(LimitConfigurationError::LogRateLimitOutOfRange);
         }
 
         Ok(())
@@ -320,6 +329,8 @@ pub enum LimitConfigurationError {
     TimeoutOutOfRange,
     /// Log message limit must be between 1 byte and 4 KiB.
     LogLimitOutOfRange,
+    /// Log call count must be between 1 and 256 per invocation.
+    LogRateLimitOutOfRange,
 }
 
 impl fmt::Display for LimitConfigurationError {
@@ -336,6 +347,7 @@ impl fmt::Display for LimitConfigurationError {
             }
             Self::TimeoutOutOfRange => "plugin wall-clock timeout is outside v1 bounds",
             Self::LogLimitOutOfRange => "plugin log message limit is outside v1 bounds",
+            Self::LogRateLimitOutOfRange => "plugin log call count is outside v1 bounds",
         })
     }
 }
@@ -428,6 +440,15 @@ mod tests {
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::ComponentHandlesOutOfRange)
+        );
+
+        let limits = ExecutionLimits {
+            max_log_messages: super::MAX_PLUGIN_LOG_MESSAGES + 1,
+            ..ExecutionLimits::default()
+        };
+        assert_eq!(
+            limits.validate(),
+            Err(LimitConfigurationError::LogRateLimitOutOfRange)
         );
 
         let limits = ExecutionLimits {
