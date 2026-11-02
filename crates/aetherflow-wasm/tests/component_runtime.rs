@@ -41,11 +41,7 @@ fn component_from_checked_in_wit_with_imports(
     // Keep the WIT-derived import/export signatures, but replace the dummy
     // module's intentionally trapping Guest and realloc bodies.
     let memory_declaration = format!("{extra_core_imports}(memory (;0;) 1)");
-    replace_once(
-        &mut core_wat,
-        "(memory (;0;) 0)",
-        &memory_declaration,
-    );
+    replace_once(&mut core_wat, "(memory (;0;) 0)", &memory_declaration);
     replace_once(
         &mut core_wat,
         "(memory (;0;) 1)",
@@ -120,7 +116,6 @@ fn component_returning_output(output: &[u8]) -> Vec<u8> {
     component_from_checked_in_wit("    i32.const 0", &data_segments)
 }
 
-
 fn component_reporting_memory_growth() -> Vec<u8> {
     let output_pointer = 128_u32;
     let mut result = [0_u8; 12];
@@ -152,11 +147,7 @@ fn component_with_ungranted_wasi_import() -> Vec<u8> {
     let extra_import = r#"  (import "wasi_snapshot_preview1" "fd_write"
     (func $wasi_fd_write (param i32 i32 i32 i32) (result i32)))
   "#;
-    component_from_checked_in_wit_with_imports(
-        "    i32.const 0",
-        "",
-        extra_import,
-    )
+    component_from_checked_in_wit_with_imports("    i32.const 0", "", extra_import)
 }
 
 fn component_returning_guest_error(code: &str, message: &str) -> Vec<u8> {
@@ -309,7 +300,6 @@ fn component_output_limit_is_enforced_after_guest_execution() {
     ));
 }
 
-
 #[test]
 fn component_memory_growth_is_bounded_per_invocation() {
     let runtime = WasmPluginRuntime::new().expect("create Wasmtime runtime");
@@ -331,7 +321,11 @@ fn component_memory_growth_is_bounded_per_invocation() {
             bounded_limits,
         )
         .expect("guest should handle a denied memory.grow without trapping");
-    assert_eq!(bounded.output, [1], "memory.grow should fail at the 64 KiB cap");
+    assert_eq!(
+        bounded.output,
+        [1],
+        "memory.grow should fail at the 64 KiB cap"
+    );
 
     let default_limits = runtime
         .execute(
@@ -342,7 +336,11 @@ fn component_memory_growth_is_bounded_per_invocation() {
             ExecutionLimits::default(),
         )
         .expect("guest should grow memory under the default budget");
-    assert_eq!(default_limits.output, [0], "memory.grow should succeed under the default budget");
+    assert_eq!(
+        default_limits.output,
+        [0],
+        "memory.grow should succeed under the default budget"
+    );
 }
 
 #[test]
