@@ -530,7 +530,8 @@ impl PgTaskRepository {
         registration: &WorkerRegistration,
         limit: i64,
     ) -> Result<Vec<TaskRunId>, StorageError> {
-        self.promote_due_tasks_inner(Some(registration), limit).await
+        self.promote_due_tasks_inner(Some(registration), limit)
+            .await
     }
 
     async fn promote_due_tasks_inner(
@@ -1451,7 +1452,8 @@ impl PgTaskRepository {
         registration: &WorkerRegistration,
         limit: i64,
     ) -> Result<Vec<RecoveredLease>, StorageError> {
-        self.recover_expired_leases_inner(Some(registration), limit).await
+        self.recover_expired_leases_inner(Some(registration), limit)
+            .await
     }
 
     async fn recover_expired_leases_inner(
@@ -1749,7 +1751,8 @@ impl PgTaskRepository {
         &self,
         workflow_run_id: &WorkflowRunId,
     ) -> Result<WorkflowStatus, StorageError> {
-        self.aggregate_workflow_run_inner(workflow_run_id, None).await
+        self.aggregate_workflow_run_inner(workflow_run_id, None)
+            .await
     }
 
     /// Aggregates workflow state after a registered worker transition.
