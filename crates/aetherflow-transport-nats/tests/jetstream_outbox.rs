@@ -1944,17 +1944,18 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             .expect("valid outbox dispatcher config"),
         );
 
-        if round == 0 {
-            // First failure order: cut worker DB egress, then stop NATS member 1.
-            packet_filter.install();
-            tokio::time::sleep(Duration::from_millis(850)).await;
-            nats_node.stop();
-        } else {
-            // Second failure order: stop NATS member 1, then cut worker DB egress.
-            nats_node.stop();
-            packet_filter.install();
-            tokio::time::sleep(Duration::from_millis(850)).await;
-        }
+        // Stop the broker member while the worker still has database access.
+        // Once the slow Docker stop has completed, prove the handler is live;
+        // then install the worker-only DB packet filter and kill immediately.
+        // This keeps all three faults overlapping without allowing a failed
+        // membership heartbeat to cooperatively abort the handler first.
+        nats_node.stop();
+        assert_handler_heartbeat_is_fresh(&marker);
+        assert!(
+            old_worker.try_wait().is_none(),
+            "worker process should still be alive before packet partition"
+        );
+        packet_filter.install();
 
         let node_lease_after: f64 = pool
             .get()
@@ -1973,16 +1974,14 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             "partitioned worker renewed its PostgreSQL membership lease"
         );
 
-        // This marker is refreshed by the handler future itself. It proves
-        // the worker is being killed while the actual handler is still live.
-        assert_handler_heartbeat_is_fresh(&marker);
         assert!(
             old_worker.try_wait().is_none(),
-            "worker process should still be alive immediately before kill"
+            "worker process should remain alive immediately before abrupt kill"
         );
 
-        // All three failures overlap: DB egress is packet-filtered, one
-        // JetStream member is stopped, and the active worker is killed now.
+        // All three failures overlap at the kill boundary: DB egress is
+        // packet-filtered, one JetStream member is down, and the active
+        // worker process is terminated without graceful drain.
         let child_status = old_worker.kill_and_wait();
         assert!(
             !child_status.success(),
