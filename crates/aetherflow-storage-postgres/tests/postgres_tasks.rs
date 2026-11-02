@@ -1016,6 +1016,17 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         .expect("verify outbox event acknowledged after publish")
         .get(0);
     assert_eq!(published_event_count, 1);
+    let (dispatch_attempts, dispatch_claim_token): (i32, i64) = client
+        .query_one(
+            "SELECT publish_attempts, claim_token FROM outbox_events WHERE event_id = $1",
+            &[&dispatch_event_id],
+        )
+        .await
+        .expect("read persisted dispatcher retry metadata")
+        .try_into()
+        .unwrap_or_else(|row_error| panic!("invalid outbox retry metadata row: {row_error}"));
+    assert_eq!(dispatch_attempts, 2);
+    assert_eq!(dispatch_claim_token, 2);
 
     // Force the outbox insert to fail after the task and attempt UPDATEs have
     // executed. PostgreSQL must roll the whole completion transaction back.
