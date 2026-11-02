@@ -23,6 +23,10 @@ fn unique_suffix() -> String {
 
 fn pool_from_url(database_url: &str, max_size: usize) -> Pool {
     let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    pool_from_config(config, max_size)
+}
+
+fn pool_from_config(config: Config, max_size: usize) -> Pool {
     let manager = Manager::from_config(
         config,
         NoTls,
@@ -656,4 +660,306 @@ async fn postgres_registered_claim_filters_by_worker_task_capabilities() {
         .drain_node(&node)
         .await
         .expect("drain capability-test node");
+}
+
+#[tokio::test]
+async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_TEST_DATABASE_URL is not set; skipping database-partition recovery test"
+        );
+        return;
+    };
+
+    let admin_pool = pool_from_url(&database_url, 8);
+    let store = PgStore::from_pool(admin_pool.clone());
+    store
+        .migrate()
+        .await
+        .expect("ensure current PostgreSQL schema");
+    let admin_membership = PgMembershipRepository::from_pool(admin_pool.clone());
+    let admin_tasks = PgTaskRepository::from_pool(admin_pool.clone());
+    let suffix = unique_suffix();
+
+    let workflow_id =
+        WorkflowId::parse(format!("partition-workflow-{suffix}")).expect("valid workflow ID");
+    let workflow_run_id =
+        WorkflowRunId::parse(format!("partition-run-{suffix}")).expect("valid workflow run ID");
+    let task_id = TaskId::parse(format!("partition-task-{suffix}")).expect("valid task ID");
+    let task_run_id =
+        TaskRunId::parse(format!("partition-task-run-{suffix}")).expect("valid task run ID");
+    let node_id = NodeId::parse(format!("partition-node-{suffix}")).expect("valid node ID");
+    let old_incarnation =
+        NodeIncarnationId::parse(format!("partition-old-incarnation-{suffix}"))
+            .expect("valid old incarnation");
+    let new_incarnation =
+        NodeIncarnationId::parse(format!("partition-new-incarnation-{suffix}"))
+            .expect("valid new incarnation");
+    let old_worker_id =
+        WorkerId::parse(format!("partition-old-worker-{suffix}")).expect("valid old worker ID");
+    let new_worker_id =
+        WorkerId::parse(format!("partition-new-worker-{suffix}")).expect("valid new worker ID");
+    let retry_policy =
+        RetryPolicy::new(NonZeroU32::new(2).expect("positive retry budget"), 0, 0)
+            .expect("valid retry policy");
+
+    admin_tasks
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id.clone(),
+                task_id.clone(),
+                TaskInput::new(b"partition-recovery-input".to_vec())
+                    .expect("valid task input"),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() - Duration::from_secs(1),
+            )],
+        )
+        .await
+        .expect("create task before database partition");
+    admin_tasks
+        .promote_due_tasks(8)
+        .await
+        .expect("promote partition test task");
+
+    // Use a dedicated database role for the old process so its DB access can
+    // be cut without interrupting the replacement node or the test controller.
+    // The role name is generated from numeric process/time data and is quoted.
+    let role_name = format!("awp_{}", &suffix[suffix.len() - 24..]);
+    let quoted_role = format!("\"{role_name}\"");
+    let role_password = format!("ephemeral-{suffix}-credential");
+    let admin_client = admin_pool
+        .get()
+        .await
+        .expect("get admin connection for isolated worker role");
+    admin_client
+        .execute(
+            &format!("CREATE ROLE {quoted_role} LOGIN PASSWORD $1"),
+            &[&role_password],
+        )
+        .await
+        .expect("create temporary isolated worker role");
+    admin_client
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA public TO {quoted_role};
+             GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {quoted_role};
+             GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {quoted_role};"
+        ))
+        .await
+        .expect("grant existing storage tables to isolated worker");
+    let database_name: String = admin_client
+        .query_one("SELECT current_database()", &[])
+        .await
+        .expect("read test database name")
+        .get(0);
+    let quoted_database = format!("\"{}\"", database_name.replace('"', "\"\""));
+    admin_client
+        .batch_execute(&format!(
+            "GRANT CONNECT ON DATABASE {quoted_database} TO {quoted_role};"
+        ))
+        .await
+        .expect("grant isolated worker database connection");
+
+    let mut old_db_config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    old_db_config.user(&role_name);
+    old_db_config.password(&role_password);
+    let old_pool = pool_from_config(old_db_config, 4);
+    let old_membership = PgMembershipRepository::from_pool(old_pool.clone());
+    let old_tasks = PgTaskRepository::from_pool(old_pool.clone());
+
+    // The old incarnation and worker lease are deliberately short, but their
+    // setup begins only after all workflow fixtures and grants are ready.
+    let old_node = old_membership
+        .join_node(&node_id, &old_incarnation, Duration::from_secs(3))
+        .await
+        .expect("old isolated node joins");
+    let old_registration = old_membership
+        .register_worker(
+            &old_node,
+            &old_worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("old isolated worker registers");
+    let old_attempt = AttemptId::parse(format!("partition-old-attempt-{suffix}"))
+        .expect("valid old attempt ID");
+    let old_claim = old_tasks
+        .claim_next_registered_for_tasks(
+            &old_registration,
+            std::slice::from_ref(&task_id),
+            &old_attempt,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("old worker claims before partition")
+        .expect("partition task is claimed");
+    let old_fencing_token = old_claim.fencing_token();
+    let old_version = old_claim.task_run().version();
+
+    // Revoke login and terminate every established backend for this process:
+    // the process cannot reconnect to PostgreSQL until the partition is healed.
+    admin_client
+        .batch_execute(&format!("ALTER ROLE {quoted_role} NOLOGIN;"))
+        .await
+        .expect("disable old worker database login");
+    admin_client
+        .query(
+            "SELECT pg_terminate_backend(pid)
+             FROM pg_stat_activity
+             WHERE usename = $1 AND pid <> pg_backend_pid()",
+            &[&role_name],
+        )
+        .await
+        .expect("terminate old worker database sessions");
+    assert!(
+        old_tasks
+            .heartbeat_registered(
+                &task_run_id,
+                &old_registration,
+                old_version,
+                old_fencing_token,
+                Duration::from_secs(10),
+            )
+            .await
+            .is_err(),
+        "old worker must fail closed while database access is partitioned"
+    );
+
+    tokio::time::sleep(Duration::from_millis(3_300)).await;
+    let new_node = admin_membership
+        .join_node(&node_id, &new_incarnation, Duration::from_secs(30))
+        .await
+        .expect("replacement incarnation takes over after old lease expiry");
+    assert_eq!(new_node.epoch(), old_node.epoch() + 1);
+    let new_registration = admin_membership
+        .register_worker(
+            &new_node,
+            &new_worker_id,
+            NonZeroU32::new(1).expect("positive worker capacity"),
+            Duration::from_secs(20),
+        )
+        .await
+        .expect("replacement worker registers under new epoch");
+
+    // Heal the DB partition. The old process reconnects with its original
+    // incarnation handle, but the replacement epoch must fence every write.
+    admin_client
+        .batch_execute(&format!("ALTER ROLE {quoted_role} LOGIN;"))
+        .await
+        .expect("restore old worker database login");
+    drop(old_tasks);
+    drop(old_membership);
+    drop(old_pool);
+
+    let mut reconnected_config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    reconnected_config.user(&role_name);
+    reconnected_config.password(&role_password);
+    let reconnected_pool = pool_from_config(reconnected_config, 4);
+    let stale_tasks = PgTaskRepository::from_pool(reconnected_pool.clone());
+    assert!(matches!(
+        stale_tasks
+            .heartbeat_registered(
+                &task_run_id,
+                &old_registration,
+                old_version,
+                old_fencing_token,
+                Duration::from_secs(10),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+    assert!(matches!(
+        stale_tasks
+            .complete_registered(
+                &task_run_id,
+                &old_registration,
+                old_version,
+                old_fencing_token,
+                TaskOutput::new(b"stale-partition-output".to_vec())
+                    .expect("valid stale output"),
+            )
+            .await,
+        Err(StorageError::NodeMembershipLost(id)) if id == node_id.as_str()
+    ));
+
+    // The new epoch owns recovery after the old task lease expires. The old
+    // claim remains fenced even though the database connection is restored.
+    let lease_client = admin_pool
+        .get()
+        .await
+        .expect("get admin task-lease connection");
+    lease_client
+        .execute(
+            "UPDATE task_runs
+             SET lease_expires_at = clock_timestamp() - INTERVAL '1 second'
+             WHERE task_run_id = $1 AND status = 'running'",
+            &[&task_run_id.as_str()],
+        )
+        .await
+        .expect("expire disconnected worker task lease");
+    let recovered = admin_tasks
+        .recover_expired_leases_registered(&new_registration, 8)
+        .await
+        .expect("replacement epoch recovers disconnected worker task");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].task_run().status(), TaskStatus::RetryWaiting);
+    admin_tasks
+        .promote_due_tasks_registered(&new_registration, 8)
+        .await
+        .expect("replacement epoch promotes recovered task");
+    let new_attempt = AttemptId::parse(format!("partition-new-attempt-{suffix}"))
+        .expect("valid new attempt ID");
+    let new_claim = admin_tasks
+        .claim_next_registered_for_tasks(
+            &new_registration,
+            std::slice::from_ref(&task_id),
+            &new_attempt,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("replacement epoch claims recovered task")
+        .expect("recovered task is ready");
+    assert_eq!(new_claim.attempt_number().get(), 2);
+    assert!(new_claim.fencing_token() > old_fencing_token);
+    let completed = admin_tasks
+        .complete_registered(
+            &task_run_id,
+            &new_registration,
+            new_claim.task_run().version(),
+            new_claim.fencing_token(),
+            TaskOutput::new(b"recovered-after-database-partition".to_vec())
+                .expect("valid recovered output"),
+        )
+        .await
+        .expect("replacement worker completes recovered task");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+
+    admin_membership
+        .drain_node(&new_node)
+        .await
+        .expect("drain replacement partition-test node");
+
+    // Release the temporary role and its grants after all worker pools are gone.
+    drop(stale_tasks);
+    drop(reconnected_pool);
+    let _ = admin_client
+        .query(
+            "SELECT pg_terminate_backend(pid)
+             FROM pg_stat_activity
+             WHERE usename = $1 AND pid <> pg_backend_pid()",
+            &[&role_name],
+        )
+        .await
+        .expect("terminate temporary worker role sessions");
+    admin_client
+        .batch_execute(&format!(
+            "DROP OWNED BY {quoted_role};
+             DROP ROLE {quoted_role};"
+        ))
+        .await
+        .expect("remove temporary isolated worker role");
 }
