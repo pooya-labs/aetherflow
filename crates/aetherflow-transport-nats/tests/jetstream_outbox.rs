@@ -1,4 +1,6 @@
+use std::io::Write;
 use std::num::NonZeroU32;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,15 +10,18 @@ use aetherflow_core::domain::{
 };
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport, OutboxDispatcherConfig,
-    OutboxPublishError, OutboxPublishFuture, OutboxPublisher, PgInboxRepository, PgStore,
-    PgTaskRepository, PostgresOutboxDispatcher,
+    InboxClaimResult, MigrationOutcome, NewTaskRun, OutboxClaim, OutboxDispatchReport,
+    OutboxDispatcherConfig, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
+    PgInboxRepository, PgStore, PgTaskRepository, PostgresOutboxDispatcher,
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
     NatsJetStreamPublisher,
 };
-use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
+use async_nats::jetstream::{
+    self, consumer::pull::Config as PullConsumerConfig,
+    consumer::PullConsumer,
+};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
 use tokio::time::timeout;
@@ -480,5 +485,543 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     assert_eq!(retry_attempts, 2);
     assert_eq!(retry_token, 2);
 
+    // --- Real publisher process death after broker acceptance, before DB ack. ---
+    let publisher_crash_subject = format!("aetherflow.integration.{suffix}.publisher-crash");
+    let publisher_crash_stream_name = format!("AFLOW_PUB_CRASH_{}", suffix.replace('_', ""));
+    let publisher_crash_durable = format!("aflow_pub_crash_{}", suffix.replace('_', ""));
+    let publisher_crash_stream = jetstream
+        .create_stream(jetstream::stream::Config {
+            name: publisher_crash_stream_name.clone(),
+            subjects: vec![publisher_crash_subject.clone()],
+            duplicate_window: Duration::from_secs(120),
+            ..Default::default()
+        })
+        .await
+        .expect("create publisher crash-window stream");
+    let publisher_crash_consumer = publisher_crash_stream
+        .create_consumer(PullConsumerConfig {
+            durable_name: Some(publisher_crash_durable),
+            filter_subject: publisher_crash_subject.clone(),
+            ..Default::default()
+        })
+        .await
+        .expect("create publisher crash-window pull consumer");
+
+    let crash_workflow_run_id = WorkflowRunId::parse(format!("nats-publisher-crash-run-{suffix}"))
+        .expect("valid publisher crash workflow-run ID");
+    let crash_workflow_id = WorkflowId::parse(format!("nats-publisher-crash-workflow-{suffix}"))
+        .expect("valid publisher crash workflow ID");
+    let crash_task_run_id = TaskRunId::parse(format!("nats-publisher-crash-task-run-{suffix}"))
+        .expect("valid publisher crash task-run ID");
+    let crash_retry_policy =
+        RetryPolicy::new(NonZeroU32::new(1).expect("non-zero attempts"), 0, 0)
+            .expect("valid publisher crash retry policy");
+    repository
+        .create_workflow(
+            &crash_workflow_run_id,
+            &crash_workflow_id,
+            None,
+            &[NewTaskRun::new(
+                crash_task_run_id,
+                TaskId::parse(format!("nats-publisher-crash-task-{suffix}"))
+                    .expect("valid publisher crash task ID"),
+                TaskInput::new(Vec::new()).expect("valid empty publisher crash input"),
+                Vec::new(),
+                crash_retry_policy,
+                SystemTime::now() + Duration::from_secs(300),
+            )],
+        )
+        .await
+        .expect("create workflow for publisher process-crash test");
+
+    let crash_event_id: i64 = pool
+        .get()
+        .await
+        .expect("get publisher crash test connection")
+        .query_one(
+            "SELECT event_id FROM outbox_events
+             WHERE aggregate_type = 'workflow_run'
+               AND aggregate_id = $1
+               AND event_type = 'workflow.started'
+               AND published_at IS NULL",
+            &[&crash_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("find publisher crash-window event")
+        .get(0);
+
+    let publisher_crash_lease_ms = 450_u64;
+    let publisher_child = Command::new(
+        std::env::current_exe().expect("current JetStream integration test executable"),
+    )
+    .args([
+        "--exact",
+        "jetstream_child_process_exits_after_broker_storage_before_outbox_ack",
+        "--nocapture",
+    ])
+    .env(
+        "AETHERFLOW_CRASH_PUBLISH_DATABASE_URL",
+        &database_url,
+    )
+    .env("AETHERFLOW_CRASH_PUBLISH_NATS_URL", &nats_url)
+    .env("AETHERFLOW_CRASH_PUBLISH_SUBJECT", &publisher_crash_subject)
+    .env(
+        "AETHERFLOW_CRASH_PUBLISH_WORKER_ID",
+        format!("crash-publisher-{suffix}"),
+    )
+    .env(
+        "AETHERFLOW_CRASH_PUBLISH_EVENT_ID",
+        crash_event_id.to_string(),
+    )
+    .env(
+        "AETHERFLOW_CRASH_PUBLISH_LEASE_MS",
+        publisher_crash_lease_ms.to_string(),
+    )
+    .output()
+    .expect("spawn publisher process-crash child");
+    assert_eq!(
+        publisher_child.status.code(),
+        Some(86),
+        "publisher child must terminate after JetStream storage and before DB ack; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&publisher_child.stdout),
+        String::from_utf8_lossy(&publisher_child.stderr),
+    );
+
+    let publisher_crash_state = pool
+        .get()
+        .await
+        .expect("get post-crash outbox connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts, claim_token,
+                    claim_owner IS NOT NULL, claim_expires_at > clock_timestamp()
+             FROM outbox_events WHERE event_id = $1",
+            &[&crash_event_id],
+        )
+        .await
+        .expect("inspect outbox after publisher process exit");
+    assert!(!publisher_crash_state.get::<_, bool>(0));
+    assert_eq!(publisher_crash_state.get::<_, i32>(1), 1);
+    assert_eq!(publisher_crash_state.get::<_, i64>(2), 1);
+    assert!(publisher_crash_state.get::<_, bool>(3));
+    assert!(publisher_crash_state.get::<_, bool>(4));
+
+    // The OS process is gone. Wait for its database-owned lease, then let a
+    // fresh dispatcher retry the same stable event ID through real JetStream.
+    tokio::time::sleep(Duration::from_millis(publisher_crash_lease_ms + 180)).await;
+    let publisher_crash_dispatcher = PostgresOutboxDispatcher::new(
+        Arc::clone(&repository),
+        WorkerId::parse(format!("crash-retry-publisher-{suffix}"))
+            .expect("valid crash retry publisher ID"),
+        Arc::new(NatsJetStreamPublisher::new(
+            jetstream.clone(),
+            publisher_crash_subject.clone(),
+        )),
+        OutboxDispatcherConfig::new(
+            1,
+            Duration::from_millis(10),
+            Duration::from_secs(5),
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        )
+        .expect("valid publisher crash retry config"),
+    );
+    let publisher_crash_retry = publisher_crash_dispatcher
+        .dispatch_once()
+        .await
+        .expect("reclaim and republish event after publisher process exit");
+    assert_eq!(publisher_crash_retry.claimed(), 1);
+    assert_eq!(publisher_crash_retry.acknowledged(), 1);
+    assert_eq!(publisher_crash_retry.rescheduled(), 0);
+
+    let publisher_crash_final = pool
+        .get()
+        .await
+        .expect("get final outbox verification connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts, claim_token,
+                    claim_owner IS NULL
+             FROM outbox_events WHERE event_id = $1",
+            &[&crash_event_id],
+        )
+        .await
+        .expect("verify fresh publisher completed the event");
+    assert!(publisher_crash_final.get::<_, bool>(0));
+    assert_eq!(publisher_crash_final.get::<_, i32>(1), 2);
+    assert_eq!(publisher_crash_final.get::<_, i64>(2), 2);
+    assert!(publisher_crash_final.get::<_, bool>(3));
+
+    let mut publisher_crash_messages = publisher_crash_consumer
+        .messages()
+        .await
+        .expect("open publisher crash-window stream messages");
+    let stored_crash_event = timeout(Duration::from_secs(5), publisher_crash_messages.next())
+        .await
+        .expect("JetStream should deliver publisher crash-window event")
+        .expect("publisher crash-window consumer stream should remain open")
+        .expect("read publisher crash-window message");
+    let stored_crash_envelope: serde_json::Value =
+        serde_json::from_slice(&stored_crash_event.payload)
+            .expect("decode publisher crash-window envelope");
+    assert_eq!(stored_crash_envelope["event_id"], crash_event_id.to_string());
+    stored_crash_event
+        .double_ack()
+        .await
+        .expect("acknowledge single stored publisher crash-window message");
+    match timeout(Duration::from_millis(250), publisher_crash_messages.next()).await {
+        Err(_) | Ok(None) => {}
+        Ok(Some(Err(error))) => panic!("publisher crash-window stream failed: {error}"),
+        Ok(Some(Ok(message))) => {
+            panic!(
+                "JetStream stored a duplicate after real publisher process death: {:?}",
+                message.subject
+            )
+        }
+    }
+    drop(publisher_crash_messages);
+    let _ = jetstream.delete_stream(publisher_crash_stream_name).await;
+
+    // --- Real consumer process death after inbox commit, before broker ack. ---
+    let consumer_crash_subject = format!("aetherflow.integration.{suffix}.consumer-crash");
+    let consumer_crash_stream_name = format!("AFLOW_CON_CRASH_{}", suffix.replace('_', ""));
+    let consumer_crash_durable = format!("aflow_con_crash_{}", suffix.replace('_', ""));
+    let consumer_crash_logical_name = format!("crash_consumer_{}", suffix.replace('_', ""));
+    let consumer_crash_stream = jetstream
+        .create_stream(jetstream::stream::Config {
+            name: consumer_crash_stream_name.clone(),
+            subjects: vec![consumer_crash_subject.clone()],
+            duplicate_window: Duration::from_secs(120),
+            ..Default::default()
+        })
+        .await
+        .expect("create consumer crash-window stream");
+    let consumer_crash_pull = consumer_crash_stream
+        .create_consumer(PullConsumerConfig {
+            durable_name: Some(consumer_crash_durable.clone()),
+            filter_subject: consumer_crash_subject.clone(),
+            ack_wait: Duration::from_millis(300),
+            max_ack_pending: 1,
+            ..Default::default()
+        })
+        .await
+        .expect("create consumer crash-window pull consumer");
+
+    pool.get()
+        .await
+        .expect("get consumer crash setup connection")
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS aetherflow_test_consumer_effects (
+                 event_id TEXT PRIMARY KEY,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+             )",
+        )
+        .await
+        .expect("create consumer crash side-effect ledger");
+
+    let consumer_crash_event_id = format!("consumer-process-crash-{suffix}");
+    let consumer_crash_envelope = serde_json::json!({
+        "schema_version": 1,
+        "event_id": consumer_crash_event_id,
+        "aggregate_type": "test",
+        "aggregate_id": format!("consumer-crash-aggregate-{suffix}"),
+        "aggregate_version": 1,
+        "event_type": "test.consumer_process_crash",
+        "payload": {"crash_window": "inbox-commit-before-broker-ack"},
+    });
+    let mut consumer_crash_headers = async_nats::HeaderMap::new();
+    consumer_crash_headers.append("Nats-Msg-Id", format!("consumer-process-crash-{suffix}"));
+    let consumer_crash_publish_ack = jetstream
+        .publish_with_headers(
+            consumer_crash_subject.clone(),
+            consumer_crash_headers,
+            serde_json::to_vec(&consumer_crash_envelope)
+                .expect("encode consumer crash-window envelope")
+                .into(),
+        )
+        .await
+        .expect("publish consumer crash-window event");
+    consumer_crash_publish_ack
+        .await
+        .expect("JetStream should store consumer crash-window event");
+
+    let consumer_child = Command::new(
+        std::env::current_exe().expect("current JetStream integration test executable"),
+    )
+    .args([
+        "--exact",
+        "jetstream_child_process_exits_after_inbox_commit_before_broker_ack",
+        "--nocapture",
+    ])
+    .env("AETHERFLOW_CRASH_CONSUMER_DATABASE_URL", &database_url)
+    .env("AETHERFLOW_CRASH_CONSUMER_NATS_URL", &nats_url)
+    .env("AETHERFLOW_CRASH_CONSUMER_STREAM", &consumer_crash_stream_name)
+    .env("AETHERFLOW_CRASH_CONSUMER_DURABLE", &consumer_crash_durable)
+    .env(
+        "AETHERFLOW_CRASH_CONSUMER_LOGICAL_NAME",
+        &consumer_crash_logical_name,
+    )
+    .env("AETHERFLOW_CRASH_CONSUMER_EVENT_ID", &consumer_crash_event_id)
+    .env(
+        "AETHERFLOW_CRASH_CONSUMER_WORKER_ID",
+        format!("crash-consumer-worker-{suffix}"),
+    )
+    .output()
+    .expect("spawn consumer process-crash child");
+    assert_eq!(
+        consumer_child.status.code(),
+        Some(87),
+        "consumer child must terminate after inbox commit and before broker ack; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&consumer_child.stdout),
+        String::from_utf8_lossy(&consumer_child.stderr),
+    );
+
+    let consumer_crash_inbox_state = pool
+        .get()
+        .await
+        .expect("get consumer crash inbox verification connection")
+        .query_one(
+            "SELECT status, attempts, claim_token FROM consumer_inbox
+             WHERE consumer_name = $1 AND event_id = $2",
+            &[&consumer_crash_logical_name, &consumer_crash_event_id],
+        )
+        .await
+        .expect("inspect inbox after consumer process exit");
+    assert_eq!(
+        consumer_crash_inbox_state.get::<_, String>(0),
+        "processed"
+    );
+    assert_eq!(consumer_crash_inbox_state.get::<_, i64>(1), 1);
+    assert_eq!(consumer_crash_inbox_state.get::<_, i64>(2), 1);
+    let side_effect_count: i64 = pool
+        .get()
+        .await
+        .expect("get consumer crash side-effect connection")
+        .query_one(
+            "SELECT count(*) FROM aetherflow_test_consumer_effects WHERE event_id = $1",
+            &[&consumer_crash_event_id],
+        )
+        .await
+        .expect("count side effects completed before inbox commit")
+        .get(0);
+    assert_eq!(side_effect_count, 1);
+
+    let consumer_crash_handler_calls = Arc::new(AtomicUsize::new(0));
+    let consumer_crash_handler = Arc::new(CountingHandler {
+        calls: Arc::clone(&consumer_crash_handler_calls),
+        delay: Duration::ZERO,
+    });
+    let existing_crash_pull: PullConsumer = consumer_crash_stream
+        .get_consumer(&consumer_crash_durable)
+        .await
+        .expect("reattach to durable consumer after process restart");
+    let restarted_consumer = NatsJetStreamConsumer::new(
+        existing_crash_pull,
+        PgInboxRepository::from_pool(pool.clone()),
+        consumer_crash_logical_name.clone(),
+        WorkerId::parse(format!("crash-consumer-restart-{suffix}"))
+            .expect("valid restarted consumer worker ID"),
+        Duration::from_millis(300),
+        consumer_crash_handler,
+    )
+    .expect("create restarted consumer after inbox commit");
+    let restarted_metrics = restarted_consumer.metrics();
+    let (restarted_shutdown_tx, restarted_shutdown_rx) = watch::channel(false);
+    let restarted_task =
+        tokio::spawn(async move { restarted_consumer.run(restarted_shutdown_rx).await });
+    timeout(Duration::from_secs(5), async {
+        while restarted_metrics.snapshot().duplicates == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("broker redelivery after child exit should be suppressed by inbox");
+    restarted_shutdown_tx
+        .send(true)
+        .expect("signal restarted consumer shutdown");
+    restarted_task
+        .await
+        .expect("join restarted consumer")
+        .expect("restarted consumer should acknowledge processed redelivery");
+    assert_eq!(restarted_metrics.snapshot().duplicates, 1);
+    assert_eq!(consumer_crash_handler_calls.load(Ordering::SeqCst), 0);
+    let final_side_effect_count: i64 = pool
+        .get()
+        .await
+        .expect("get final consumer side-effect connection")
+        .query_one(
+            "SELECT count(*) FROM aetherflow_test_consumer_effects WHERE event_id = $1",
+            &[&consumer_crash_event_id],
+        )
+        .await
+        .expect("verify no duplicate side effect after process restart")
+        .get(0);
+    assert_eq!(final_side_effect_count, 1);
+    pool.get()
+        .await
+        .expect("get consumer crash cleanup connection")
+        .execute("DROP TABLE aetherflow_test_consumer_effects", &[])
+        .await
+        .expect("drop consumer crash side-effect table");
+    let _ = jetstream.delete_stream(consumer_crash_stream_name).await;
+
     let _ = jetstream.delete_stream(stream_name).await;
+}
+
+
+/// Child process for the publisher crash-window test. It commits an outbox
+/// claim, stores the event in JetStream, and exits without acknowledging the
+/// outbox row. The parent expects exit code 86.
+#[tokio::test]
+async fn jetstream_child_process_exits_after_broker_storage_before_outbox_ack() {
+    let (
+        Ok(database_url),
+        Ok(nats_url),
+        Ok(subject),
+        Ok(worker_id),
+        Ok(expected_event_id),
+        Ok(lease_ms),
+    ) = (
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_DATABASE_URL"),
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_NATS_URL"),
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_SUBJECT"),
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_WORKER_ID"),
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_EVENT_ID"),
+        std::env::var("AETHERFLOW_CRASH_PUBLISH_LEASE_MS"),
+    ) else {
+        return;
+    };
+
+    let config: Config = database_url.parse().expect("valid publisher child database URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(2)
+        .build()
+        .expect("build publisher child database pool");
+    let repository = PgTaskRepository::from_pool(pool);
+    let worker_id = WorkerId::parse(worker_id).expect("valid publisher child worker ID");
+    let expected_event_id = expected_event_id
+        .parse::<i64>()
+        .expect("valid expected outbox event ID");
+    let lease = Duration::from_millis(lease_ms.parse().expect("valid child lease milliseconds"));
+    let claims = repository
+        .claim_outbox_events(&worker_id, 1, lease)
+        .await
+        .expect("claim outbox event in child process");
+    assert_eq!(claims.len(), 1, "child should claim exactly the crash test event");
+    let claim = &claims[0];
+    assert_eq!(claim.event_id(), expected_event_id);
+
+    let client = async_nats::connect(nats_url)
+        .await
+        .expect("connect publisher child to NATS");
+    let publisher = NatsJetStreamPublisher::new(jetstream::new(client), subject);
+    publisher
+        .publish(claim)
+        .await
+        .expect("JetStream must confirm storage before child termination");
+
+    // Exit without running destructors or calling acknowledge_outbox_event.
+    let _ = std::io::stdout().flush();
+    std::process::exit(86);
+}
+
+/// Child process for the consumer crash-window test. It writes a test side
+/// effect and commits the inbox claim, then exits before acknowledging the
+/// JetStream message. The parent expects exit code 87.
+#[tokio::test]
+async fn jetstream_child_process_exits_after_inbox_commit_before_broker_ack() {
+    let (
+        Ok(database_url),
+        Ok(nats_url),
+        Ok(stream_name),
+        Ok(durable_name),
+        Ok(logical_consumer),
+        Ok(expected_event_id),
+        Ok(worker_id),
+    ) = (
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_DATABASE_URL"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_NATS_URL"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_STREAM"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_DURABLE"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_LOGICAL_NAME"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_EVENT_ID"),
+        std::env::var("AETHERFLOW_CRASH_CONSUMER_WORKER_ID"),
+    ) else {
+        return;
+    };
+
+    let config: Config = database_url.parse().expect("valid consumer child database URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(2)
+        .build()
+        .expect("build consumer child database pool");
+    let inbox = PgInboxRepository::from_pool(pool.clone());
+    let client = async_nats::connect(nats_url)
+        .await
+        .expect("connect consumer child to NATS");
+    let jetstream = jetstream::new(client);
+    let stream = jetstream
+        .get_stream(stream_name)
+        .await
+        .expect("get consumer crash-window stream in child");
+    let consumer: PullConsumer = stream
+        .get_consumer(&durable_name)
+        .await
+        .expect("reattach to durable consumer in child");
+    let mut messages = consumer.messages().await.expect("open child pull consumer");
+    let message = timeout(Duration::from_secs(5), messages.next())
+        .await
+        .expect("child should receive pending broker delivery")
+        .expect("child consumer stream should remain open")
+        .expect("read pending child broker delivery");
+    let event: JetStreamEvent =
+        serde_json::from_slice(&message.payload).expect("decode child consumer event");
+    assert_eq!(event.event_id(), expected_event_id);
+
+    let worker_id = WorkerId::parse(worker_id).expect("valid consumer child worker ID");
+    let claim = match inbox
+        .try_claim(
+            &logical_consumer,
+            event.event_id(),
+            &worker_id,
+            Duration::from_secs(3),
+        )
+        .await
+        .expect("claim inbox event in child process")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("child expected a fresh inbox claim, got {other:?}"),
+    };
+
+    // Simulate a handler side effect that completed before inbox acknowledgement.
+    pool.get()
+        .await
+        .expect("get child side-effect connection")
+        .execute(
+            "INSERT INTO aetherflow_test_consumer_effects (event_id) VALUES ($1)",
+            &[&event.event_id()],
+        )
+        .await
+        .expect("record single side effect before inbox completion");
+    inbox
+        .acknowledge(&claim)
+        .await
+        .expect("commit inbox before child process termination");
+
+    // Exit without calling message.double_ack(). JetStream must redeliver, and
+    // a new consumer process must suppress the handler using the inbox row.
+    let _ = std::io::stdout().flush();
+    std::process::exit(87);
 }
