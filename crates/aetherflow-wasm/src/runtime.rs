@@ -11,8 +11,8 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 
 use crate::{
-    Capability, CapabilitySet, ExecutionLimits, LimitConfigurationError, PayloadTooLarge,
-    PluginExecutionContext, MAX_PLUGIN_ARTIFACT_BYTES,
+    Capability, CapabilitySet, ExecutionLimits, LimitConfigurationError, MAX_PLUGIN_ARTIFACT_BYTES,
+    PayloadTooLarge, PluginExecutionContext,
 };
 
 #[allow(dead_code)]
@@ -44,8 +44,8 @@ impl WasmPluginRuntime {
         config.wasm_memory64(false);
         config.wasm_multi_memory(false);
 
-        let engine = Engine::new(&config)
-            .map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
+        let engine =
+            Engine::new(&config).map_err(|error| PluginRuntimeError::Engine(error.to_string()))?;
         let epoch_ticker = EpochTicker::new(engine.clone())?;
 
         Ok(Self {
@@ -59,10 +59,7 @@ impl WasmPluginRuntime {
     /// This deliberately does not use unsafe deserialization of cached native
     /// artifacts. A component must still match the generated v1 WIT bindings
     /// when it is instantiated by the host linker.
-    pub fn compile_component(
-        &self,
-        artifact: &[u8],
-    ) -> Result<CompiledPlugin, PluginRuntimeError> {
+    pub fn compile_component(&self, artifact: &[u8]) -> Result<CompiledPlugin, PluginRuntimeError> {
         if artifact.len() > MAX_PLUGIN_ARTIFACT_BYTES {
             return Err(PluginRuntimeError::ArtifactTooLarge {
                 actual: artifact.len(),
@@ -89,7 +86,9 @@ impl WasmPluginRuntime {
         capabilities: CapabilitySet,
         limits: ExecutionLimits,
     ) -> Result<PluginExecutionResult, PluginRuntimeError> {
-        limits.validate().map_err(PluginRuntimeError::InvalidLimits)?;
+        limits
+            .validate()
+            .map_err(PluginRuntimeError::InvalidLimits)?;
         limits
             .validate_input(input)
             .map_err(PluginRuntimeError::InputTooLarge)?;
@@ -110,9 +109,7 @@ impl WasmPluginRuntime {
 
         let bindings = bindings::TaskPlugin::instantiate(&mut store, &plugin.component, &linker)
             .map_err(|error| match map_wasmtime_error(error) {
-                PluginRuntimeError::Wasmtime(message) => {
-                    PluginRuntimeError::Instantiation(message)
-                }
+                PluginRuntimeError::Wasmtime(message) => PluginRuntimeError::Instantiation(message),
                 other => other,
             })?;
 
@@ -289,9 +286,14 @@ pub enum PluginRuntimeError {
 impl fmt::Display for PluginRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Engine(message) => write!(formatter, "failed to create Wasmtime engine: {message}"),
+            Self::Engine(message) => {
+                write!(formatter, "failed to create Wasmtime engine: {message}")
+            }
             Self::EpochTicker(message) => {
-                write!(formatter, "failed to start Wasmtime epoch ticker: {message}")
+                write!(
+                    formatter,
+                    "failed to start Wasmtime epoch ticker: {message}"
+                )
             }
             Self::ArtifactTooLarge { actual, maximum } => write!(
                 formatter,
@@ -302,7 +304,10 @@ impl fmt::Display for PluginRuntimeError {
             }
             Self::Linker(message) => write!(formatter, "plugin ABI linker setup failed: {message}"),
             Self::Instantiation(message) => {
-                write!(formatter, "plugin component instantiation failed: {message}")
+                write!(
+                    formatter,
+                    "plugin component instantiation failed: {message}"
+                )
             }
             Self::InvalidLimits(error) => write!(formatter, "invalid plugin limits: {error}"),
             Self::InputTooLarge(error) => write!(formatter, "invalid plugin input: {error}"),
@@ -408,8 +413,17 @@ mod tests {
 
     #[test]
     fn deadline_tick_budget_rounds_up_and_adds_scheduling_slack() {
-        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(1)), 2);
-        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(10)), 2);
-        assert_eq!(super::epoch_ticks_for(std::time::Duration::from_millis(11)), 3);
+        assert_eq!(
+            super::epoch_ticks_for(std::time::Duration::from_millis(1)),
+            2
+        );
+        assert_eq!(
+            super::epoch_ticks_for(std::time::Duration::from_millis(10)),
+            2
+        );
+        assert_eq!(
+            super::epoch_ticks_for(std::time::Duration::from_millis(11)),
+            3
+        );
     }
 }

@@ -421,20 +421,24 @@ mod tests {
             aetherflow_core::WorkflowRunId::parse("workflow-run-1").expect("valid workflow run id");
         let task_run_id =
             aetherflow_core::TaskRunId::parse("task-run-1").expect("valid task run id");
-        assert!(super::PluginExecutionContext::new(
-            workflow_run_id.clone(),
-            task_run_id.clone(),
-            0,
-            None,
-        )
-        .is_err());
-        assert!(super::PluginExecutionContext::new(
-            workflow_run_id,
-            task_run_id,
-            1,
-            Some(1_800_000_000_000),
-        )
-        .is_ok());
+        assert!(
+            super::PluginExecutionContext::new(
+                workflow_run_id.clone(),
+                task_run_id.clone(),
+                0,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            super::PluginExecutionContext::new(
+                workflow_run_id,
+                task_run_id,
+                1,
+                Some(1_800_000_000_000),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
