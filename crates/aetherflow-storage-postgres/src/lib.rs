@@ -8,11 +8,13 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 mod coordinator;
+mod inbox;
 mod outbox;
 mod task_repository;
 mod worker;
 
 pub use coordinator::{PgWorkflowCoordinator, PgWorkflowSubmission};
+pub use inbox::{InboxClaim, InboxClaimResult, PgInboxRepository};
 pub use outbox::{
     OutboxDispatchReport, OutboxDispatcherConfig, OutboxDispatcherConfigError,
     OutboxDispatcherError, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
@@ -28,9 +30,30 @@ pub use worker::{
 
 const INITIAL_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0001_initial_schema.sql");
-const MIGRATION_VERSION: i64 = 1;
-const MIGRATION_NAME: &str = "0001_initial_schema.sql";
+const CONSUMER_INBOX_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0002_consumer_inbox.sql");
+const MIGRATION_VERSION: i64 = 2;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
+
+#[derive(Clone, Copy)]
+struct Migration {
+    version: i64,
+    name: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: [Migration; 2] = [
+    Migration {
+        version: 1,
+        name: "0001_initial_schema.sql",
+        sql: INITIAL_MIGRATION_SQL,
+    },
+    Migration {
+        version: 2,
+        name: "0002_consumer_inbox.sql",
+        sql: CONSUMER_INBOX_MIGRATION_SQL,
+    },
+];
 
 /// Result of applying the PostgreSQL migration set.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +103,17 @@ pub enum StorageError {
     WorkflowRunNotFound(String),
     /// A task claim is stale, expired, or belongs to another worker.
     ClaimLost(String),
+    /// A consumer name does not satisfy the bounded inbox identifier contract.
+    InvalidInboxConsumerName,
+    /// An event ID does not satisfy the bounded visible-ASCII contract.
+    InvalidInboxEventId,
+    /// An inbox diagnostic exceeds the persisted size limit.
+    InvalidInboxError,
+    /// An inbox claim is stale, expired, or owned by another worker.
+    InboxClaimLost {
+        consumer_name: String,
+        event_id: String,
+    },
     /// A lease duration is zero or cannot be represented as signed milliseconds.
     InvalidLeaseDuration,
     /// A retry policy cannot be represented by PostgreSQL columns.
@@ -125,6 +159,22 @@ impl fmt::Display for StorageError {
             Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
             Self::WorkflowRunNotFound(id) => write!(formatter, "workflow run not found: {id}"),
             Self::ClaimLost(id) => write!(formatter, "task claim is no longer owned: {id}"),
+            Self::InvalidInboxConsumerName => formatter.write_str(
+                "consumer inbox name must be a 1-128 character ASCII identifier",
+            ),
+            Self::InvalidInboxEventId => formatter.write_str(
+                "consumer inbox event ID must be 1-255 visible ASCII characters",
+            ),
+            Self::InvalidInboxError => {
+                formatter.write_str("consumer inbox error exceeds 4096 bytes")
+            }
+            Self::InboxClaimLost {
+                consumer_name,
+                event_id,
+            } => write!(
+                formatter,
+                "consumer inbox claim is no longer owned: {consumer_name}/{event_id}"
+            ),
             Self::InvalidLeaseDuration => {
                 formatter.write_str("lease duration must be a positive signed millisecond value")
             }
@@ -177,11 +227,11 @@ impl PgStore {
         Ok(())
     }
 
-    /// Applies the initial schema once, recording version and checksum in the
-    /// same transaction as the DDL. Repeated calls are idempotent.
+    /// Applies every pending immutable schema migration and records each
+    /// version/name/checksum in the same transaction as its DDL.
     ///
-    /// An untracked, newer, or checksum-drifted schema fails closed. Migration
-    /// execution is serialized by a transaction-scoped advisory lock.
+    /// Repeated calls are idempotent. An untracked, newer, or checksum-drifted
+    /// schema fails closed. Migration execution is serialized by an advisory lock.
     pub async fn migrate(&self) -> Result<MigrationOutcome, StorageError> {
         let mut client = self
             .pool
@@ -210,47 +260,50 @@ impl PgStore {
             .map_err(|error| StorageError::Database(error.to_string()))?
             .get(0);
 
-        let checksum = initial_migration_checksum();
-
-        if metadata_exists {
-            let rows = transaction
+        let rows = if metadata_exists {
+            transaction
                 .query(
-                    "SELECT version, migration_name, checksum_sha256 \
+                    "SELECT version, migration_name, checksum_sha256 \\
                      FROM aetherflow_schema_migrations ORDER BY version",
                     &[],
                 )
                 .await
-                .map_err(|error| StorageError::Database(error.to_string()))?;
+                .map_err(|error| StorageError::Database(error.to_string()))?
+        } else {
+            Vec::new()
+        };
 
-            for row in &rows {
-                let version: i64 = row.get(0);
-                if version > MIGRATION_VERSION {
-                    return Err(StorageError::NewerSchema {
-                        found: version,
-                        supported: MIGRATION_VERSION,
-                    });
-                }
-            }
+        if metadata_exists && rows.is_empty() {
+            return Err(StorageError::UntrackedSchema);
+        }
 
-            if rows.len() != 1 {
-                return Err(StorageError::UntrackedSchema);
-            }
-
-            let row = &rows[0];
+        for (index, row) in rows.iter().enumerate() {
             let version: i64 = row.get(0);
-            let name: String = row.get(1);
-            let stored_checksum: String = row.get(2);
+            if version > MIGRATION_VERSION {
+                return Err(StorageError::NewerSchema {
+                    found: version,
+                    supported: MIGRATION_VERSION,
+                });
+            }
 
-            if version != MIGRATION_VERSION {
+            let expected = MIGRATIONS
+                .get(index)
+                .ok_or(StorageError::UntrackedSchema)?;
+            if version != expected.version {
                 return Err(StorageError::UntrackedSchema);
             }
-            if name != MIGRATION_NAME {
+
+            let name: String = row.get(1);
+            if name != expected.name {
                 return Err(StorageError::MigrationNameMismatch {
                     version,
-                    expected: MIGRATION_NAME.to_owned(),
+                    expected: expected.name.to_owned(),
                     actual: name,
                 });
             }
+
+            let stored_checksum: String = row.get(2);
+            let checksum = migration_checksum(expected);
             if stored_checksum.trim_end() != checksum {
                 return Err(StorageError::MigrationChecksumMismatch {
                     version,
@@ -258,60 +311,78 @@ impl PgStore {
                     actual: stored_checksum,
                 });
             }
-
-            transaction
-                .commit()
-                .await
-                .map_err(|error| StorageError::Database(error.to_string()))?;
-            return Ok(MigrationOutcome::AlreadyCurrent {
-                version,
-                checksum_sha256: initial_migration_checksum(),
-            });
         }
 
-        transaction
-            .batch_execute(INITIAL_MIGRATION_SQL)
-            .await
-            .map_err(|error| StorageError::Database(error.to_string()))?;
-        transaction
-            .execute(
-                "INSERT INTO aetherflow_schema_migrations \
-                 (version, migration_name, checksum_sha256) VALUES ($1, $2, $3)",
-                &[&MIGRATION_VERSION, &MIGRATION_NAME, &checksum],
-            )
-            .await
-            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let applied_count = rows.len();
+        for migration in MIGRATIONS.iter().skip(applied_count) {
+            let checksum = migration_checksum(migration);
+            transaction
+                .batch_execute(migration.sql)
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+            transaction
+                .execute(
+                    "INSERT INTO aetherflow_schema_migrations \\
+                     (version, migration_name, checksum_sha256) VALUES ($1, $2, $3)",
+                    &[&migration.version, &migration.name, &checksum],
+                )
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+        }
+
+        let latest = MIGRATIONS
+            .last()
+            .expect("the migration set must contain an initial schema");
+        let latest_checksum = migration_checksum(latest);
         transaction
             .commit()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
-        Ok(MigrationOutcome::Applied {
-            version: MIGRATION_VERSION,
-            checksum_sha256: checksum,
-        })
+        if applied_count == MIGRATIONS.len() {
+            Ok(MigrationOutcome::AlreadyCurrent {
+                version: latest.version,
+                checksum_sha256: latest_checksum,
+            })
+        } else {
+            Ok(MigrationOutcome::Applied {
+                version: latest.version,
+                checksum_sha256: latest_checksum,
+            })
+        }
     }
 }
 
-/// Computes the lower-case SHA-256 checksum over the exact migration bytes.
+/// Computes the lower-case SHA-256 checksum for one immutable migration.
+fn migration_checksum(migration: &Migration) -> String {
+    let digest = Sha256::digest(migration.sql.as_bytes());
+    format!("{digest:x}")
+}
+
+/// Computes the lower-case SHA-256 checksum of the initial schema migration.
 #[must_use]
 pub fn initial_migration_checksum() -> String {
-    let digest = Sha256::digest(INITIAL_MIGRATION_SQL.as_bytes());
-    format!("{digest:x}")
+    migration_checksum(&MIGRATIONS[0])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MIGRATION_NAME, MIGRATION_VERSION, initial_migration_checksum};
+    use super::{MIGRATION_VERSION, MIGRATIONS, initial_migration_checksum, migration_checksum};
 
     #[test]
-    fn initial_migration_has_stable_name_and_sha256_checksum_shape() {
-        assert_eq!(MIGRATION_VERSION, 1);
-        assert_eq!(MIGRATION_NAME, "0001_initial_schema.sql");
+    fn migration_set_has_stable_order_names_and_sha256_checksums() {
+        assert_eq!(MIGRATION_VERSION, 2);
+        assert_eq!(MIGRATIONS[0].version, 1);
+        assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
+        assert_eq!(MIGRATIONS[1].version, 2);
+        assert_eq!(MIGRATIONS[1].name, "0002_consumer_inbox.sql");
 
-        let checksum = initial_migration_checksum();
-        assert_eq!(checksum.len(), 64);
-        assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert!(checksum.bytes().all(|byte| !byte.is_ascii_uppercase()));
+        let initial = initial_migration_checksum();
+        let inbox = migration_checksum(&MIGRATIONS[1]);
+        for checksum in [initial, inbox] {
+            assert_eq!(checksum.len(), 64);
+            assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(checksum.bytes().all(|byte| !byte.is_ascii_uppercase()));
+        }
     }
 }
