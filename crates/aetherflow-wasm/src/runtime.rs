@@ -484,8 +484,8 @@ mod tests {
             )"#,
         )
         .expect("assemble table-growth probe");
-        let module = wasmtime::Module::new(&runtime.engine, &wasm)
-            .expect("compile table-growth probe");
+        let module =
+            wasmtime::Module::new(&runtime.engine, &wasm).expect("compile table-growth probe");
 
         let grow_once = |max_table_elements| {
             let limits = ExecutionLimits {
@@ -520,5 +520,4 @@ mod tests {
             "table.grow must succeed when one additional element is within the ceiling"
         );
     }
-
 }
