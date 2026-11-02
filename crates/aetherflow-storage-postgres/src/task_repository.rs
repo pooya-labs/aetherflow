@@ -16,7 +16,8 @@ use deadpool_postgres::Pool;
 use serde_json::json;
 use tokio_postgres::{Row, Transaction};
 
-use crate::StorageError;
+use crate::membership::lock_worker_registration;
+use crate::{StorageError, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
 
@@ -579,11 +580,41 @@ impl PgTaskRepository {
     }
 
     /// Claims one ready task with SKIP LOCKED, an attempt row, fencing token, and outbox event.
+    ///
+    /// This low-level API does not validate cluster membership. Distributed
+    /// workers must use `claim_next_registered`.
     pub async fn claim_next(
         &self,
         worker_id: &WorkerId,
         attempt_id: &AttemptId,
         lease_duration: Duration,
+    ) -> Result<Option<PgTaskClaim>, StorageError> {
+        self.claim_next_inner(worker_id, attempt_id, lease_duration, None).await
+    }
+
+    /// Claims work only while the supplied node incarnation and worker
+    /// registration are active and unexpired in the same PostgreSQL transaction.
+    pub async fn claim_next_registered(
+        &self,
+        registration: &WorkerRegistration,
+        attempt_id: &AttemptId,
+        lease_duration: Duration,
+    ) -> Result<Option<PgTaskClaim>, StorageError> {
+        self.claim_next_inner(
+            registration.worker_id(),
+            attempt_id,
+            lease_duration,
+            Some(registration),
+        )
+        .await
+    }
+
+    async fn claim_next_inner(
+        &self,
+        worker_id: &WorkerId,
+        attempt_id: &AttemptId,
+        lease_duration: Duration,
+        registration: Option<&WorkerRegistration>,
     ) -> Result<Option<PgTaskClaim>, StorageError> {
         let lease_seconds = lease_seconds(lease_duration)?;
         let mut client = self
@@ -595,6 +626,14 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            if registration.worker_id() != worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    worker_id.as_str().to_owned(),
+                ));
+            }
+            lock_worker_registration(&transaction, registration, true).await?;
+        }
         let candidate = transaction
             .query_opt(
                 "SELECT task.task_run_id \
