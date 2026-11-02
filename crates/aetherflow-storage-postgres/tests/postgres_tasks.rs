@@ -738,6 +738,113 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         assert_eq!(event_count, 1, "expected one {event_type} event");
     }
 
+    // Force the outbox insert to fail after the task and attempt UPDATEs have
+    // executed. PostgreSQL must roll the whole completion transaction back.
+    let rollback_workflow_run =
+        WorkflowRunId::parse("durable-outbox-rollback-workflow").expect("valid workflow ID");
+    let rollback_workflow =
+        WorkflowId::parse("durable-outbox-rollback-definition").expect("valid workflow ID");
+    let rollback_task_run =
+        TaskRunId::parse("durable-outbox-rollback-task-run").expect("valid task-run ID");
+    repository
+        .create_workflow(
+            &rollback_workflow_run,
+            &rollback_workflow,
+            None,
+            &[NewTaskRun::new(
+                rollback_task_run.clone(),
+                TaskId::parse("durable-outbox-rollback-task").expect("valid task ID"),
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                due_time,
+            )],
+        )
+        .await
+        .expect("create outbox rollback workflow");
+    repository
+        .promote_due_tasks(10)
+        .await
+        .expect("promote outbox rollback task");
+    let rollback_worker =
+        WorkerId::parse("durable-outbox-rollback-worker").expect("valid worker ID");
+    let rollback_attempt =
+        AttemptId::parse("durable-outbox-rollback-attempt").expect("valid attempt ID");
+    let rollback_claim = repository
+        .claim_next(&rollback_worker, &rollback_attempt, Duration::from_secs(30))
+        .await
+        .expect("claim outbox rollback task")
+        .expect("rollback task is ready");
+    client
+        .batch_execute(
+            "ALTER TABLE outbox_events \\
+             ADD CONSTRAINT aetherflow_test_reject_outbox_aggregate \\
+             CHECK (aggregate_id <> 'durable-outbox-rollback-task-run') NOT VALID",
+        )
+        .await
+        .expect("install temporary outbox failure constraint");
+    let failed_commit = repository
+        .complete(
+            &rollback_task_run,
+            &rollback_worker,
+            rollback_claim.task_run().version(),
+            rollback_claim.fencing_token(),
+            TaskOutput::new(b"must-rollback".to_vec()).expect("valid output"),
+        )
+        .await;
+    assert!(
+        matches!(failed_commit, Err(StorageError::Database(_))),
+        "outbox constraint should reject the completion event"
+    );
+    let rolled_back_task = repository
+        .get_task_run(&rollback_task_run)
+        .await
+        .expect("read task after failed completion transaction");
+    assert_eq!(rolled_back_task.status(), TaskStatus::Running);
+    assert_eq!(rolled_back_task.version(), rollback_claim.task_run().version());
+    let rolled_back_attempt: String = client
+        .query_one(
+            "SELECT outcome FROM task_attempts WHERE task_run_id = $1",
+            &[&rollback_task_run.as_str()],
+        )
+        .await
+        .expect("read attempt after failed completion transaction")
+        .get(0);
+    assert_eq!(rolled_back_attempt, "running");
+    let rolled_back_event_count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'task.succeeded'",
+            &[&rollback_task_run.as_str()],
+        )
+        .await
+        .expect("count events after failed completion transaction")
+        .get(0);
+    assert_eq!(rolled_back_event_count, 0);
+    client
+        .batch_execute(
+            "ALTER TABLE outbox_events DROP CONSTRAINT aetherflow_test_reject_outbox_aggregate",
+        )
+        .await
+        .expect("remove temporary outbox failure constraint");
+    let committed_after_repair = repository
+        .complete(
+            &rollback_task_run,
+            &rollback_worker,
+            rollback_claim.task_run().version(),
+            rollback_claim.fencing_token(),
+            TaskOutput::new(b"committed-after-outbox-repair".to_vec()).expect("valid output"),
+        )
+        .await
+        .expect("complete task after restoring outbox insert");
+    assert_eq!(committed_after_repair.status(), TaskStatus::Succeeded);
+    assert_eq!(
+        repository
+            .aggregate_workflow_run(&rollback_workflow_run)
+            .await
+            .expect("aggregate workflow after repaired outbox"),
+        WorkflowStatus::Succeeded
+    );
+
     // Persist one more running attempt, expire its lease, then discard every
     // pool/repository handle before starting a separate test process. The child
     // receives only identifiers and the database URL; all state is reloaded
