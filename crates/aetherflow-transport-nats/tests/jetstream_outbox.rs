@@ -418,7 +418,9 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
         )
         .await
         .expect("publish retry test event");
-    retry_ack.await.expect("JetStream should store retry test event");
+    retry_ack
+        .await
+        .expect("JetStream should store retry test event");
 
     let retry_calls = Arc::new(AtomicUsize::new(0));
     let retry_handler = Arc::new(FailOnceHandler {
