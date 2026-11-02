@@ -139,7 +139,12 @@ impl PgInboxRepository {
         let row = client
             .query_opt(
                 CLAIM_INBOX_SQL,
-                &[&consumer_name, &event_id, &worker_id.as_str(), &lease_millis],
+                &[
+                    &consumer_name,
+                    &event_id,
+                    &worker_id.as_str(),
+                    &lease_millis,
+                ],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
@@ -327,9 +332,9 @@ fn validate_event_id(event_id: &str) -> Result<(), StorageError> {
 fn is_ascii_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 fn inbox_claim_lost(claim: &InboxClaim) -> StorageError {

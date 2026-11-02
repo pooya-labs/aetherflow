@@ -159,12 +159,10 @@ impl fmt::Display for StorageError {
             Self::TaskRunNotFound(id) => write!(formatter, "task run not found: {id}"),
             Self::WorkflowRunNotFound(id) => write!(formatter, "workflow run not found: {id}"),
             Self::ClaimLost(id) => write!(formatter, "task claim is no longer owned: {id}"),
-            Self::InvalidInboxConsumerName => formatter.write_str(
-                "consumer inbox name must be a 1-128 character ASCII identifier",
-            ),
-            Self::InvalidInboxEventId => formatter.write_str(
-                "consumer inbox event ID must be 1-255 visible ASCII characters",
-            ),
+            Self::InvalidInboxConsumerName => formatter
+                .write_str("consumer inbox name must be a 1-128 character ASCII identifier"),
+            Self::InvalidInboxEventId => formatter
+                .write_str("consumer inbox event ID must be 1-255 visible ASCII characters"),
             Self::InvalidInboxError => {
                 formatter.write_str("consumer inbox error exceeds 4096 bytes")
             }
@@ -286,9 +284,7 @@ impl PgStore {
                 });
             }
 
-            let expected = MIGRATIONS
-                .get(index)
-                .ok_or(StorageError::UntrackedSchema)?;
+            let expected = MIGRATIONS.get(index).ok_or(StorageError::UntrackedSchema)?;
             if version != expected.version {
                 return Err(StorageError::UntrackedSchema);
             }
