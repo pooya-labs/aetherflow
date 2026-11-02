@@ -1509,7 +1509,7 @@ impl PgTaskRepository {
         // being reconciled here.
         let rows = transaction
             .query(
-                "SELECT task_run_id, status, version, attempts_started, claimed_by, fencing_token, updated_at \\
+                "SELECT task_run_id, status, version, attempts_started, claimed_by, fencing_token, updated_at \
                  FROM task_runs WHERE workflow_run_id = $1 ORDER BY task_run_id FOR UPDATE",
                 &[&workflow_run_id.as_str()],
             )
@@ -1563,8 +1563,10 @@ impl PgTaskRepository {
             .filter(|(_, status, ..)| {
                 matches!(status.as_str(), "failed" | "cancelled" | "timed_out")
             })
-            .min_by_key(|(task_run_id, _, _, _, _, _, updated_at)| {
-                (*updated_at, task_run_id.as_str())
+            .min_by(|left, right| {
+                left.6
+                    .cmp(&right.6)
+                    .then_with(|| left.0.cmp(&right.0))
             });
 
         let next_status = if let Some((_, status, ..)) = first_terminal_failure {
@@ -1618,10 +1620,10 @@ impl PgTaskRepository {
                     })?;
                     let updated_attempts = transaction
                         .execute(
-                            "UPDATE task_attempts \\
-                             SET outcome = 'cancelled', finished_at = clock_timestamp(), \\
-                                 error_kind = 'workflow_terminal', error_message = $5 \\
-                             WHERE task_run_id = $1 AND attempt_number = $2 \\
+                            "UPDATE task_attempts \
+                             SET outcome = 'cancelled', finished_at = clock_timestamp(), \
+                                 error_kind = 'workflow_terminal', error_message = $5 \
+                             WHERE task_run_id = $1 AND attempt_number = $2 \
                                AND worker_id = $3 AND fencing_token = $4 AND outcome = 'running'",
                             &[
                                 task_run_id,
@@ -1642,11 +1644,11 @@ impl PgTaskRepository {
 
                 let updated = transaction
                     .query_opt(
-                        "UPDATE task_runs \\
-                         SET status = 'cancelled', claimed_by = NULL, lease_expires_at = NULL, \\
-                             version = version + 1, updated_at = clock_timestamp(), \\
-                             finished_at = clock_timestamp() \\
-                         WHERE task_run_id = $1 AND version = $2 AND status = $3 \\
+                        "UPDATE task_runs \
+                         SET status = 'cancelled', claimed_by = NULL, lease_expires_at = NULL, \
+                             version = version + 1, updated_at = clock_timestamp(), \
+                             finished_at = clock_timestamp() \
+                         WHERE task_run_id = $1 AND version = $2 AND status = $3 \
                          RETURNING version",
                         &[task_run_id, version, status],
                     )
@@ -1678,10 +1680,10 @@ impl PgTaskRepository {
 
         let updated_workflow = transaction
             .query_opt(
-                "UPDATE workflow_runs \\
-                 SET status = $2, version = version + 1, updated_at = clock_timestamp(), \\
-                     finished_at = clock_timestamp() \\
-                 WHERE workflow_run_id = $1 AND status = $3 \\
+                "UPDATE workflow_runs \
+                 SET status = $2, version = version + 1, updated_at = clock_timestamp(), \
+                     finished_at = clock_timestamp() \
+                 WHERE workflow_run_id = $1 AND status = $3 \
                  RETURNING version",
                 &[
                     &workflow_run_id.as_str(),
