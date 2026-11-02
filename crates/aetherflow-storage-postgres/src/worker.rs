@@ -323,10 +323,7 @@ impl PostgresTaskWorker {
             if !stop_claiming {
                 self.recover_expired_work(&registration).await?;
                 self.repository
-                    .promote_due_tasks_registered(
-                        &registration,
-                        self.config.promotion_batch_size,
-                    )
+                    .promote_due_tasks_registered(&registration, self.config.promotion_batch_size)
                     .await?;
 
                 while active_tasks.len() < self.config.max_concurrency.get() {
@@ -491,10 +488,7 @@ impl PostgresTaskWorker {
     ) -> Result<(), PostgresWorkerError> {
         let recovered = self
             .repository
-            .recover_expired_leases_registered(
-                registration,
-                self.config.recovery_batch_size,
-            )
+            .recover_expired_leases_registered(registration, self.config.recovery_batch_size)
             .await?;
         let mut workflow_ids = recovered
             .iter()
@@ -689,9 +683,11 @@ async fn execute_pg_claim(
         .await
     {
         Ok(_) => {}
-        Err(StorageError::ClaimLost(_)
+        Err(
+            StorageError::ClaimLost(_)
             | StorageError::NodeMembershipLost(_)
-            | StorageError::WorkerRegistrationLost(_)) => {
+            | StorageError::WorkerRegistrationLost(_),
+        ) => {
             cancellation_trigger.cancel();
             return Ok(());
         }
@@ -783,9 +779,11 @@ async fn execute_pg_claim(
                     .await?;
                 Ok(())
             }
-            Err(StorageError::ClaimLost(_)
+            Err(
+                StorageError::ClaimLost(_)
                 | StorageError::NodeMembershipLost(_)
-                | StorageError::WorkerRegistrationLost(_)) => Ok(()),
+                | StorageError::WorkerRegistrationLost(_),
+            ) => Ok(()),
             Err(error) => Err(error.into()),
         },
         Some(Err(error)) => {
@@ -813,9 +811,11 @@ async fn execute_pg_claim(
                         .await?;
                     Ok(())
                 }
-                Err(StorageError::ClaimLost(_)
+                Err(
+                    StorageError::ClaimLost(_)
                     | StorageError::NodeMembershipLost(_)
-                    | StorageError::WorkerRegistrationLost(_)) => Ok(()),
+                    | StorageError::WorkerRegistrationLost(_),
+                ) => Ok(()),
                 Err(error) => Err(error.into()),
             }
         }
