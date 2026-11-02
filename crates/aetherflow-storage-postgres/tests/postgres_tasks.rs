@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use aetherflow_core::domain::{
@@ -59,10 +59,7 @@ impl OutboxPublisher for RecordingPublisher {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(event_id);
-        let should_fail = self
-            .failures_remaining
-            .swap(0, Ordering::SeqCst)
-            > 0;
+        let should_fail = self.failures_remaining.swap(0, Ordering::SeqCst) > 0;
         Box::pin(async move {
             if should_fail {
                 Err(OutboxPublishError::new("simulated broker unavailable"))
@@ -951,8 +948,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
         WorkflowId::parse("durable-outbox-dispatch-workflow").expect("valid workflow ID");
     let dispatch_task_run =
         TaskRunId::parse("durable-outbox-dispatch-task-run").expect("valid task-run ID");
-    let dispatch_task_id =
-        TaskId::parse("durable-outbox-dispatch-task").expect("valid task ID");
+    let dispatch_task_id = TaskId::parse("durable-outbox-dispatch-task").expect("valid task ID");
     repository
         .create_workflow(
             &dispatch_workflow_run,
