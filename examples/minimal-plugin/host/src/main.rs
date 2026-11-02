@@ -71,8 +71,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         "guest output changed when log.write was granted",
     )?;
     ensure(
-        granted.logs.len() == 1
-            && granted.logs[0].message.contains("attempt 1 echoed"),
+        granted.logs.len() == 1 && granted.logs[0].message.contains("attempt 1 echoed"),
         "explicit log.write grant did not produce the expected bounded guest log",
     )?;
 
