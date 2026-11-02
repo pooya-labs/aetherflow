@@ -1626,7 +1626,9 @@ impl CombinedChaosChild {
     fn kill_and_wait(&mut self) -> ExitStatus {
         let mut child = self.0.take().expect("combined-chaos child exists");
         Self::kill_process_group(&mut child);
-        child.wait().expect("wait for killed combined-chaos process group")
+        child
+            .wait()
+            .expect("wait for killed combined-chaos process group")
     }
 }
 
