@@ -192,7 +192,7 @@ impl HostState {
         let resource_limits = StoreLimitsBuilder::new()
             .memory_size(limits.max_memory_bytes)
             .table_elements(limits.max_table_elements)
-            .instances(1)
+            .instances(limits.max_core_instances)
             .memories(1)
             .tables(1)
             .build();

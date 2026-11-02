@@ -49,6 +49,7 @@ The workspace currently pins Rust 1.99.1 but declares Rust 1.85 as its package M
 | Input payload | 1 MiB | 1 MiB |
 | Output payload | 1 MiB | 1 MiB |
 | Linear memory | 16 MiB | 64 MiB |
+| Core WebAssembly instances per Store | 4 | 16 |
 | Table elements | 1,024 | 10,000 |
 | Wasmtime instruction fuel | 10,000,000 | 100,000,000 |
 | Guest-to-host host-call fuel (per call) | 4 KiB | 16 KiB |
@@ -57,7 +58,7 @@ The workspace currently pins Rust 1.99.1 but declares Rust 1.85 as its package M
 | One log message | 4 KiB | 4 KiB |
 | Log calls per invocation | 64 | 256 |
 
-These are host policy limits, not guarantees about total process RSS. Wasmtime's Store resource limiter controls guest-created memories/tables/instances; the embedder must also bound host allocations and concurrency.
+These are host policy limits, not guarantees about total process RSS. Wasmtime's Store resource limiter controls guest-created memories, tables, and core module instances; the embedder must also bound host allocations and concurrency.
 
 ## Consequences
 

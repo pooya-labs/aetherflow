@@ -28,6 +28,9 @@ pub const MAX_PLUGIN_LOG_MESSAGES: u32 = 256;
 /// Maximum linear memory permitted for one plugin invocation (64 MiB).
 pub const MAX_PLUGIN_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 
+/// Maximum core WebAssembly instances permitted in one plugin Store.
+pub const MAX_PLUGIN_CORE_INSTANCES: usize = 16;
+
 /// Maximum fuel budget permitted for one plugin invocation.
 pub const MAX_PLUGIN_FUEL: u64 = 100_000_000;
 
@@ -202,6 +205,8 @@ pub struct ExecutionLimits {
     pub max_output_bytes: usize,
     /// Maximum linear memory size.
     pub max_memory_bytes: usize,
+    /// Maximum number of core WebAssembly instances in one Store.
+    pub max_core_instances: usize,
     /// Maximum number of table elements per table.
     pub max_table_elements: usize,
     /// Wasmtime instruction fuel budget.
@@ -224,6 +229,7 @@ impl Default for ExecutionLimits {
             max_input_bytes: MAX_PLUGIN_PAYLOAD_BYTES,
             max_output_bytes: MAX_PLUGIN_PAYLOAD_BYTES,
             max_memory_bytes: 16 * 1024 * 1024,
+            max_core_instances: 4,
             max_table_elements: 1_024,
             fuel: 10_000_000,
             hostcall_fuel: 4 * 1024,
@@ -246,6 +252,11 @@ impl ExecutionLimits {
         }
         if self.max_memory_bytes == 0 || self.max_memory_bytes > MAX_PLUGIN_MEMORY_BYTES {
             return Err(LimitConfigurationError::MemoryLimitOutOfRange);
+        }
+        if self.max_core_instances == 0
+            || self.max_core_instances > MAX_PLUGIN_CORE_INSTANCES
+        {
+            return Err(LimitConfigurationError::CoreInstancesOutOfRange);
         }
         if self.max_table_elements == 0 || self.max_table_elements > 10_000 {
             return Err(LimitConfigurationError::TableLimitOutOfRange);
@@ -344,6 +355,8 @@ pub enum LimitConfigurationError {
     OutputLimitOutOfRange,
     /// Memory limit must be between 1 byte and 64 MiB.
     MemoryLimitOutOfRange,
+    /// Core instance count must be between 1 and 16.
+    CoreInstancesOutOfRange,
     /// Table limit must be between 1 and 10,000 elements.
     TableLimitOutOfRange,
     /// Fuel must be between 1 and 100,000,000 units.
@@ -366,6 +379,7 @@ impl fmt::Display for LimitConfigurationError {
             Self::InputLimitOutOfRange => "plugin input limit is outside v1 bounds",
             Self::OutputLimitOutOfRange => "plugin output limit is outside v1 bounds",
             Self::MemoryLimitOutOfRange => "plugin memory limit is outside v1 bounds",
+            Self::CoreInstancesOutOfRange => "plugin core instance limit is outside v1 bounds",
             Self::TableLimitOutOfRange => "plugin table limit is outside v1 bounds",
             Self::FuelOutOfRange => "plugin fuel budget is outside v1 bounds",
             Self::HostcallFuelOutOfRange => "plugin host-call fuel is outside v1 bounds",
@@ -446,6 +460,7 @@ mod tests {
         let limits = ExecutionLimits::default();
         assert_eq!(limits.max_input_bytes, MAX_PLUGIN_PAYLOAD_BYTES);
         assert_eq!(limits.max_output_bytes, MAX_PLUGIN_PAYLOAD_BYTES);
+        assert_eq!(limits.max_core_instances, 4);
         assert!(limits.validate().is_ok());
     }
 
@@ -466,6 +481,15 @@ mod tests {
         assert_eq!(
             limits.validate(),
             Err(LimitConfigurationError::MemoryLimitOutOfRange)
+        );
+
+        let limits = ExecutionLimits {
+            max_core_instances: super::MAX_PLUGIN_CORE_INSTANCES + 1,
+            ..ExecutionLimits::default()
+        };
+        assert_eq!(
+            limits.validate(),
+            Err(LimitConfigurationError::CoreInstancesOutOfRange)
         );
 
         let limits = ExecutionLimits {
