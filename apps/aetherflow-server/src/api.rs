@@ -762,6 +762,23 @@ mod tests {
             Some(1)
         );
 
+        let missing_workflow = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/workflow-runs/{workflow_run_id}-missing"))
+                    .body(Body::empty())
+                    .expect("valid missing workflow inspection request"),
+            )
+            .await
+            .expect("missing workflow response");
+        assert_eq!(missing_workflow.status(), StatusCode::NOT_FOUND);
+        let missing_workflow_body = to_bytes(missing_workflow.into_body(), 1024)
+            .await
+            .expect("read missing workflow response");
+        let missing_workflow_error: serde_json::Value =
+            serde_json::from_slice(&missing_workflow_body).expect("valid error JSON");
+        assert_eq!(missing_workflow_error["error"]["code"], "not_found");
+
         let task = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -772,6 +789,24 @@ mod tests {
             .await
             .expect("task inspection response");
         assert_eq!(task.status(), StatusCode::OK);
+
+        let missing_task = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/task-runs/{task_run_id}-missing"))
+                    .body(Body::empty())
+                    .expect("valid missing task inspection request"),
+            )
+            .await
+            .expect("missing task response");
+        assert_eq!(missing_task.status(), StatusCode::NOT_FOUND);
+        let missing_task_body = to_bytes(missing_task.into_body(), 1024)
+            .await
+            .expect("read missing task response");
+        let missing_task_error: serde_json::Value =
+            serde_json::from_slice(&missing_task_body).expect("valid error JSON");
+        assert_eq!(missing_task_error["error"]["code"], "not_found");
+
         let task_body = to_bytes(task.into_body(), 16 * 1024)
             .await
             .expect("read task snapshot");
