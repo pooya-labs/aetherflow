@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use aetherflow_core::EntityId;
 use aetherflow_wasm::{
-    CapabilitySet, CompiledPlugin, ExecutionLimits, LimitConfigurationError, PluginExecutionContext,
-    PluginLog, PluginRuntimeError, WasmPluginRuntime,
+    CapabilitySet, CompiledPlugin, ExecutionLimits, LimitConfigurationError,
+    PluginExecutionContext, PluginLog, PluginRuntimeError, WasmPluginRuntime,
 };
 
 use crate::repository::TaskOutput;
@@ -53,10 +53,7 @@ impl WasmTaskHandler {
     /// Installs a host callback for logs emitted through the granted
     /// `log.write` capability. Without a sink, accepted guest logs are ignored.
     #[must_use]
-    pub fn with_log_sink(
-        mut self,
-        sink: impl Fn(PluginLog) + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_log_sink(mut self, sink: impl Fn(PluginLog) + Send + Sync + 'static) -> Self {
         self.log_sink = Some(Arc::new(sink));
         self
     }
