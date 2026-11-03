@@ -278,7 +278,7 @@ async fn submit_workflow(
     State(state): State<AppState>,
     payload: Result<Json<SubmitWorkflowRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
-    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.status()))?;
+    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
 
     let workflow_id =
         WorkflowId::parse(request.workflow_id).map_err(|_| ApiError::invalid_identifier())?;
@@ -486,7 +486,7 @@ async fn cancel_task_run(
     Path(raw_task_run_id): Path<String>,
     payload: Result<Json<CancelTaskRunRequest>, JsonRejection>,
 ) -> Result<Json<CancelTaskRunResponse>, ApiError> {
-    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.status()))?;
+    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
     let task_run_id =
         aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
             .map_err(|_| ApiError::invalid_identifier())?;
