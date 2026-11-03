@@ -287,6 +287,16 @@ mod tests {
         verify_runtime_database_role(&restricted_pool)
             .await
             .expect("the non-owner, non-BYPASSRLS runtime login is accepted");
+
+        let Ok(member_url) = std::env::var("AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL") else {
+            eprintln!("AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL is not set; skipping role-membership negative case");
+            return;
+        };
+        let member_pool = pool_from_test_url(&member_url).await;
+        assert!(
+            verify_runtime_database_role(&member_pool).await.is_err(),
+            "a runtime login that can SET ROLE to another role must be rejected"
+        );
     }
 
     #[test]
