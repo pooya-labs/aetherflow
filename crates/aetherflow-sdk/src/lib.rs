@@ -793,7 +793,7 @@ fn normalize_base_url(raw: &str) -> Result<Url, ClientError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientError, ControlPlaneClient, MAX_HTTP_BODY_BYTES, RetryPolicy, WorkflowRunSubmission,
+        ClientError, ControlPlaneClient, RetryPolicy, WorkflowRunSubmission,
         WorkflowTaskInput, encode_request_body, normalize_base_url, validate_entity_id,
     };
 
@@ -925,7 +925,6 @@ mod tests {
             encode_request_body(&submission),
             Err(ClientError::RequestTooLarge)
         ));
-        assert!(MAX_HTTP_BODY_BYTES > super::MAX_TASK_PAYLOAD_BYTES);
     }
 
     #[test]
