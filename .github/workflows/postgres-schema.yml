@@ -50,6 +50,7 @@ jobs:
       PGPASSWORD: aetherflow-ci-password
       PGDATABASE: aetherflow_test
       AETHERFLOW_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_test
+      AETHERFLOW_RUNTIME_ROLE_TEST_DATABASE_URL: postgres://aetherflow_runtime_test:aetherflow-runtime-ci-password@127.0.0.1:5432/aetherflow_test
       AETHERFLOW_MIGRATION_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_migration_test
       AETHERFLOW_MIGRATION_BACKFILL_TEST_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_migration_backfill_test
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
@@ -94,6 +95,20 @@ jobs:
 
       - name: Run PostgreSQL storage integration tests
         run: cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
+
+      - name: Provision least-privilege runtime login for startup verification
+        run: |
+          psql --set ON_ERROR_STOP=1 --dbname aetherflow_test <<'SQL'
+          CREATE ROLE aetherflow_runtime_test
+            LOGIN PASSWORD 'aetherflow-runtime-ci-password'
+            NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          GRANT CONNECT ON DATABASE aetherflow_test TO aetherflow_runtime_test;
+          GRANT USAGE ON SCHEMA public TO aetherflow_runtime_test;
+          GRANT SELECT, INSERT, UPDATE, DELETE
+            ON ALL TABLES IN SCHEMA public TO aetherflow_runtime_test;
+          GRANT USAGE, SELECT
+            ON ALL SEQUENCES IN SCHEMA public TO aetherflow_runtime_test;
+          SQL
 
       - name: Run PostgreSQL-backed HTTP API integration tests
         run: cargo +1.99.1 test -p aetherflow-server --locked -- --test-threads=1
