@@ -27,7 +27,9 @@ name = "aetherflow-plugin-host"
 version = "0.1.0"
 dependencies = [
  "aetherflow-core",
+ "aetherflow-runtime",
  "aetherflow-wasm",
+ "tokio",
  "wit-component",
 ]
 
