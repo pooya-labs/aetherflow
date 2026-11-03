@@ -22,6 +22,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 struct OutboxEnvelope<'a> {
     schema_version: u16,
+    tenant_id: &'a str,
     event_id: String,
     aggregate_type: &'a str,
     aggregate_id: &'a str,
@@ -64,6 +65,7 @@ impl OutboxPublisher for NatsJetStreamPublisher {
         Box::pin(async move {
             let envelope = OutboxEnvelope {
                 schema_version: 1,
+                tenant_id: event.tenant_id(),
                 event_id: event.event_id().to_string(),
                 aggregate_type: event.aggregate_type(),
                 aggregate_id: event.aggregate_id(),
@@ -77,6 +79,7 @@ impl OutboxPublisher for NatsJetStreamPublisher {
 
             let mut headers = async_nats::HeaderMap::new();
             headers.append("Nats-Msg-Id", event.event_id().to_string());
+            headers.append("Aetherflow-Tenant-Id", event.tenant_id());
             headers.append("Aetherflow-Event-Type", event.event_type());
 
             // JetStream has a two-stage API: the first await sends the request;
@@ -106,6 +109,7 @@ mod tests {
         let payload = json!({"task_id": "task-1"});
         let envelope = OutboxEnvelope {
             schema_version: 1,
+            tenant_id: "legacy-default",
             event_id: "42".to_owned(),
             aggregate_type: "workflow_run",
             aggregate_id: "workflow-1",
@@ -116,6 +120,7 @@ mod tests {
 
         let encoded = serde_json::to_value(envelope).expect("serialize envelope");
         assert_eq!(encoded["schema_version"], 1);
+        assert_eq!(encoded["tenant_id"], "legacy-default");
         assert_eq!(encoded["event_id"], "42");
         assert_eq!(encoded["aggregate_version"], 3);
         assert_eq!(encoded["payload"]["task_id"], "task-1");
