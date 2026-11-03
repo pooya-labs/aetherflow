@@ -1172,7 +1172,6 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
-        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
         let version: i64 = row.get(0);
         let attempt_number: i32 = row.get(1);
         let attempt_updated = transaction
