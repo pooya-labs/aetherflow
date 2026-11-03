@@ -189,7 +189,9 @@ pub fn router(state: AppState) -> Router {
 fn valid_cors_origin(value: &str) -> bool {
     if value.is_empty()
         || value == "*"
-        || value.chars().any(|character| matches!(character, '?' | '#' | ','))
+        || value
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | ','))
     {
         return false;
     }
