@@ -48,7 +48,9 @@ const TENANT_SCOPED_INBOX_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0005_tenant_scoped_inbox_identity.sql");
 const FORCE_TENANT_RLS_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0006_force_tenant_row_level_security.sql");
-const MIGRATION_VERSION: i64 = 6;
+const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0007_worker_tenant_grant_lock_rls.sql");
+const MIGRATION_VERSION: i64 = 7;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -58,7 +60,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 5] = [
+const MIGRATIONS: [Migration; 7] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -88,6 +90,11 @@ const MIGRATIONS: [Migration; 5] = [
         version: 6,
         name: "0006_force_tenant_row_level_security.sql",
         sql: FORCE_TENANT_RLS_MIGRATION_SQL,
+    },
+    Migration {
+        version: 7,
+        name: "0007_worker_tenant_grant_lock_rls.sql",
+        sql: WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL,
     },
 ];
 
@@ -435,7 +442,7 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 6);
+        assert_eq!(MIGRATION_VERSION, 7);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
@@ -454,18 +461,27 @@ mod tests {
             MIGRATIONS[5].name,
             "0006_force_tenant_row_level_security.sql"
         );
+        assert_eq!(MIGRATIONS[6].version, 7);
+        assert_eq!(
+            MIGRATIONS[6].name,
+            "0007_worker_tenant_grant_lock_rls.sql"
+        );
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
         let membership = migration_checksum(&MIGRATIONS[2]);
         let tenant_ownership = migration_checksum(&MIGRATIONS[3]);
         let tenant_inbox_identity = migration_checksum(&MIGRATIONS[4]);
+        let forced_tenant_rls = migration_checksum(&MIGRATIONS[5]);
+        let worker_grant_lock_rls = migration_checksum(&MIGRATIONS[6]);
         for checksum in [
             initial,
             inbox,
             membership,
             tenant_ownership,
             tenant_inbox_identity,
+            forced_tenant_rls,
+            worker_grant_lock_rls,
         ] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
