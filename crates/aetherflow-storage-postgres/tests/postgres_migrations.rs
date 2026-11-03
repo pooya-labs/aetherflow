@@ -2,6 +2,7 @@ use aetherflow_storage_postgres::{
     MigrationOutcome, PgStore, StorageError, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use sha2::Digest;
 use tokio_postgres::{Config, NoTls};
 
 #[tokio::test]
@@ -398,7 +399,7 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
         .max_size(2)
         .build()
         .expect("build PostgreSQL backfill pool");
-    let mut client = pool.get().await.expect("get pre-v4 schema connection");
+    let client = pool.get().await.expect("get pre-v4 schema connection");
 
     // Build a genuine v3 database and record the immutable v1-v3 checksums.
     let migrations = [
