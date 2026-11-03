@@ -6,17 +6,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aetherflow_core::domain::{
-    RetryPolicy, TaskId, WorkflowId, WorkflowRunId, WorkflowStatus, WorkerId,
-};
 use aetherflow_core::EntityId;
+use aetherflow_core::domain::{
+    RetryPolicy, TaskId, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
+};
+use aetherflow_runtime::WasmTaskHandler;
 use aetherflow_runtime::clock::MonotonicClock;
 use aetherflow_runtime::repository::{InMemoryRepository, TaskInput};
 use aetherflow_runtime::scheduler::{SchedulerConfig, TaskRegistry, TaskScheduler};
-use aetherflow_runtime::workflow::{
-    SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask,
-};
-use aetherflow_runtime::WasmTaskHandler;
+use aetherflow_runtime::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
 use aetherflow_wasm::{CapabilitySet, ExecutionLimits, PluginExecutionContext, WasmPluginRuntime};
 use wit_component::ComponentEncoder;
 
@@ -114,10 +112,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     );
     let workflow = WorkflowDefinition::new(
         WorkflowId::parse("plugin-example-workflow").expect("valid workflow identifier"),
-        vec![
-            WorkflowTask::new(task_id, Vec::new())
-                .with_input(TaskInput::new(input.to_vec())?),
-        ],
+        vec![WorkflowTask::new(task_id, Vec::new()).with_input(TaskInput::new(input.to_vec())?)],
     )?;
     let id_generator = SequenceTaskRunIdGenerator::new();
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
