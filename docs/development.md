@@ -227,3 +227,14 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 ## Project state
 
 M00–M07 are complete. M08's observability, loopback-only Docker Compose PostgreSQL 18/three-node NATS development stack, and PostgreSQL/JetStream backup-restore plus schema-upgrade runbooks are implemented. Rust CI [41655919443](https://github.com/pooya-labs/aetherflow/actions/runs/41655919443) and Pages [41655917408](https://github.com/pooya-labs/aetherflow/actions/runs/41655917408) passed on exact source `947a75f2847c9fbd41f5b158c30149be8d63090b`. The runbooks distinguish logical Compose recovery from production PITR and require coordinated recovery of PostgreSQL outbox/inbox state with JetStream streams. A follow-up check has corrected the RLS table identifier and pins NATS CLI v0.4.0 for the repository's NATS Server 2.12 snapshot commands; CI consistency verification is being added. The next M08 task is reproducible load and benchmark suites. The control plane is still experimental and not production-ready. See [backup and restore](operations/backup-restore.md), [schema upgrades](operations/schema-upgrades.md), and the master [roadmap](../ROADMAP.md).
+
+## Reproducible performance benchmarks
+
+Run the in-memory scheduler benchmark suite with:
+
+~~~bash
+cargo bench -p aetherflow-runtime --bench scheduler
+~~~
+
+Workload parameters, interpretation limits, and a larger comparison profile are documented in the [benchmark guide](performance/benchmarks.md). The benchmark does not include PostgreSQL or NATS.
+

@@ -109,6 +109,10 @@ A typed asynchronous Rust client lives in `crates/aetherflow-sdk`. It models the
 
 See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
+## Reproducible scheduler benchmarks
+
+The repository includes a repeatable benchmark runner for DAG validation and local scheduler execution across fan-out and dependency-chain workloads. It reports median/p95 latency and throughput, with a small CI smoke run. These measurements use the in-memory runtime and are not distributed-system capacity claims. See the [benchmark guide](docs/performance/benchmarks.md).
+
 ## Repository map
 
 The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, [docs/architecture/overview.md](docs/architecture/overview.md) for system boundaries, [docs/decisions/](docs/decisions/) for architecture decisions, and [docs/development.md](docs/development.md) for local commands.

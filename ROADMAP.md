@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-03  
 Current branch: `main`  
 Current milestone: **M08 — Production engineering**  
-Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation, forced RLS, API/CLI/SDK, OpenAPI, paginated workflow/event history, exact-origin CORS, and the read-only Pages dashboard are complete. M08's observability baseline, Docker Compose development environment, and PostgreSQL/JetStream backup-restore and schema-upgrade runbooks are implemented. Rust CI [41655919443](https://github.com/pooya-labs/aetherflow/actions/runs/41655919443) and Pages [41655917408](https://github.com/pooya-labs/aetherflow/actions/runs/41655917408) passed on exact source `947a75f2847c9fbd41f5b158c30149be8d63090b`. A follow-up consistency gate is being added for migration/RLS/runbook drift. Reproducible benchmarks, failure injection, supply-chain checks, and operational documentation remain open. Owner license selection and deferred property-based transition tests remain open.
+Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation, forced RLS, API/CLI/SDK, OpenAPI, paginated workflow/event history, exact-origin CORS, and the read-only Pages dashboard are complete. M08 observability, the PostgreSQL/NATS Compose environment, and recovery runbooks are implemented. The runbook consistency gate passed Rust CI [41661645837](https://github.com/pooya-labs/aetherflow/actions/runs/41661645837) and Pages [41661644971](https://github.com/pooya-labs/aetherflow/actions/runs/41661644971) on exact source `dab9a4e2c4714d0bff1e6696c879456da5be69af`; an isolated live restore rehearsal remains open. A reproducible in-memory benchmark suite and CI smoke artifact are being added; PostgreSQL/NATS end-to-end load profiles, operational failure injection, supply-chain checks, and operational documentation remain open. Owner license selection and deferred property-based transition tests remain open.
 
 ## Current checkpoint
 - exact `main` HEAD SHA and the last fully verified source SHA (these can differ);
@@ -205,10 +205,15 @@ For every material regression, record: detection time; affected commit and Actio
   - [x] Add a three-member NATS 2.12 JetStream cluster with persistent volumes, health checks, loopback-only client/monitoring ports, and stable container names for transport tests.
   - [x] Add `.env.example`, keep `.env` ignored, document local server/test commands, disposable database setup, JetStream testing, and destructive volume cleanup.
   - [x] Add a hosted Compose smoke job that validates interpolation, starts all four services, checks runtime-role restrictions and two routes per NATS member, and always removes its temporary volumes. Verified in Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) on exact source `97aa0de79b86aed7435db755d75f65ea95f062b7`.
-- [ ] Verify backup/restore and schema-upgrade runbooks against the live schema and NATS 2.12 CLI compatibility; add CI drift checks.
+- [ ] Verify backup/restore and schema-upgrade runbooks against the live schema and NATS 2.12 CLI compatibility.
+  - [x] Add a CI drift gate for migration count/version, contiguous migration names, latest migration reference, all ten forced-RLS table names, and the NATS CLI v0.4.0 backup/restore command pin. Rust CI [41661645837](https://github.com/pooya-labs/aetherflow/actions/runs/41661645837) passed on exact source `dab9a4e2c4714d0bff1e6696c879456da5be69af`.
+  - [ ] Run an isolated PostgreSQL 18 + NATS 2.12 backup/restore rehearsal using the pinned NATS CLI v0.4.0; validate restored schema, RLS, stream configuration, and retained messages.
 - [ ] Add reproducible load and benchmark suites.
-- [ ] Add chaos/failure-injection scenarios.
-- [ ] Add dependency, license, secret, and supply-chain checks.
+  - [ ] Add fan-out/chain DAG-validation and in-memory scheduler benchmarks; smoke-run in CI and retain machine-readable output.
+  - [ ] Add PostgreSQL/NATS end-to-end load profiles with controlled producer rates, payload sizes, worker counts, and latency/error reporting.
+  - [ ] Establish a stable reference baseline on a documented environment before adding regression thresholds.
+- [ ] Add chaos/failure-injection scenarios. Reuse existing M05 worker/process/JetStream failure coverage; add operational recovery scenarios rather than duplicating those tests.
+- [ ] Add dependency, license, secret, and supply-chain checks. License selection remains an owner decision; do not add a license file without approval.
 - [ ] Publish threat model, SLO proposal, and operational guide.
 
 ### M09 — Release candidate
@@ -221,19 +226,21 @@ For every material regression, record: detection time; affected commit and Actio
 
 ## Current checkpoint
 
-**Latest application/runbook implementation SHA:** `947a75f2847c9fbd41f5b158c30149be8d63090b`. Rust CI [41655919443](https://github.com/pooya-labs/aetherflow/actions/runs/41655919443) and Pages [41655917408](https://github.com/pooya-labs/aetherflow/actions/runs/41655917408) passed on that exact source.
+**Last fully verified main SHA:** `dab9a4e2c4714d0bff1e6696c879456da5be69af`. Rust CI [41661645837](https://github.com/pooya-labs/aetherflow/actions/runs/41661645837) and Pages [41661644971](https://github.com/pooya-labs/aetherflow/actions/runs/41661644971) passed on that exact source. The current benchmark change is a new source snapshot; its exact-HEAD verification is pending.
+
+**Last database integration verification:** PostgreSQL/NATS run [41641975958](https://github.com/pooya-labs/aetherflow/actions/runs/41641975958) passed on observability source `2d45677e70c9c1fea21482da75891af65718ea93`. Changes since then have been docs, CI validation, and benchmark-only; storage, migrations, API, and transport code have not changed.
 
 **Verified implementation state:**
 - Observability: JSON structured logs, request spans, authenticated/bounded Prometheus metrics, W3C trace context, opt-in OTLP.
-- Local dependencies: PostgreSQL 18 plus three NATS 2.12 JetStream members; Compose smoke checks both the restricted runtime login and broker routes.
-- Operations docs: coordinated PostgreSQL/JetStream logical backup and restore; controlled schema upgrade with transactional migration-ledger guidance. Manual review identified two documentation hardening needs: exact RLS table name and NATS CLI/server compatibility. Those are corrected in the current follow-up; runbook drift CI is being added before marking M08 complete.
+- Local dependencies: PostgreSQL 18 plus three NATS 2.12 JetStream members; Compose smoke checks the restricted runtime login and broker routes.
+- Operations docs: coordinated PostgreSQL/JetStream logical backup and restore; controlled schema upgrade with transactional migration-ledger guidance. A CI drift gate cross-checks migration count/version, contiguous names, the latest migration reference, all ten forced-RLS table names, and the pinned NATS CLI v0.4.0 backup/restore commands. A real isolated restore rehearsal is still required.
 - The read-only dashboard remains published at https://pooya16pg-spec.github.io/aetherflow/dashboard/.
 
 **M07 status:** complete. Dashboard, paginated lists, redacted timelines, tenant routes, and browser CORS are already implemented; do not repeat them.
 
-**M08 completed slices:** structured JSON logs; request spans; authenticated bounded Prometheus metrics; W3C trace-context extraction/response propagation; opt-in OTLP export; local Compose PostgreSQL/NATS stack; written backup/restore and schema-upgrade runbooks. The runbook verification/drift gate is the immediate open item.
+**M08 completed slices:** structured JSON logs; request spans; authenticated bounded Prometheus metrics; W3C trace-context extraction/response propagation; opt-in OTLP export; local Compose PostgreSQL/NATS stack; recovery runbooks and their CI drift gate. The in-memory scheduler benchmark runner and CI smoke artifact are being introduced; PostgreSQL/NATS end-to-end load profiles remain open.
 
-**First unchecked task:** finish runbook drift validation in CI and close the exact-source verification. Then add reproducible load/benchmark suites, failure injection, dependency/license/secret/supply-chain checks, and the operational guide. Do not claim production readiness.
+**Next actions:** complete exact-HEAD benchmark verification, then run a real isolated backup/restore rehearsal with PostgreSQL 18 and NATS 2.12. Add PostgreSQL/NATS load profiles, operational failure/recovery scenarios, dependency/secret/supply-chain checks, and the operational guide. Do not claim production readiness.
 
 **Known engineering debt and owner decisions:** explicit open-source license remains an owner-only public-release blocker. M02 property-based lifecycle tests remain deferred. WASM `spawn_blocking` cancellation is bounded by fuel and wall-clock deadlines rather than force-abort. The control plane remains experimental.
 

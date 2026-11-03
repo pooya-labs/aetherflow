@@ -138,6 +138,17 @@ jobs:
       - name: Build workspace
         run: cargo +1.99.1 build --workspace --release --locked
 
+      - name: Smoke-test reproducible scheduler benchmarks
+        run: |
+          cargo +1.99.1 bench -p aetherflow-runtime --bench scheduler -- --iterations 2 --warmup 1 --sizes 16,64 --concurrency 1,4 > target/aetherflow-benchmark-smoke.csv
+      - name: Upload benchmark smoke results
+        uses: actions/upload-artifact@v7
+        with:
+          name: aetherflow-benchmark-smoke-${{ github.sha }}
+          path: target/aetherflow-benchmark-smoke.csv
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Install WebAssembly guest target
         run: rustup +1.99.1 target add wasm32-unknown-unknown
 
