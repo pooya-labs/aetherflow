@@ -92,6 +92,8 @@ pub enum StorageError {
     Pool(String),
     /// PostgreSQL rejected a query or transaction.
     Database(String),
+    /// A workflow-run identifier has already been used.
+    WorkflowRunConflict(String),
     /// Migration metadata exists but does not describe the expected schema.
     UntrackedSchema,
     /// The database schema is newer than this binary supports.
@@ -154,6 +156,9 @@ impl fmt::Display for StorageError {
         match self {
             Self::Pool(message) => write!(formatter, "PostgreSQL pool error: {message}"),
             Self::Database(message) => write!(formatter, "PostgreSQL error: {message}"),
+            Self::WorkflowRunConflict(id) => {
+                write!(formatter, "workflow run already exists: {id}")
+            }
             Self::UntrackedSchema => formatter.write_str(
                 "PostgreSQL schema metadata exists without the expected migration history",
             ),

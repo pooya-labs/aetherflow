@@ -502,7 +502,13 @@ impl PgTaskRepository {
                 ],
             )
             .await
-            .map_err(|error| StorageError::Database(format!("insert workflow run: {error:?}")))?;
+            .map_err(|error| {
+                if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                    StorageError::WorkflowRunConflict(workflow_run_id.as_str().to_owned())
+                } else {
+                    StorageError::Database(format!("insert workflow run: {error:?}"))
+                }
+            })?;
 
         for task in tasks {
             let max_attempts = i32::try_from(task.retry_policy.max_attempts().get())
