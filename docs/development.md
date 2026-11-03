@@ -4,7 +4,7 @@
 
 Install Rust with [rustup](https://rustup.rs/). The repository pins Rust 1.99.1 in rust-toolchain.toml; the toolchain includes rustfmt and clippy.
 
-For the HTTP control plane, use a local PostgreSQL instance. The current server and integration fixtures connect with NoTls; this is a local-development configuration, not a production TLS setup. NATS integration tests additionally require a three-node JetStream fixture and Docker. The full chaos test also requires the CI packet-filter prerequisites documented below.
+For the HTTP control plane, use a local PostgreSQL instance. The server uses Rustls and the operating system's native CA trust store; TLS is required by default. Install any private database CA in the operating system trust store before launching the server. NATS integration tests additionally require a three-node JetStream fixture and Docker. The full chaos test also requires the CI packet-filter prerequisites documented below.
 
 ## Standard Rust checks
 
@@ -23,23 +23,27 @@ The default workspace test command does not require PostgreSQL or NATS. Database
 
 ## Run the HTTP control plane
 
-Create a disposable local database and provide its connection URL:
+Create a high-entropy local operator token and use a disposable local database:
 
 ~~~bash
-DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_dev' \
-  cargo run -p aetherflow-server
+export AETHERFLOW_API_TOKEN="$(openssl rand -hex 32)"
+export DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_dev'
+cargo run -p aetherflow-server
 ~~~
 
-The server applies pending PostgreSQL migrations before it starts listening. By default it binds to 127.0.0.1:8080.
+When DATABASE_URL is set, AETHERFLOW_API_TOKEN is mandatory and must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
+
+The server applies pending PostgreSQL migrations before it starts listening. By default it binds to 127.0.0.1:8080 and requires PostgreSQL TLS. Rustls validates the server chain using the platform's native CA store and checks the hostname. Install private database CA certificates in that trust store. For a disposable local PostgreSQL instance without TLS only, explicitly set DATABASE_SSL_MODE=disable; never use that mode over a network. The other accepted values are prefer (may fall back to plaintext) and require (default).
 
 ~~~bash
 curl --fail http://127.0.0.1:8080/health
-curl --fail http://127.0.0.1:8080/api/v1/workers
+curl --fail -H "Authorization: Bearer $AETHERFLOW_API_TOKEN" \
+  http://127.0.0.1:8080/api/v1/workers
 ~~~
 
-GET /health is process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
+GET /health is public process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
 
-Set AETHERFLOW_BIND only to a loopback address, for example 127.0.0.1:8081. The process rejects non-loopback addresses until authentication, authorization, and tenant isolation are implemented. Do not work around this guard or expose the server to an untrusted network. The PostgreSQL connection currently uses NoTls, so keep the server on a trusted local development setup.
+AETHERFLOW_BIND remains loopback-only. The single Bearer token is one operator credential, not a multi-user authorization system and not tenant isolation. Do not work around the non-loopback guard or expose the server to an untrusted network. HTTPS for the HTTP listener, per-principal authorization and tenant-scoped storage remain future work.
 
 ## HTTP v1 resources
 
@@ -118,4 +122,4 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 
 ## Project state
 
-M00–M06 are complete. M07's v1 HTTP routes and PostgreSQL integration path are implemented, but the control plane is not production-ready. Authentication/authorization, tenant isolation, TLS-aware database configuration, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
+M00–M06 are complete. M07's v1 HTTP routes and PostgreSQL integration path are implemented, but the control plane is not production-ready. Per-principal authorization, tenant isolation, HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The current one-operator Bearer gate and Rustls PostgreSQL client are implemented. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.

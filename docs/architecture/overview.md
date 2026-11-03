@@ -61,7 +61,7 @@ ADR-0010 defines the versioned HTTP contract in docs/api/openapi.yaml. Axum impl
 
 Task input is base64 encoded at the HTTP boundary and capped at 1 MiB after decoding; the whole HTTP request body is capped at 2 MiB. Workflow/task inspection responses expose payload sizes and output presence but never payload bytes. Reusing a workflow-run ID returns a conflict; no idempotent replay guarantee is advertised. The process does not start workers; durable workers run separately.
 
-The listener defaults to loopback and rejects non-loopback addresses. When DATABASE_URL is absent, only /health is available and durable routes fail closed. The current PostgreSQL client uses NoTls; the API has no authentication, authorization, or tenant isolation. Keep it on a trusted local development setup and do not expose it to an untrusted network. These security/deployment gaps, plus CLI/SDK/dashboard work, remain on the M07 roadmap.
+The listener defaults to loopback and rejects non-loopback addresses. When DATABASE_URL is absent, only /health is available and durable routes fail closed. When a database is configured, v1 requires one high-entropy operator Bearer token; only its digest is stored and comparison is constant-time. PostgreSQL uses Rustls with native trust roots and TLS-required default mode. This is not per-user authorization and does not isolate tenants: all routes still operate over the same global storage namespace. Keep the service on a trusted local setup. HTTPS for HTTP, scoped principals, tenant-owned durable records, CLI/SDK/dashboard work remain on the M07 roadmap.
 
 ## Initial non-goals
 - Universal exactly-once execution across external systems.

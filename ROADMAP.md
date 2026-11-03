@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-03  
 Current branch: `main`  
 Current milestone: **M07 — Control plane and developer experience**  
-Overall status: **M00–M06 complete; M07 is in progress. The Axum v1 control plane, durable workflow/task routes, versioned cancellation, active-worker discovery, and PostgreSQL-backed HTTP integration path are implemented and hosted-verified. Authentication, authorization, tenant isolation, CLI/SDK, and dashboard remain open. M08–M09 are not started. Owner license selection and deferred property-based transition tests remain open.**
+Overall status: **M00–M06 complete; M07 is in progress. The Axum v1 control plane and PostgreSQL-backed HTTP paths are implemented. A single-operator Bearer gate and Rustls PostgreSQL client are now implemented; per-principal authorization, tenant isolation, HTTPS deployment, CLI/SDK, and dashboard remain open. M08–M09 are not started. Owner license selection and deferred property-based transition tests remain open.**
 
 ## Progress rules
 
@@ -157,7 +157,11 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Wire task cancellation with required expected-version checks and parent workflow aggregation.
 - [x] Add hosted PostgreSQL-backed HTTP integration coverage for submission/read, duplicate IDs, missing workflow/task records, stale cancellation, payload redaction, live active-worker results, and safe storage-error mapping.
 - [x] Enforce the deployment boundary: default loopback bind, reject non-loopback addresses, and retain health-only mode when DATABASE_URL is absent.
-- [ ] Design and implement authentication, authorization, tenant isolation, and TLS-aware database/deployment configuration before allowing non-loopback access.
+- [x] Add a high-entropy single-operator Bearer credential for all durable API routes; keep /health public, store only a SHA-256 digest and compare in constant time (ADR-0011).
+- [x] Replace NoTls in the server pool with Rustls/native CA roots; default to required TLS and validate the PostgreSQL certificate/hostname. Keep an explicit disable mode only for disposable local databases (ADR-0011).
+- [ ] Design per-principal authentication/authorization, tenant identity and database ownership; scope every durable read/write before permitting non-loopback access. The current global operator token is not tenant isolation.
+- [ ] Define and verify the HTTPS boundary for the HTTP listener before permitting non-loopback access.
+- [ ] Verify the Rustls client against a TLS-enabled PostgreSQL instance and prove untrusted certificates/hostname mismatch fail closed.
 - [ ] Add CLI for inspect, submit, cancel, and worker status.
 - [ ] Add Rust SDK; add TypeScript SDK only after the API stabilizes.
 - [ ] Build dashboard for workflows, runs, tasks, and event history.
@@ -194,13 +198,13 @@ For every material regression, record: detection time; affected commit and Actio
 
 The v1 API uses caller-supplied unique workflow-run IDs; duplicates return 409 and are not replayed. Workflow definitions are submitted per run, not stored as reusable versions. Decoded task inputs are limited to 1 MiB and the entire HTTP request body is limited to 2 MiB. The HTTP process does not launch a worker; durable workers run separately.
 
-**Deployment/security boundary:** the server defaults to 127.0.0.1:8080 and rejects non-loopback binds. Without DATABASE_URL, it starts in health-only mode and durable routes return 503 database_unavailable. The current PostgreSQL client uses NoTls. There is no authentication, authorization, or tenant isolation. Keep the service on a trusted local development setup; do not expose it to an untrusted network.
+**Deployment/security boundary:** the server defaults to 127.0.0.1:8080 and rejects non-loopback binds. Without DATABASE_URL, it starts in health-only mode and durable routes return 503 database_unavailable. With DATABASE_URL, AETHERFLOW_API_TOKEN is mandatory; durable API routes require Bearer authentication. The server stores only the token digest and compares it in constant time. PostgreSQL uses Rustls/native CA roots with required TLS by default. This credential is a single global operator, not per-user authorization or tenant isolation. Keep the service local; do not expose it to an untrusted network.
 
 **Verified implementation snapshot:** source commit a2279d3fc6e214e6734f89907183b85ac49bebb1 passed Rust CI [41567991935](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567991935), PostgreSQL/NATS [41567991881](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567991881), and Pages [41567990815](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567990815). Rust CI covered formatting, Clippy, all workspace tests, Release build, WASM guest lint/build/execution, and documentation. The PostgreSQL/NATS workflow covered storage and migration tests, the HTTP/PostgreSQL route lifecycle, three-member JetStream integration, and schema invariants. Follow-up source commits add explicit not-found, live-worker response, and storage-error-redaction assertions; their required checks must be matched to their exact head_sha before treating that additional coverage as verified.
 
-**M07 completion state:** route implementation, durable reads/submission, worker discovery, cancellation, loopback enforcement, and the first PostgreSQL-backed HTTP test suite are implemented. M07 remains open for authentication/tenant/TLS design, CLI, SDK, and dashboard. Do not mark M07 complete.
+**M07 completion state:** routes, durable reads/submission, worker discovery, cancellation, loopback enforcement, single-operator Bearer authentication, and Rustls PostgreSQL client setup are implemented. The PostgreSQL-backed HTTP suite now exercises authenticated and unauthenticated calls. M07 remains open for tenant-owned persistence, per-principal authorization, HTTPS deployment, TLS live-server verification, CLI, SDK, and dashboard. Do not mark M07 complete.
 
-**First unchecked task:** define the authentication/authorization/tenant boundary and TLS-aware database configuration. Keep non-loopback binding rejected until this work is implemented and reviewed. Then continue CLI and Rust SDK work; TypeScript SDK and dashboard depend on the API stabilizing.
+**First unchecked task:** design per-principal authorization and tenant ownership in PostgreSQL, then add tenant predicates to every durable query/mutation. Keep non-loopback binding rejected. Next verify Rustls against a TLS-enabled PostgreSQL server, then define the HTTPS deployment boundary. CLI and Rust SDK follow after the access model is stable.
 
 **Known engineering debt and owner decisions:** M02 property-based lifecycle tests are deferred; an explicit open-source license remains an owner-only decision and a public-release blocker. M06 spawn_blocking WASM cancellation remains bounded by Wasmtime fuel and wall-clock limits rather than force-abort. No production-readiness claim is made.
 
@@ -209,6 +213,8 @@ The v1 API uses caller-supplied unique workflow-run IDs; duplicates return 409 a
 **Owner-only blocker:** choose an explicit open-source license before public release. No legal terms have been assumed.
 
 ## Session log
+
+| 2026-11-03 | M07 security foundation | Added a required single-operator Bearer token for durable routes (32–256 URL-safe characters, digest-only in-memory storage, constant-time comparison, public health endpoint) and replaced the server's NoTls pool with Rustls/native CA roots. PostgreSQL TLS defaults to require; disable is an explicit local-database escape hatch. Accepted ADR-0011. Per-principal authorization, tenant ownership, HTTPS and live TLS-server verification remain open; loopback binding is unchanged. |
 
 | 2026-11-03 | M07 HTTP implementation | Replaced the sequential health-only server with a loopback-only Axum process and implemented workflow-run submit/read, task-run read/cancel, and active worker discovery over PostgreSQL. Added repeatable-read workflow snapshots, payload redaction, a 2 MiB HTTP body ceiling, and the API error envelope. The first full Rust and PostgreSQL/NATS verification passed on source a2279d3: Rust CI [41567991935](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567991935), PostgreSQL/NATS [41567991881](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567991881), and Pages [41567990815](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41567990815). |
 | 2026-11-03 | M07 API verification expansion | Extended the database-backed HTTP test to verify 404 not_found for missing workflow/task records, a populated live-worker response, stable database_unavailable mapping for Pool/Database errors without leaking diagnostics, and fail-closed no-database behavior. Source: 3d6b638; required Rust/PostgreSQL/Pages runs must be checked against the exact final SHA. |

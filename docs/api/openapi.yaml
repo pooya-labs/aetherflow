@@ -5,16 +5,18 @@ info:
   summary: Versioned control-plane contract for durable workflow execution.
   description: |
     Implemented by the Axum server in apps/aetherflow-server. Durable routes
-    require DATABASE_URL; without it, only GET /health is available. The
-    listener defaults to 127.0.0.1:8080 and rejects non-loopback binds.
-    Authentication, authorization, tenant isolation, and TLS-aware PostgreSQL
-    configuration are not implemented. Do not expose this service to an
-    untrusted network. Each HTTP request body is limited to 2 MiB; decoded task
-    input is limited to 1 MiB per task. Workflow/task inspection omits payload
-    bytes, and duplicate workflow-run IDs return 409 rather than replaying.
+    require DATABASE_URL and AETHERFLOW_API_TOKEN; without DATABASE_URL,
+    only GET /health is available. The API token is one high-entropy
+    single-operator Bearer credential, not multi-user authorization or tenant
+    isolation. The listener remains loopback-only and rejects non-loopback
+    binds. PostgreSQL connections use Rustls and native CA roots; TLS is
+    required by default. Each HTTP request body is limited to 2 MiB; decoded
+    task input is limited to 1 MiB per task. Inspection omits payload bytes.
 servers:
   - url: http://127.0.0.1:8080
-    description: Local development only; do not expose to an untrusted network.
+    description: Local development only; control-plane routes require Bearer authentication.
+security:
+  - bearerAuth: []
 tags:
   - name: Health
   - name: Workflow runs
@@ -23,6 +25,7 @@ tags:
 paths:
   /health:
     get:
+      security: []
       tags: [Health]
       operationId: getHealth
       summary: Check process health
@@ -36,6 +39,8 @@ paths:
   /api/v1/workflow-runs:
     post:
       tags: [Workflow runs]
+      security:
+        - bearerAuth: []
       operationId: submitWorkflowRun
       summary: Validate and durably submit a workflow run
       description: |
@@ -69,6 +74,8 @@ paths:
   /api/v1/workflow-runs/{workflow_run_id}:
     get:
       tags: [Workflow runs]
+      security:
+        - bearerAuth: []
       operationId: getWorkflowRun
       summary: Read a durable workflow-run snapshot
       parameters:
@@ -91,6 +98,8 @@ paths:
   /api/v1/task-runs/{task_run_id}:
     get:
       tags: [Task runs]
+      security:
+        - bearerAuth: []
       operationId: getTaskRun
       summary: Read a durable task-run snapshot
       description: |
@@ -116,6 +125,8 @@ paths:
   /api/v1/task-runs/{task_run_id}/cancel:
     post:
       tags: [Task runs]
+      security:
+        - bearerAuth: []
       operationId: cancelTaskRun
       summary: Cancel a task run using optimistic concurrency
       description: |
@@ -151,6 +162,8 @@ paths:
   /api/v1/workers:
     get:
       tags: [Workers]
+      security:
+        - bearerAuth: []
       operationId: listActiveWorkers
       summary: List active worker registrations
       description: |
@@ -169,6 +182,11 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: URL-safe operator token
   parameters:
     WorkflowRunId:
       name: workflow_run_id
@@ -183,6 +201,17 @@ components:
       schema:
         $ref: '#/components/schemas/EntityId'
   responses:
+    Unauthorized:
+      description: Missing or invalid operator Bearer token.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     BadRequest:
       description: Invalid identifier, malformed JSON, unknown status, or invalid workflow definition.
       content:

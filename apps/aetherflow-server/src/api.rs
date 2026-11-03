@@ -9,8 +9,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -19,6 +21,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, SecondsFormat, Utc};
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use aetherflow_core::domain::{
     RetryPolicy, TaskId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
@@ -35,6 +39,7 @@ use aetherflow_storage_postgres::{
 #[derive(Clone, Default)]
 pub struct AppState {
     database: Option<Arc<AppDatabase>>,
+    api_token_hash: Option<[u8; 32]>,
 }
 
 struct AppDatabase {
@@ -50,19 +55,20 @@ impl AppState {
         Self::default()
     }
 
-    /// Creates the durable repositories from a caller-configured connection pool.
-    #[must_use]
-    pub fn from_pool(pool: Pool) -> Self {
+    /// Creates the durable repositories and stores only a digest of the operator token.
+    pub fn from_pool(pool: Pool, api_token: &str) -> Result<Self, std::io::Error> {
+        let api_token_hash = hash_api_token(api_token)?;
         let tasks = Arc::new(PgTaskRepository::from_pool(pool.clone()));
         let membership = PgMembershipRepository::from_pool(pool);
         let coordinator = PgWorkflowCoordinator::new(Arc::clone(&tasks));
-        Self {
+        Ok(Self {
             database: Some(Arc::new(AppDatabase {
                 coordinator,
                 tasks,
                 membership,
             })),
-        }
+            api_token_hash: Some(api_token_hash),
+        })
     }
 
     fn database(&self) -> Result<&AppDatabase, ApiError> {
@@ -76,10 +82,9 @@ impl AppState {
     }
 }
 
-/// Builds the v1 router and retains the bootstrap health resource.
+/// Builds the v1 router. Health is public; durable control-plane routes require Bearer auth.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let control_plane = Router::new()
         .route("/api/v1/workflow-runs", post(submit_workflow))
         .route(
             "/api/v1/workflow-runs/{workflow_run_id}",
@@ -91,8 +96,82 @@ pub fn router(state: AppState) -> Router {
             post(cancel_task_run),
         )
         .route("/api/v1/workers", get(list_active_workers))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer_token,
+        ));
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(control_plane)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
+}
+
+fn hash_api_token(api_token: &str) -> Result<[u8; 32], std::io::Error> {
+    let valid_alphabet = api_token
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !(32..=256).contains(&api_token.len()) || !valid_alphabet {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHERFLOW_API_TOKEN must be 32-256 ASCII letters, digits, '-' or '_' characters",
+        ));
+    }
+
+    Ok(Sha256::digest(api_token.as_bytes()).into())
+}
+
+fn authorization_matches(expected: &[u8; 32], headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    if token.is_empty() {
+        return false;
+    }
+
+    let supplied: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+    bool::from(expected.as_slice().ct_eq(supplied.as_slice()))
+}
+
+async fn require_bearer_token(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.database.is_none() {
+        return next.run(request).await;
+    }
+
+    let Some(expected) = state.api_token_hash.as_ref() else {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "auth_not_configured",
+            "the control-plane operator credential is not configured",
+        )
+        .into_response();
+    };
+
+    if !authorization_matches(expected, request.headers()) {
+        let mut response = ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid Bearer token is required for this resource",
+        )
+        .into_response();
+        response
+            .headers_mut()
+            .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        return response;
+    }
+
+    next.run(request).await
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -576,10 +655,47 @@ fn format_timestamp(value: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, router};
+    use super::{AppState, authorization_matches, hash_api_token, router};
     use axum::body::{Body, to_bytes};
-    use axum::http::{Request, StatusCode};
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use tower::ServiceExt;
+
+    const TEST_API_TOKEN: &str = "test-only-aetherflow-api-token-32-bytes";
+
+    #[test]
+    fn operator_tokens_require_high_entropy_url_safe_material() {
+        assert!(hash_api_token(TEST_API_TOKEN).is_ok());
+        assert!(hash_api_token("short").is_err());
+        assert!(hash_api_token("a token containing spaces and punctuation!").is_err());
+        assert!(hash_api_token(&"a".repeat(257)).is_err());
+    }
+
+    #[test]
+    fn bearer_authentication_requires_exact_scheme_and_a_matching_digest() {
+        let expected = hash_api_token(TEST_API_TOKEN).expect("valid test token");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer test-only-aetherflow-api-token-32-bytes"),
+        );
+        assert!(authorization_matches(&expected, &headers));
+
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("bearer test-only-aetherflow-api-token-32-bytes"),
+        );
+        assert!(!authorization_matches(&expected, &headers));
+
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer incorrect-test-token-material-long-enough"),
+        );
+        assert!(!authorization_matches(&expected, &headers));
+
+        headers.remove(AUTHORIZATION);
+        assert!(!authorization_matches(&expected, &headers));
+    }
 
     #[tokio::test]
     async fn health_is_available_without_database() {
@@ -709,7 +825,8 @@ mod tests {
             .await
             .expect("ensure PostgreSQL schema is current");
 
-        let state = AppState::from_pool(pool.clone());
+        let state = AppState::from_pool(pool.clone(), TEST_API_TOKEN)
+            .expect("configure integration API token");
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock after Unix epoch")
@@ -734,9 +851,24 @@ mod tests {
         })
         .to_string();
 
-        let submit = router(state.clone())
+        let unauthenticated = router(state.clone())
             .oneshot(
                 Request::builder()
+                    .uri("/api/v1/workers")
+                    .body(Body::empty())
+                    .expect("valid unauthenticated request"),
+            )
+            .await
+            .expect("unauthenticated response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            unauthenticated.headers().get("www-authenticate"),
+            Some(&HeaderValue::from_static("Bearer"))
+        );
+
+        let submit = router(state.clone())
+            .oneshot(
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri("/api/v1/workflow-runs")
                     .header("content-type", "application/json")
@@ -760,7 +892,7 @@ mod tests {
 
         let duplicate = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri("/api/v1/workflow-runs")
                     .header("content-type", "application/json")
@@ -773,7 +905,7 @@ mod tests {
 
         let workflow = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/workflow-runs/{workflow_run_id}"))
                     .body(Body::empty())
                     .expect("valid workflow inspection request"),
@@ -794,7 +926,7 @@ mod tests {
 
         let missing_workflow = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/workflow-runs/{workflow_run_id}-missing"))
                     .body(Body::empty())
                     .expect("valid missing workflow inspection request"),
@@ -811,7 +943,7 @@ mod tests {
 
         let task = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/task-runs/{task_run_id}"))
                     .body(Body::empty())
                     .expect("valid task inspection request"),
@@ -822,7 +954,7 @@ mod tests {
 
         let missing_task = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/task-runs/{task_run_id}-missing"))
                     .body(Body::empty())
                     .expect("valid missing task inspection request"),
@@ -850,7 +982,7 @@ mod tests {
 
         let cancel = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
                     .header("content-type", "application/json")
@@ -870,7 +1002,7 @@ mod tests {
 
         let stale_cancel = router(state.clone())
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
                     .header("content-type", "application/json")
@@ -908,7 +1040,7 @@ mod tests {
 
         let workers = router(state)
             .oneshot(
-                Request::builder()
+                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri("/api/v1/workers")
                     .body(Body::empty())
                     .expect("valid worker listing request"),

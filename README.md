@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 now includes an Axum v1 control plane backed by PostgreSQL: workflow submission and inspection, task inspection and version-guarded cancellation, and live worker discovery. The HTTP routes and API integration suite have passed hosted verification; follow-up tests extend coverage for missing records, live worker results, and safe storage-error mapping. The listener rejects non-loopback binds until authentication and tenant isolation exist. AetherFlow remains experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 now includes an Axum v1 control plane backed by PostgreSQL: workflow submission and inspection, task inspection and version-guarded cancellation, and live worker discovery. The HTTP routes and API integration suite have passed hosted verification; follow-up tests extend coverage for missing records, live worker results, and safe storage-error mapping. The listener remains loopback-only even with single-operator Bearer authentication; multi-user authorization and tenant isolation are not implemented. AetherFlow remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -56,7 +56,7 @@ The versioned v1 control-plane API is implemented in apps/aetherflow-server and 
 
 The contract and its compatibility/security decisions are recorded in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). Task input is base64 encoded and limited to 1 MiB after decoding; the HTTP request body is capped at 2 MiB. Inspection responses never return task input or output bytes. Reusing a workflow-run ID returns a conflict; the v1 API does not promise idempotent replay.
 
-**Deployment boundary:** the listener defaults to 127.0.0.1:8080 and rejects non-loopback binds. PostgreSQL connections currently use NoTls; there is no HTTP authentication, authorization, or tenant isolation. Use only for local development or an isolated trusted environment, and do not expose it to an untrusted network.
+**Security boundary:** when DATABASE_URL is configured, every /api/v1 route requires Authorization: Bearer $AETHERFLOW_API_TOKEN. Generate a 32-byte random token and keep it secret. It is one operator credential, not per-user authorization or tenant isolation. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener still defaults to 127.0.0.1:8080 and rejects non-loopback binds. Do not expose it to an untrusted network.
 
 ## Repository map
 
