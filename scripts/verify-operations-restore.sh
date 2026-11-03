@@ -121,7 +121,7 @@ fi
 
 echo "Backing up the source JetStream stream with the pinned NATS CLI..."
 nats --server "$NATS_CLUSTER_URL" stream backup "$stream_name" \
-  "$work_dir/nats/$stream_name" --progress=false
+  "$work_dir/nats/$stream_name" --no-progress
 test -s "$work_dir/nats/$stream_name/backup.json"
 
 echo "Starting a separate JetStream restore target..."
@@ -147,7 +147,7 @@ fi
 
 echo "Restoring the stream into the isolated server with a single replica..."
 nats --server "$NATS_RESTORE_URL" stream restore \
-  "$work_dir/nats/$stream_name" --progress=false --replicas 1
+  "$work_dir/nats/$stream_name" --no-progress --replicas 1
 
 restored_stream_info="$(nats --server "$NATS_RESTORE_URL" stream info "$stream_name" --json)"
 restored_message_count="$(jq -er '.state.messages' <<<"$restored_stream_info")"
