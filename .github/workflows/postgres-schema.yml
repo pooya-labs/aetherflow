@@ -285,7 +285,8 @@ jobs:
                OR (version = 6 AND migration_name = '0006_force_tenant_row_level_security.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$')
                OR (version = 7 AND migration_name = '0007_worker_tenant_grant_lock_rls.sql'
-                   AND checksum_sha256 ~ '^[0-9a-f]{64} AND migration_name = '0008_dashboard_history_indexes.sql'
+                   AND checksum_sha256 ~ '^[0-9a-f]{64}$')
+               OR (version = 8 AND migration_name = '0008_dashboard_history_indexes.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$');
           ")"
           test "$migration_count" = "8"
