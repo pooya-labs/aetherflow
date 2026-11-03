@@ -284,8 +284,8 @@ async fn postgres_node_membership_fences_incarnations_and_drains_workers() {
             .migrate()
             .await
             .expect("apply current PostgreSQL schema"),
-        MigrationOutcome::Applied { version: 6, .. }
-            | MigrationOutcome::AlreadyCurrent { version: 6, .. }
+        MigrationOutcome::Applied { version: 7, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 7, .. }
     ));
 
     let membership = PgMembershipRepository::from_pool(pool.clone());
@@ -516,8 +516,8 @@ async fn postgres_stale_node_epoch_cannot_heartbeat_or_settle_a_live_task() {
             .migrate()
             .await
             .expect("ensure current PostgreSQL schema"),
-        MigrationOutcome::Applied { version: 6, .. }
-            | MigrationOutcome::AlreadyCurrent { version: 6, .. }
+        MigrationOutcome::Applied { version: 7, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 7, .. }
     ));
     let membership = PgMembershipRepository::from_pool(pool.clone());
     let tasks = PgTaskRepository::from_pool(pool.clone());
