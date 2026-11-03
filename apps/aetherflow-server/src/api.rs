@@ -613,6 +613,36 @@ mod tests {
             .expect("router response");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("read database-unavailable response");
+        let error: serde_json::Value =
+            serde_json::from_slice(&body).expect("valid service error JSON");
+        assert_eq!(error["error"]["code"], "database_unavailable");
+    }
+
+    #[tokio::test]
+    async fn storage_failures_map_to_safe_service_unavailable_errors() {
+        use super::{ApiError, StorageError};
+        use axum::response::IntoResponse;
+
+        for error in [
+            StorageError::Pool("private pool diagnostic".to_owned()),
+            StorageError::Database("private database diagnostic".to_owned()),
+        ] {
+            let response = ApiError::from_storage(error).into_response();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = to_bytes(response.into_body(), 1024)
+                .await
+                .expect("read stable storage error");
+            let error: serde_json::Value =
+                serde_json::from_slice(&body).expect("valid service error JSON");
+            assert_eq!(error["error"]["code"], "database_unavailable");
+            let message = error["error"]["message"]
+                .as_str()
+                .expect("public safe error message");
+            assert!(!message.contains("private"));
+        }
     }
 
     #[tokio::test]
@@ -679,7 +709,7 @@ mod tests {
             .await
             .expect("ensure PostgreSQL schema is current");
 
-        let state = AppState::from_pool(pool);
+        let state = AppState::from_pool(pool.clone());
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock after Unix epoch")
@@ -851,6 +881,33 @@ mod tests {
             .expect("stale cancellation response");
         assert_eq!(stale_cancel.status(), StatusCode::CONFLICT);
 
+        use std::num::NonZeroU32;
+        use std::time::Duration;
+
+        use aetherflow_core::domain::{NodeId, NodeIncarnationId, WorkerId};
+        use aetherflow_storage_postgres::PgMembershipRepository;
+
+        let membership = PgMembershipRepository::from_pool(pool);
+        let node_id = NodeId::parse(format!("api-node-{suffix}")).expect("valid node ID");
+        let incarnation_id =
+            NodeIncarnationId::parse(format!("api-incarnation-{suffix}"))
+                .expect("valid node incarnation ID");
+        let worker_id =
+            WorkerId::parse(format!("api-worker-{suffix}")).expect("valid worker ID");
+        let node = membership
+            .join_node(&node_id, &incarnation_id, Duration::from_secs(60))
+            .await
+            .expect("create active node membership");
+        membership
+            .register_worker(
+                &node,
+                &worker_id,
+                NonZeroU32::new(2).expect("non-zero worker concurrency"),
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("register active worker");
+
         let workers = router(state)
             .oneshot(
                 Request::builder()
@@ -861,5 +918,16 @@ mod tests {
             .await
             .expect("worker listing response");
         assert_eq!(workers.status(), StatusCode::OK);
+        let workers_body = to_bytes(workers.into_body(), 16 * 1024)
+            .await
+            .expect("read active worker list");
+        let worker_list: serde_json::Value =
+            serde_json::from_slice(&workers_body).expect("valid worker list JSON");
+        assert_eq!(worker_list["workers"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            worker_list["workers"][0]["worker_id"].as_str(),
+            Some(worker_id.as_str())
+        );
+        assert_eq!(worker_list["workers"][0]["status"], "active");
     }
 }
