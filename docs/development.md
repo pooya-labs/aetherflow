@@ -88,7 +88,7 @@ AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.
   cargo test -p aetherflow-server --locked -- --test-threads=1
 ~~~
 
-PostgreSQL storage integration tests use the same variable. The forced-RLS test creates a temporary restricted role with SET ROLE and verifies tenant filtering, worker-grant visibility, cross-tenant write denial, and digest-scoped credential lookup. These real-database suites require a disposable PostgreSQL test account with the privileges needed to create and grant a temporary role; the hosted CI service account provides this.
+PostgreSQL storage integration tests use the same variable. The forced-RLS test creates a temporary restricted role with SET ROLE and verifies tenant filtering, worker-grant visibility, cross-tenant write denial, worker `SELECT ... FOR SHARE` grant locking, denied worker grant mutation, and digest-scoped credential lookup. These real-database suites require a disposable PostgreSQL test account with the privileges needed to create and grant a temporary role; the hosted CI service account provides this.
 
 ~~~bash
 AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_storage_test' \
@@ -129,4 +129,4 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 
 ## Project state
 
-M00–M06 are complete. M07 now includes tenant-authenticated HTTP routes, transaction-local tenant/worker context, PostgreSQL migrations v4–v6, forced RLS, and a separate restricted runtime DB role. Those additions still await hosted verification against the latest source commit, and the control plane is not production-ready. HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
+M00–M06 are complete. M07 now includes tenant-authenticated HTTP routes, transaction-local tenant/worker context, PostgreSQL migrations v4–v7, forced RLS, and a separate restricted runtime DB role. Those additions still await hosted verification against the latest source commit, and the control plane is not production-ready. HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
