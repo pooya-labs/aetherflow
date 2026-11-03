@@ -6,8 +6,8 @@ use aetherflow_runtime::repository::TaskInput;
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore, PgTaskRepository,
-    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole,
-    initial_migration_checksum,
+    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantPermission,
+    TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -395,8 +395,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     let granted_claim = tasks
         .claim_next_registered(
             &granted_registration,
-            &AttemptId::parse("tenant-grant-claim-attempt")
-                .expect("valid grant claim attempt ID"),
+            &AttemptId::parse("tenant-grant-claim-attempt").expect("valid grant claim attempt ID"),
             std::time::Duration::from_secs(30),
         )
         .await
@@ -436,8 +435,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     let legacy_claim = tasks
         .claim_next(
             &WorkerId::parse("legacy-low-level-worker").expect("valid legacy worker ID"),
-            &AttemptId::parse("legacy-low-level-claim-attempt")
-                .expect("valid legacy attempt ID"),
+            &AttemptId::parse("legacy-low-level-claim-attempt").expect("valid legacy attempt ID"),
             std::time::Duration::from_secs(30),
         )
         .await
