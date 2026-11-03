@@ -1244,15 +1244,18 @@ impl PgTaskRepository {
             lock_worker_registration(&transaction, registration, false).await?;
         }
 
+        let tenant_id =
+            lock_task_tenant_for_worker(&transaction, task_run_id, worker_id, registration).await?;
         let row = transaction
             .query_opt(
                 "SELECT attempts_started, max_attempts, initial_backoff_ms, max_backoff_ms \
              FROM task_runs \
-             WHERE task_run_id = $1 AND status = 'running' AND claimed_by = $2 \
-               AND version = $3 AND fencing_token = $4 \
+             WHERE tenant_id = $1 AND task_run_id = $2 AND status = 'running' AND claimed_by = $3 \
+               AND version = $4 AND fencing_token = $5 \
                AND lease_expires_at > clock_timestamp() \
              FOR UPDATE",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &worker_id.as_str(),
                     &expected_version,
@@ -1300,10 +1303,11 @@ impl PgTaskRepository {
         };
         let attempt_updated = transaction.execute(
             "UPDATE task_attempts \
-             SET outcome = $5, finished_at = clock_timestamp(), error_kind = $6, error_message = $7 \
-             WHERE task_run_id = $1 AND attempt_number = $2 AND worker_id = $3 \
-               AND fencing_token = $4 AND outcome = 'running'",
+             SET outcome = $6, finished_at = clock_timestamp(), error_kind = $7, error_message = $8 \
+             WHERE tenant_id = $1 AND task_run_id = $2 AND attempt_number = $3 AND worker_id = $4 \
+               AND fencing_token = $5 AND outcome = 'running'",
             &[
+                &tenant_id,
                 &task_run_id.as_str(),
                 &attempts_started,
                 &worker_id.as_str(),
@@ -1327,17 +1331,18 @@ impl PgTaskRepository {
         let updated = transaction
             .query_one(
                 "UPDATE task_runs \
-             SET status = $5, claimed_by = NULL, lease_expires_at = NULL, \
-                 available_at = CASE WHEN $5 = 'retry_waiting' \
-                     THEN clock_timestamp() + make_interval(secs => $6) \
+             SET status = $6, claimed_by = NULL, lease_expires_at = NULL, \
+                 available_at = CASE WHEN $6 = 'retry_waiting' \
+                     THEN clock_timestamp() + make_interval(secs => $7) \
                      ELSE available_at END, \
                  version = version + 1, updated_at = clock_timestamp(), \
-                 finished_at = CASE WHEN $5 = 'failed' THEN clock_timestamp() ELSE NULL END, \
-                 last_error_kind = $7, last_error_message = $8 \
-             WHERE task_run_id = $1 AND status = 'running' AND version = $2 \
-               AND claimed_by = $3 AND fencing_token = $4 \
+                 finished_at = CASE WHEN $6 = 'failed' THEN clock_timestamp() ELSE NULL END, \
+                 last_error_kind = $8, last_error_message = $9 \
+             WHERE tenant_id = $1 AND task_run_id = $2 AND status = 'running' AND version = $3 \
+               AND claimed_by = $4 AND fencing_token = $5 \
              RETURNING version",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &expected_version,
                     &worker_id.as_str(),
@@ -1356,8 +1361,9 @@ impl PgTaskRepository {
         } else {
             "task.failed"
         };
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            &tenant_id,
             "task_run",
             task_run_id.as_str(),
             version,
@@ -1371,7 +1377,8 @@ impl PgTaskRepository {
             }),
         )
         .await?;
-        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        let snapshot =
+            load_snapshot_for_tenant(&transaction, &tenant_id, task_run_id.as_str()).await?;
         transaction
             .commit()
             .await
