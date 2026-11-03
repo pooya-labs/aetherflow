@@ -241,7 +241,8 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
         .query_one(
             "SELECT
                 set_config('aetherflow.tenant_id', '', true),
-                set_config('aetherflow.worker_id', $1, true)",
+                set_config('aetherflow.worker_id', $1, true),
+                set_config('aetherflow.tenant_role', 'worker', true)",
             &[&worker_id],
         )
         .await
@@ -282,15 +283,25 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
         .expect("worker may inspect its own revoked grant")
         .get(0);
     assert_eq!(revoked_grant_rows, 1);
+    transaction
+        .batch_execute("SAVEPOINT reject_worker_grant_update")
+        .await
+        .expect("create worker grant write rejection savepoint");
     let worker_grant_update = transaction
         .execute(
             "UPDATE worker_tenant_grants SET status = 'revoked'
              WHERE tenant_id = $1 AND worker_id = $2",
             &[&tenant_a, &worker_id],
         )
+        .await;
+    assert!(
+        worker_grant_update.is_err(),
+        "worker lock policy must not authorize grant mutation"
+    );
+    transaction
+        .batch_execute("ROLLBACK TO SAVEPOINT reject_worker_grant_update")
         .await
-        .expect("worker cannot mutate its grant registry");
-    assert_eq!(worker_grant_update, 0);
+        .expect("recover after expected worker grant write rejection");
 
     transaction
         .query_one(
