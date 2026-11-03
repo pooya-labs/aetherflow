@@ -1246,7 +1246,7 @@ mod tests {
             .await
             .expect("register active worker");
 
-        let workers = router(state)
+        let workers = router(state.clone())
             .oneshot(
                 Request::builder()
                     .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
@@ -1268,5 +1268,268 @@ mod tests {
             Some(worker_id.as_str())
         );
         assert_eq!(worker_list["workers"][0]["status"], "active");
+
+        // Tenant credentials are independent from the platform operator token.
+        // The middleware derives tenant identity only from the credential record.
+        use sha2::{Digest, Sha256};
+
+        let tenant_id = format!("api-tenant-{suffix}");
+        let tenant_display = format!("API tenant {suffix}");
+        let foreign_tenant_id = format!("api-foreign-tenant-{suffix}");
+        let foreign_tenant_display = format!("Foreign API tenant {suffix}");
+        let tenant_principal_id = format!("api-principal-{suffix}");
+        let reader_principal_id = format!("api-reader-{suffix}");
+        let tenant_token = format!("tenant-api-token-{suffix}-abcdefghijklmnopqrstuvwxyz");
+        let reader_token = format!("tenant-reader-token-{suffix}-abcdefghijklmnopqrstuvwxyz");
+        let tenant_token_digest = format!("{:x}", Sha256::digest(tenant_token.as_bytes()));
+        let reader_token_digest = format!("{:x}", Sha256::digest(reader_token.as_bytes()));
+
+        let database_client = pool
+            .get()
+            .await
+            .expect("get tenant HTTP integration database connection");
+        database_client
+            .execute(
+                "INSERT INTO tenants (tenant_id, display_name, status)
+                 VALUES ($1, $2, 'active'), ($3, $4, 'active')",
+                &[
+                    &tenant_id,
+                    &tenant_display,
+                    &foreign_tenant_id,
+                    &foreign_tenant_display,
+                ],
+            )
+            .await
+            .expect("seed two active HTTP tenants");
+        database_client
+            .execute(
+                "INSERT INTO tenant_principals
+                   (principal_id, tenant_id, display_name, status)
+                 VALUES ($1, $2, 'Tenant operator', 'active'),
+                        ($3, $2, 'Tenant reader', 'active')",
+                &[&tenant_principal_id, &tenant_id, &reader_principal_id],
+            )
+            .await
+            .expect("seed tenant operator and reader principals");
+        database_client
+            .execute(
+                "INSERT INTO tenant_credentials
+                   (credential_id, tenant_id, principal_id, token_sha256,
+                    token_prefix, role, status)
+                 VALUES ($1, $2, $3, $4, $5, 'tenant_operator', 'active'),
+                        ($6, $2, $7, $8, $9, 'tenant_reader', 'active')",
+                &[
+                    &format!("api-operator-credential-{suffix}"),
+                    &tenant_id,
+                    &tenant_principal_id,
+                    &tenant_token_digest,
+                    &tenant_token[..12],
+                    &format!("api-reader-credential-{suffix}"),
+                    &reader_principal_id,
+                    &reader_token_digest,
+                    &reader_token[..12],
+                ],
+            )
+            .await
+            .expect("seed tenant operator and reader credentials");
+
+        let foreign_workflow_run_id = format!("foreign-api-run-{suffix}");
+        let foreign_workflow_id = format!("foreign-api-workflow-{suffix}");
+        let foreign_task_run_id = format!("foreign-api-task-run-{suffix}");
+        let foreign_task_id = format!("foreign-api-task-{suffix}");
+        database_client
+            .execute(
+                "INSERT INTO workflow_runs
+                   (workflow_run_id, workflow_id, tenant_id, status)
+                 VALUES ($1, $2, $3, 'pending')",
+                &[&foreign_workflow_run_id, &foreign_workflow_id, &foreign_tenant_id],
+            )
+            .await
+            .expect("seed foreign tenant workflow");
+        database_client
+            .execute(
+                "INSERT INTO task_runs
+                   (task_run_id, workflow_run_id, task_id, tenant_id, status)
+                 VALUES ($1, $2, $3, $4, 'pending')",
+                &[
+                    &foreign_task_run_id,
+                    &foreign_workflow_run_id,
+                    &foreign_task_id,
+                    &foreign_tenant_id,
+                ],
+            )
+            .await
+            .expect("seed foreign tenant task");
+
+        let tenant_workflow_id = format!("tenant-api-workflow-{suffix}");
+        let tenant_workflow_run_id = format!("tenant-api-run-{suffix}");
+        let tenant_task_id = format!("tenant-api-task-{suffix}");
+        let tenant_body = serde_json::json!({
+            "workflow_id": tenant_workflow_id,
+            "workflow_run_id": tenant_workflow_run_id,
+            "tasks": [{
+                "task_id": tenant_task_id,
+                "depends_on": [],
+                "input_base64": "dGVuYW50LWJvdW5k"
+            }],
+            "retry_policy": {
+                "max_attempts": 1,
+                "initial_backoff_ms": 0,
+                "max_backoff_ms": 0
+            }
+        })
+        .to_string();
+
+        let operator_token_on_tenant_route = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .method("POST")
+                    .uri("/api/v1/tenant/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(tenant_body.clone()))
+                    .expect("valid operator-token tenant-route request"),
+            )
+            .await
+            .expect("tenant route operator-token response");
+        assert_eq!(operator_token_on_tenant_route.status(), StatusCode::UNAUTHORIZED);
+
+        let invalid_tenant_token = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(
+                        AUTHORIZATION,
+                        "Bearer invalid-tenant-credential-material-that-is-long-enough",
+                    )
+                    .uri("/api/v1/tenant/workflow-runs/unknown")
+                    .body(Body::empty())
+                    .expect("valid invalid-credential request"),
+            )
+            .await
+            .expect("invalid tenant credential response");
+        assert_eq!(invalid_tenant_token.status(), StatusCode::UNAUTHORIZED);
+
+        let tenant_submit = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .method("POST")
+                    .uri("/api/v1/tenant/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(tenant_body.clone()))
+                    .expect("valid tenant workflow submission request"),
+            )
+            .await
+            .expect("tenant workflow submission response");
+        assert_eq!(tenant_submit.status(), StatusCode::CREATED);
+        let tenant_submit_body = to_bytes(tenant_submit.into_body(), 16 * 1024)
+            .await
+            .expect("read tenant workflow receipt");
+        let tenant_receipt: serde_json::Value =
+            serde_json::from_slice(&tenant_submit_body).expect("valid tenant receipt JSON");
+        let tenant_task_run_id = tenant_receipt["task_runs"][0]["task_run_id"]
+            .as_str()
+            .expect("tenant task-run ID in receipt")
+            .to_owned();
+
+        let own_tenant_workflow = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri(format!(
+                        "/api/v1/tenant/workflow-runs/{tenant_workflow_run_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("valid own-tenant workflow read"),
+            )
+            .await
+            .expect("own-tenant workflow read response");
+        assert_eq!(own_tenant_workflow.status(), StatusCode::OK);
+
+        let own_tenant_task = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri(format!("/api/v1/tenant/task-runs/{tenant_task_run_id}"))
+                    .body(Body::empty())
+                    .expect("valid own-tenant task read"),
+            )
+            .await
+            .expect("own-tenant task read response");
+        assert_eq!(own_tenant_task.status(), StatusCode::OK);
+
+        let foreign_workflow_read = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri(format!(
+                        "/api/v1/tenant/workflow-runs/{foreign_workflow_run_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("valid foreign-tenant workflow read"),
+            )
+            .await
+            .expect("foreign-tenant workflow read response");
+        assert_eq!(foreign_workflow_read.status(), StatusCode::NOT_FOUND);
+        let missing_tenant_workflow_read = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri(format!(
+                        "/api/v1/tenant/workflow-runs/{foreign_workflow_run_id}-missing"
+                    ))
+                    .body(Body::empty())
+                    .expect("valid missing-tenant workflow read"),
+            )
+            .await
+            .expect("missing-tenant workflow read response");
+        assert_eq!(
+            missing_tenant_workflow_read.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let reader_read = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {reader_token}"))
+                    .uri(format!(
+                        "/api/v1/tenant/workflow-runs/{tenant_workflow_run_id}"
+                    ))
+                    .body(Body::empty())
+                    .expect("valid tenant reader request"),
+            )
+            .await
+            .expect("tenant reader read response");
+        assert_eq!(reader_read.status(), StatusCode::OK);
+
+        let reader_submit = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {reader_token}"))
+                    .method("POST")
+                    .uri("/api/v1/tenant/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(tenant_body))
+                    .expect("valid tenant reader submit request"),
+            )
+            .await
+            .expect("tenant reader submit response");
+        assert_eq!(reader_submit.status(), StatusCode::FORBIDDEN);
+
+        let reader_cancel = router(state)
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {reader_token}"))
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/tenant/task-runs/{tenant_task_run_id}/cancel"
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"expected_version":0}"#))
+                    .expect("valid tenant reader cancel request"),
+            )
+            .await
+            .expect("tenant reader cancel response");
+        assert_eq!(reader_cancel.status(), StatusCode::FORBIDDEN);
     }
 }
