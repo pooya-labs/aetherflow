@@ -1401,6 +1401,10 @@ mod tests {
             .await
             .expect("tenant route operator-token response");
         assert_eq!(operator_token_on_tenant_route.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            operator_token_on_tenant_route.headers().get(WWW_AUTHENTICATE),
+            Some(&HeaderValue::from_static("Bearer"))
+        );
 
         let invalid_tenant_token = router(state.clone())
             .oneshot(
@@ -1416,6 +1420,10 @@ mod tests {
             .await
             .expect("invalid tenant credential response");
         assert_eq!(invalid_tenant_token.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            invalid_tenant_token.headers().get(WWW_AUTHENTICATE),
+            Some(&HeaderValue::from_static("Bearer"))
+        );
 
         let tenant_submit = router(state.clone())
             .oneshot(
