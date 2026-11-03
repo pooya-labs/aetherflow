@@ -194,17 +194,11 @@ For every material regression, record: detection time; affected commit and Actio
 
 ## Current checkpoint
 
-**Canonical branch:** main. Latest source HEAD reported by commit search: `ee1e5ce2b999ae9c2e5ab88b89d62b59ccbb0df2`. Transaction-local worker/event/credential GUC and compatibility-read commits: `ee1e5ce2b9`, `75479d6704`, `f0feea0c52`, `8465134219`, `b50c23ec0a`, `8b36bb50db`, `76ddabc3b1`, `3ea1147905`, `261280f047`, `ebbda10bb5`, `cb6b27b968`, `ba1648c846`, `63ac94127b`, `18e5918954`, `51d8c21f63`, `8554e5f97c`. The latest code tree remains unverified; fetch the live tip and file SHAs before every write. Development remains directly on main.
+**Canonical branch:** `main`. Latest source HEAD: `3ff44510f018226713ac941e1e3d1253fe6024a6`. Recent implementation commits include forced-RLS migration `b207fc5b34`, migration runner `8e9abad4e0`, runtime-pool split and role verifier `6a4ab10c3f`, RLS integration test `aa282f68df`, server verifier test `4d8a3cb576`, CI runtime login fixture `955b83d9e45a`, schema-v6 test updates `509199cb6572` and related test commits, clean PostgreSQL CI workflow `90008d31f66b`, and runtime privilege hardening `3ff44510f018`. The current tree is not yet hosted-verified; development remains directly on `main`.
 
 **Implementation baseline:** M00–M06 remain complete. The WASM scheduler integration is hosted-verified by Rust CI [41563269188](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563269188); see its M06 session entry for the ABI/resource test history.
 
-**M07 implementation:** the Axum server is in apps/aetherflow-server. The v1 routes are:
-- GET /health: process liveness only; it does not verify PostgreSQL.
-- POST /api/v1/workflow-runs: validate a workflow snapshot and persist it with PgWorkflowCoordinator.
-- GET /api/v1/workflow-runs/{workflow_run_id}: load a repeatable-read durable workflow snapshot and task summaries.
-- GET /api/v1/task-runs/{task_run_id}: expose task state, dependencies, payload sizes, and output presence, never payload bytes.
-- POST /api/v1/task-runs/{task_run_id}/cancel: require expected_version, commit cancellation, and aggregate the parent workflow.
-- GET /api/v1/workers: list live active worker registrations from PgMembershipRepository.
+**M07 implementation:** the server exposes the platform/operator v1 compatibility routes and a separate tenant-authenticated `/api/v1/tenant/*` group for workflow submit/read and task read/cancel. Tenant IDs are derived only from stored credentials; Read/Submit/Cancel checks are explicit. The PostgreSQL schema has migrations v4–v6: v4 tenant ownership/backfill (hosted-verified), v5 tenant-leading inbox identity, and v6 ENABLE + FORCE RLS for ten tenant-owned tables. Worker task execution and registered outbox/inbox operations are grant-gated, and event envelopes preserve tenant identity. Tenant, principal, worker, legacy and credential-digest settings are transaction-local. The server uses a distinct migration owner pool (`AETHERFLOW_MIGRATION_DATABASE_URL`) and restricted runtime pool (`DATABASE_URL`); startup rejects elevated/owner roles and verifies forced RLS on all ten protected tables. The loopback bind guard remains active.
 
 The v1 API uses caller-supplied unique workflow-run IDs; duplicates return 409 and are not replayed. Workflow definitions are submitted per run, not stored as reusable versions. Decoded task inputs are limited to 1 MiB and the entire HTTP request body is limited to 2 MiB. The HTTP process does not launch a worker; durable workers run separately.
 
