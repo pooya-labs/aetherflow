@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M07 are complete; M08 is in progress. The server has structured JSON logs, request-scoped tracing, bounded Prometheus metrics, W3C trace-context propagation, and opt-in OpenTelemetry OTLP export. The local Compose environment provides PostgreSQL 18 and a three-node NATS JetStream cluster with separate migration/runtime database roles. Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) and Pages [41650418895](https://github.com/pooya-labs/aetherflow/actions/runs/41650418895) passed on source `97aa0de79b86aed7435db755d75f65ea95f062b7`; CI booted the Compose stack, verified the runtime role and all NATS routes, and completed the full Rust/WASM matrix. The next M08 item is backup/restore and schema-upgrade runbooks. The control plane remains experimental and is not production-ready.
+> **Project status:** M00–M07 are complete; M08 is in progress. The server has structured JSON logs, request-scoped tracing, bounded Prometheus metrics, W3C trace-context propagation, and opt-in OpenTelemetry OTLP export. The local Compose environment provides PostgreSQL 18 and a three-node NATS JetStream cluster with separate migration/runtime database roles. Coordinated PostgreSQL/JetStream backup-restore and schema-upgrade runbooks are documented; a CI consistency check now validates the runbooks against the migration and RLS sources. The control plane remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/) · [Open the read-only dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/).
 
@@ -71,6 +71,13 @@ The contract and its compatibility/security decisions are recorded in [ADR-0010]
 Open the [AetherFlow dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/) to browse workflow runs, task snapshots, active workers, and redacted event history. It is a read-only browser client; it does not submit or cancel work. The Bearer token is held in page memory only and is not persisted to local storage, cookies, or the URL. Use HTTPS for remote APIs.
 
 To connect a hosted API, configure `AETHERFLOW_CORS_ALLOWED_ORIGINS=https://pooya16pg-spec.github.io` on the API server and restart it. The origin must match exactly. Operator listing is intentionally limited to the reserved `legacy-default` tenant; tenant credentials list only their own runs. Event responses never include raw outbox payloads.
+
+## Operations runbooks
+
+Operational procedures are documented for a coordinated PostgreSQL/JetStream backup and restore, and for controlled PostgreSQL schema upgrades. The backup procedure is a logical recovery drill, not a production PITR service; the project still needs an explicit owner-approved RPO/RTO and a tested production WAL-archive or managed-database policy.
+
+- [Backup and restore runbook](docs/operations/backup-restore.md)
+- [PostgreSQL schema upgrade runbook](docs/operations/schema-upgrades.md)
 
 ## Operations telemetry
 

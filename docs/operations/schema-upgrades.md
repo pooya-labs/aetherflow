@@ -61,7 +61,7 @@ WHERE n.nspname = 'public'
   AND c.relname = ANY (ARRAY[
     'workflow_runs', 'task_runs', 'task_run_dependencies',
     'task_attempts', 'outbox_events', 'consumer_inbox',
-    'tenants', 'principals', 'tenant_credentials',
+    'tenants', 'tenant_principals', 'tenant_credentials',
     'worker_tenant_grants'
   ])
   AND c.relrowsecurity

@@ -61,7 +61,15 @@ For an externally managed PostgreSQL cluster, use the corresponding privileged b
 
 ## Back up JetStream
 
-Use a NATS CLI version compatible with the deployed server, and a credential that can inspect and snapshot every AetherFlow stream. The Compose file starts a three-node broker but does not create application stream definitions; stream names and subjects are deployment configuration.
+Use a NATS CLI version compatible with the deployed server, and a credential that can inspect and snapshot every AetherFlow stream. The Compose file uses NATS Server 2.12 and does not create application stream definitions; stream names and subjects are deployment configuration.
+
+For the repository's Compose stack, pin **NATS CLI v0.4.0** (available from the [v0.4.0 release](https://github.com/nats-io/natscli/releases/tag/v0.4.0)). That release provides the `nats stream backup` and `nats stream restore` commands used below. Record and verify the installed version before taking a backup:
+
+~~~bash
+nats --version
+~~~
+
+Do not mix these instructions with the newer offline archive tooling: the NATS CLI v0.5+ `backup edit/info/validate/lookup` commands only support backups produced by NATS Server 2.15 or newer. For another deployment, choose a CLI build tested against that exact NATS server release.
 
 List the streams, compare them with the deployment's stream/consumer manifest, and snapshot every required stream:
 

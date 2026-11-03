@@ -126,6 +126,8 @@ jobs:
 
       - name: Validate dashboard JavaScript syntax
         run: node --check dashboard/app.js
+      - name: Validate operations runbooks against migrations and RLS
+        run: bash scripts/check-operations-docs.sh
 
       - name: Run Clippy
         run: cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings

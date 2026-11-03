@@ -5,7 +5,7 @@ This file is the **source of truth** for project progress. If a chat or network 
 Last updated: 2026-11-03  
 Current branch: `main`  
 Current milestone: **M08 — Production engineering**  
-Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation, forced RLS, API/CLI/SDK, OpenAPI, paginated workflow/event history, exact-origin CORS, and the read-only Pages dashboard are complete. M08's observability baseline and Docker Compose development environment are hosted-verified. Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) and Pages [41650418895](https://github.com/pooya-labs/aetherflow/actions/runs/41650418895) passed on exact source `97aa0de79b86aed7435db755d75f65ea95f062b7`. Rust CI's Compose smoke job started PostgreSQL 18 and all three NATS nodes, checked the runtime role restrictions and cluster routes, then cleaned up its volumes; the same workflow passed Clippy, workspace tests/build, WASM ABI execution, docs, and artifact upload. The backend Postgres/NATS suite passed on the previous backend implementation source [41641975958](https://github.com/pooya-labs/aetherflow/actions/runs/41641975958), attempt 2. Backup/restore and schema-upgrade runbooks, benchmarks, failure injection, supply-chain checks, and operational documentation remain open. Owner license selection and deferred property-based transition tests remain open.
+Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation, forced RLS, API/CLI/SDK, OpenAPI, paginated workflow/event history, exact-origin CORS, and the read-only Pages dashboard are complete. M08's observability baseline, Docker Compose development environment, and PostgreSQL/JetStream backup-restore and schema-upgrade runbooks are implemented. Rust CI [41655919443](https://github.com/pooya-labs/aetherflow/actions/runs/41655919443) and Pages [41655917408](https://github.com/pooya-labs/aetherflow/actions/runs/41655917408) passed on exact source `947a75f2847c9fbd41f5b158c30149be8d63090b`. A follow-up consistency gate is being added for migration/RLS/runbook drift. Reproducible benchmarks, failure injection, supply-chain checks, and operational documentation remain open. Owner license selection and deferred property-based transition tests remain open.
 
 ## Current checkpoint
 - exact `main` HEAD SHA and the last fully verified source SHA (these can differ);
@@ -205,7 +205,7 @@ For every material regression, record: detection time; affected commit and Actio
   - [x] Add a three-member NATS 2.12 JetStream cluster with persistent volumes, health checks, loopback-only client/monitoring ports, and stable container names for transport tests.
   - [x] Add `.env.example`, keep `.env` ignored, document local server/test commands, disposable database setup, JetStream testing, and destructive volume cleanup.
   - [x] Add a hosted Compose smoke job that validates interpolation, starts all four services, checks runtime-role restrictions and two routes per NATS member, and always removes its temporary volumes. Verified in Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) on exact source `97aa0de79b86aed7435db755d75f65ea95f062b7`.
-- [ ] Add backup/restore and schema upgrade runbooks.
+- [ ] Verify backup/restore and schema-upgrade runbooks against the live schema and NATS 2.12 CLI compatibility; add CI drift checks.
 - [ ] Add reproducible load and benchmark suites.
 - [ ] Add chaos/failure-injection scenarios.
 - [ ] Add dependency, license, secret, and supply-chain checks.
@@ -221,23 +221,23 @@ For every material regression, record: detection time; affected commit and Actio
 
 ## Current checkpoint
 
-**Latest fully verified implementation/source SHA:** `97aa0de79b86aed7435db755d75f65ea95f062b7`. This checkpoint's README/roadmap follow-up is documentation-only and does not change the tested Compose or application code.
+**Latest application/runbook implementation SHA:** `947a75f2847c9fbd41f5b158c30149be8d63090b`. Rust CI [41655919443](https://github.com/pooya-labs/aetherflow/actions/runs/41655919443) and Pages [41655917408](https://github.com/pooya-labs/aetherflow/actions/runs/41655917408) passed on that exact source.
 
-**Exact-source verification:**
-- Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) — success on `97aa0de79b86aed7435db755d75f65ea95f062b7`. The `compose-smoke` job successfully validated the Compose model, started PostgreSQL 18 plus all three NATS nodes, verified the restricted runtime database role and two active routes per NATS node, then cleaned up all temporary volumes. The quality job passed locked dependency resolution, rustfmt, dashboard JavaScript syntax, Clippy, workspace tests, Release build, WASM guest lint, ABI v1 guest/host build and execution, docs, and Cargo.lock artifact upload.
-- GitHub Pages [41650418895](https://github.com/pooya-labs/aetherflow/actions/runs/41650418895) — success on the same exact SHA.
-- PostgreSQL/NATS integration [41641975958](https://github.com/pooya-labs/aetherflow/actions/runs/41641975958), attempt 2 — success on backend implementation source `2d45677e70c9c1fea21482da75891af65718ea93`. Passed storage/RLS, restricted runtime-role checks, live PostgreSQL TLS, HTTP API integration, migration/schema invariants, three-node NATS, and real JetStream outbox/inbox delivery and deduplication. The first attempt's JetStream delivery timeout did not reproduce on rerun.
+**Verified implementation state:**
+- Observability: JSON structured logs, request spans, authenticated/bounded Prometheus metrics, W3C trace context, opt-in OTLP.
+- Local dependencies: PostgreSQL 18 plus three NATS 2.12 JetStream members; Compose smoke checks both the restricted runtime login and broker routes.
+- Operations docs: coordinated PostgreSQL/JetStream logical backup and restore; controlled schema upgrade with transactional migration-ledger guidance. Manual review identified two documentation hardening needs: exact RLS table name and NATS CLI/server compatibility. Those are corrected in the current follow-up; runbook drift CI is being added before marking M08 complete.
 - The read-only dashboard remains published at https://pooya16pg-spec.github.io/aetherflow/dashboard/.
 
 **M07 status:** complete. Dashboard, paginated lists, redacted timelines, tenant routes, and browser CORS are already implemented; do not repeat them.
 
-**M08 completed slices:** structured JSON logs; request spans; authenticated bounded Prometheus metrics; W3C trace-context extraction/response propagation; opt-in OTLP export; local Compose PostgreSQL/NATS stack with separate DB roles; Compose CI smoke test.
+**M08 completed slices:** structured JSON logs; request spans; authenticated bounded Prometheus metrics; W3C trace-context extraction/response propagation; opt-in OTLP export; local Compose PostgreSQL/NATS stack; written backup/restore and schema-upgrade runbooks. The runbook verification/drift gate is the immediate open item.
 
-**First unchecked task:** add backup/restore and schema-upgrade runbooks. Follow with reproducible load/benchmark suites, failure injection, dependency/license/secret/supply-chain checks, and the operational guide. Do not claim production readiness.
+**First unchecked task:** finish runbook drift validation in CI and close the exact-source verification. Then add reproducible load/benchmark suites, failure injection, dependency/license/secret/supply-chain checks, and the operational guide. Do not claim production readiness.
 
 **Known engineering debt and owner decisions:** explicit open-source license remains an owner-only public-release blocker. M02 property-based lifecycle tests remain deferred. WASM `spawn_blocking` cancellation is bounded by fuel and wall-clock deadlines rather than force-abort. The control plane remains experimental.
 
-**Recovery:** fetch `main` and exact Actions `head_sha` values before editing. Preserve migration immutability and use additive/fix-forward changes. The Compose stack is for loopback-only local development; its explicit `DATABASE_SSL_MODE=disable` must never be reused for network PostgreSQL. The Pages site deploys independently of the API server; remote browser access requires setting `AETHERFLOW_CORS_ALLOWED_ORIGINS=https://pooya16pg-spec.github.io` on the API host.
+**Recovery:** fetch `main` and exact Actions `head_sha` values before editing. Preserve migration immutability and use additive/fix-forward changes. The Compose stack is for loopback-only local development; its explicit `DATABASE_SSL_MODE=disable` must never be reused for network PostgreSQL. For the Compose NATS 2.12 snapshot commands use the pinned v0.4.0 NATS CLI as documented; do not mix them with the newer v0.5+ offline archive tooling. The Pages site deploys independently of the API server; remote browser access requires setting `AETHERFLOW_CORS_ALLOWED_ORIGINS=https://pooya16pg-spec.github.io` on the API host.
 
 ## Session log
 
