@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M07 are complete; M08 is in progress. The server now emits structured JSON logs, request-scoped tracing spans, and bounded Prometheus HTTP metrics at the operator-authenticated `/api/v1/metrics` endpoint. Exact main SHA `7e733cb53871f86bd30e47993a6b0b4c28ab68ee` passed Rust CI, PostgreSQL/NATS integration, and Pages deployment. W3C trace-context propagation and an OTLP exporter are the next observability tasks. The control plane remains experimental and is not production-ready.
+> **Project status:** M00–M07 are complete; M08 is in progress. The server now emits structured JSON logs, request-scoped tracing spans, and bounded Prometheus HTTP metrics. W3C trace context is accepted and returned using standard headers; OpenTelemetry OTLP export is opt-in and disabled unless an endpoint is configured. Rust CI and PostgreSQL/NATS passed on implementation SHA `2d45677e70c9c1fea21482da75891af65718ea93`; Pages passed on formatting-only main tip `ed5d332a46b7795b7e65d2b512d9124b9b4c66cb`. The next M08 item is a Docker Compose development environment. The control plane remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/) · [Open the read-only dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/).
 
