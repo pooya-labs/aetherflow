@@ -183,9 +183,11 @@ jobs:
                OR (version = 5 AND migration_name = '0005_tenant_scoped_inbox_identity.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$')
                OR (version = 6 AND migration_name = '0006_force_tenant_row_level_security.sql'
+                   AND checksum_sha256 ~ '^[0-9a-f]{64}$')
+               OR (version = 7 AND migration_name = '0007_worker_tenant_grant_lock_rls.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$');
           ")"
-          test "$migration_count" = "6"
+          test "$migration_count" = "7"
           inbox_primary_key="$(psql --no-align --tuples-only --command "
             SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
             FROM information_schema.key_column_usage
@@ -218,7 +220,7 @@ jobs:
                 'tenants', 'tenant_principals', 'tenant_credentials', 'worker_tenant_grants'
               );
           ")"
-          test "$rls_policy_count" = "11"
+          test "$rls_policy_count" = "12"
 
 
           table_count="$(psql --no-align --tuples-only --command "
