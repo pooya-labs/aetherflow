@@ -222,7 +222,7 @@ async fn require_tenant_bearer(
     let context = match database.tenant_credentials.authenticate_token(token).await {
         Ok(context) => context,
         Err(StorageError::InvalidTenantCredential) => {
-            return unauthorized_bearer().into_response();
+            return unauthorized_bearer_response();
         }
         Err(error) => return ApiError::from_storage(error).into_response(),
     };
@@ -1473,6 +1473,29 @@ mod tests {
             .await
             .expect("own-tenant task read response");
         assert_eq!(own_tenant_task.status(), StatusCode::OK);
+
+        let tenant_cancel = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/tenant/task-runs/{tenant_task_run_id}/cancel"
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"expected_version":0}"#))
+                    .expect("valid tenant cancellation request"),
+            )
+            .await
+            .expect("tenant cancellation response");
+        assert_eq!(tenant_cancel.status(), StatusCode::OK);
+        let tenant_cancel_body = to_bytes(tenant_cancel.into_body(), 16 * 1024)
+            .await
+            .expect("read tenant cancellation response");
+        let tenant_cancelled: serde_json::Value =
+            serde_json::from_slice(&tenant_cancel_body).expect("valid tenant cancellation JSON");
+        assert_eq!(tenant_cancelled["task_run"]["status"], "cancelled");
+        assert_eq!(tenant_cancelled["workflow_status"], "cancelled");
 
         let foreign_workflow_read = router(state.clone())
             .oneshot(
