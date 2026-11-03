@@ -66,7 +66,7 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
                AND relation.relname = ANY($1)
                AND relation.relrowsecurity
                AND relation.relforcerowsecurity",
-            &[&[
+            &[&&[
                 "workflow_runs",
                 "task_runs",
                 "task_run_dependencies",
