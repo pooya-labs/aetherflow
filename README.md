@@ -62,6 +62,22 @@ The contract and its compatibility/security decisions are recorded in [ADR-0010]
 
 **Security boundary:** `AETHERFLOW_API_TOKEN` protects platform/operator compatibility routes; tenant routes authenticate separately against stored tenant credentials and derive tenant identity server-side. `AETHERFLOW_MIGRATION_DATABASE_URL` is the DDL/migration owner pool; `DATABASE_URL` must be a restricted non-owner runtime role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, public-schema CREATE, REPLICATION, or membership in any other PostgreSQL role. Startup verifies this role and ENABLE + FORCE RLS on all ten protected tables. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener defaults to 127.0.0.1:8080; plaintext HTTP is loopback-only, and non-loopback binds require `AETHERFLOW_TLS_CERT_PATH` and `AETHERFLOW_TLS_KEY_PATH` with valid PEM material. PostgreSQL TLS chain and hostname verification passed hosted integration tests against a live PostgreSQL 18 fixture (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). Transaction-local RLS GUCs are app-controlled context and do not protect against arbitrary SQL execution or SQL injection.
 
+## CLI
+
+A first CLI implementation is in the workspace and is being validated by hosted CI. It exposes health, active worker inventory, workflow submit/inspect, and task inspect/cancel commands over the v1 HTTP API. Operator and tenant credentials are read from separate environment variables; tenant mode is selected with --tenant.
+
+~~~bash
+export AETHERFLOW_API_TOKEN="your-operator-token"
+cargo run -p aetherflow-cli -- --help
+cargo run -p aetherflow-cli -- workers
+cargo run -p aetherflow-cli -- workflow inspect run-0001
+cargo run -p aetherflow-cli -- workflow submit --file workflow.json
+cargo run -p aetherflow-cli -- task inspect task-run-0001
+cargo run -p aetherflow-cli -- task cancel task-run-0001 --expected-version 3
+~~~
+
+Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects a non-default server; the default is http://127.0.0.1:8080. Use --file - to read a submission JSON object from standard input. See [the CLI guide](apps/aetherflow-cli/README.md) and [the API contract](docs/api/openapi.yaml).
+
 ## Repository map
 
 The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for the authoritative checklist and current checkpoint, [docs/architecture/overview.md](docs/architecture/overview.md) for system boundaries, [docs/decisions/](docs/decisions/) for architecture decisions, and [docs/development.md](docs/development.md) for local commands.

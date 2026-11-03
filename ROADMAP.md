@@ -174,6 +174,10 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Define and verify the HTTPS boundary for the HTTP listener before permitting non-loopback access. Non-loopback binds require a complete, parseable Rustls certificate/key pair; loopback may remain HTTP or opt into HTTPS. Positive handshake, malformed PEM, untrusted CA, hostname mismatch, and raw-HTTP rejection tests passed Rust CI run [41605476304](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41605476304) on exact source `54b17742aee822f37a4a3b034968bbcd3e851c13`.
 - [x] Verify the production Rustls client against a live PostgreSQL 18 TLS fixture: trusted CA + matching host connects with TLS; an empty trust store rejects the server chain; a trusted certificate with a hostname mismatch is rejected. PostgreSQL/NATS CI [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469) passed the API/TLS test, migrations, RLS/storage, schema invariants, and real JetStream transport on source `369065c85b2126f97fb55f107b5d34518829cc80`.
 - [ ] Add CLI for inspect, submit, cancel, and worker status.
+  - [ ] Keep operator and tenant credentials separate and environment-only.
+  - [ ] Use safe HTTPS defaults, prevent bearer-token redirect forwarding, and enforce the API request-size limit.
+  - [ ] Validate identifiers, base URLs, JSON input, and optimistic-concurrency versions before sending requests.
+  - [ ] Add command routing and input-validation tests; pass workspace Clippy, tests, build, and docs CI.
 - [ ] Add Rust SDK; add TypeScript SDK only after the API stabilizes.
 - [ ] Build dashboard for workflows, runs, tasks, and event history.
 

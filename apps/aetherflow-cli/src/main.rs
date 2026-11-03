@@ -187,7 +187,7 @@ fn validate_identifier(value: &str) -> Result<(), Box<dyn Error>> {
 }
 
 fn read_submission(path: &Path) -> Result<Value, Box<dyn Error>> {
-    let raw = if path.as_os_str() == "-" {
+    let raw = if path.as_os_str() == std::ffi::OsStr::new("-") {
         let mut input = String::new();
         io::stdin().read_to_string(&mut input)?;
         input
@@ -221,7 +221,7 @@ fn read_submission(path: &Path) -> Result<Value, Box<dyn Error>> {
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
-    if cli.tenant && matches!(cli.command, Command::Workers) {
+    if cli.tenant && matches!(&cli.command, Command::Workers) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "worker inventory is an operator-only endpoint; remove --tenant",
@@ -229,7 +229,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    let authenticated = !matches!(cli.command, Command::Health);
+    let authenticated = !matches!(&cli.command, Command::Health);
     let token = if !authenticated {
         None
     } else if cli.tenant {

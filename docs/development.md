@@ -21,6 +21,24 @@ cargo doc --workspace --no-deps --locked
 
 The default workspace test command does not require PostgreSQL or NATS. Database-backed tests skip when their documented environment variables are not set.
 
+## Run the CLI
+
+The CLI calls the versioned HTTP API and never connects directly to PostgreSQL or launches worker processes.
+
+~~~bash
+export AETHERFLOW_URL='http://127.0.0.1:8080'
+export AETHERFLOW_API_TOKEN='YOUR_OPERATOR_TOKEN'
+
+cargo run -p aetherflow-cli -- --help
+cargo run -p aetherflow-cli -- workers
+cargo run -p aetherflow-cli -- workflow inspect run-0001
+cargo run -p aetherflow-cli -- workflow submit --file workflow.json
+cargo run -p aetherflow-cli -- task inspect task-run-0001
+cargo run -p aetherflow-cli -- task cancel task-run-0001 --expected-version 3
+~~~
+
+Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the global --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects the server; the default is http://127.0.0.1:8080. Tokens are read only from environment variables, never command-line arguments or error output. HTTPS verification stays enabled through Rustls and the platform trust store. The --file - form reads a JSON request from standard input; request shape and size limits are the same as the v1 HTTP API.
+
 ## Run the HTTP control plane
 
 Create a high-entropy local operator token and use a disposable local database:
