@@ -361,14 +361,14 @@
       <div class="shell">
         <div class="section-head">
           <div><div class="kicker">Project status</div><h2>Built in verifiable milestones.</h2></div>
-          <p class="section-intro">This is an active engineering project. M00–M06 are complete and verified. M07 now includes tenant-authenticated HTTP routes, tenant-scoped workers and event processing, PostgreSQL v6/v7 forced-RLS and worker grant-lock policies, and a separate restricted runtime role; these changes await hosted verification. HTTPS, CLI/SDK, dashboard, and operational hardening remain.</p>
+          <p class="section-intro">This is an active engineering project. M00–M06 are complete and verified. M07 now includes tenant-authenticated HTTP routes, tenant-scoped workers and event processing, PostgreSQL v6/v7 forced-RLS and worker grant-lock policies, and a separate restricted runtime role; the tenant/RLS implementation passed Rust, PostgreSQL 18 + NATS, and Pages CI on one source SHA. HTTPS, PostgreSQL TLS negative tests, CLI/SDK, dashboard, and operational hardening remain.</p>
         </div>
         <div class="status-grid">
           <div class="status-card">
             <div class="kicker">M06 · complete</div>
             <div class="progress-number">100<span>%</span></div>
             <div class="progress-track"><div class="progress-fill"></div></div>
-            <div class="progress-caption">M00–M06 are complete, including the WASM sandbox and its scheduler-backed task-handler integration. M07 tenant routes, grant-gated event paths, forced RLS, and role separation are implemented but await hosted CI; HTTPS and developer tooling remain.</div>
+            <div class="progress-caption">M00–M06 are complete, including the WASM sandbox and its scheduler-backed task-handler integration. M07 tenant routes, grant-gated event paths, forced RLS, and role separation passed the exact-source hosted CI matrix; HTTPS and developer tooling remain.</div>
             <div style="margin-top:23px"><a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Read the full roadmap ↗</a></div>
           </div>
           <div class="status-card">
