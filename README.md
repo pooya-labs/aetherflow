@@ -4,9 +4,9 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 includes tenant-authenticated control-plane routes, tenant-scoped persistence, forced RLS, grant-gated workers/events, verified PostgreSQL Rustls connections, and HTTPS enforcement for remote listeners. The CLI is hosted-verified on [0c19b9b](https://github.com/pooya-labs/aetherflow/commit/0c19b9b7d8124472c81ce53056612344f0ebab57). The typed Rust SDK, including pre-decode base64 checks and bounded JSON serialization, passed Rust CI on [047d02f](https://github.com/pooya-labs/aetherflow/commit/047d02f619b6f73720be9a28220d4fa3a1fb1ed3) (run [41619828879](https://github.com/pooya-labs/aetherflow/actions/runs/41619828879)); Pages also passed on the same SHA (run [41619827150](https://github.com/pooya-labs/aetherflow/actions/runs/41619827150)). The dashboard and M08 operational hardening remain open. AetherFlow is experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 now includes tenant-scoped dashboard listing and redacted event-history APIs, cursor pagination, an explicit browser-origin allowlist with bounded CORS preflight, and a responsive read-only Pages dashboard. Migration v8 adds history indexes without modifying prior migrations. The CLI and typed Rust SDK are hosted-verified; the control-plane remains experimental and is not production-ready.
 >
-> **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
+> **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/) · [Open the read-only dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/).
 
 ## Why AetherFlow?
 
@@ -48,19 +48,29 @@ The versioned v1 control-plane API is implemented in apps/aetherflow-server and 
 | Method | Route | Purpose |
 |---|---|---|
 | GET | /health | Process liveness; does not check PostgreSQL |
+| GET | /api/v1/workflow-runs | List legacy-default workflow runs with keyset pagination (operator) |
 | POST | /api/v1/workflow-runs | Validate and durably submit a workflow-run snapshot |
 | GET | /api/v1/workflow-runs/{workflow_run_id} | Read a workflow run and its task summaries |
+| GET | /api/v1/workflow-runs/{workflow_run_id}/events | Read redacted workflow/task event metadata (operator) |
 | GET | /api/v1/task-runs/{task_run_id} | Read task state and payload-size metadata |
 | POST | /api/v1/task-runs/{task_run_id}/cancel | Cancel with an expected_version guard |
 | GET | /api/v1/workers | List live active worker registrations (platform operator) |
+| GET | /api/v1/tenant/workflow-runs | List the authenticated tenant's workflow runs |
 | POST | /api/v1/tenant/workflow-runs | Submit a workflow for the authenticated tenant |
 | GET | /api/v1/tenant/workflow-runs/{workflow_run_id} | Read a tenant-owned workflow |
+| GET | /api/v1/tenant/workflow-runs/{workflow_run_id}/events | Read redacted events for a tenant-owned workflow |
 | GET | /api/v1/tenant/task-runs/{task_run_id} | Read a tenant-owned task |
 | POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel a tenant-owned task with an expected_version guard |
 
 The contract and its compatibility/security decisions are recorded in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). Task input is base64 encoded and limited to 1 MiB after decoding; the HTTP request body is capped at 2 MiB. Inspection responses never return task input or output bytes. Reusing a workflow-run ID returns a conflict; the v1 API does not promise idempotent replay.
 
-**Security boundary:** `AETHERFLOW_API_TOKEN` protects platform/operator compatibility routes; tenant routes authenticate separately against stored tenant credentials and derive tenant identity server-side. `AETHERFLOW_MIGRATION_DATABASE_URL` is the DDL/migration owner pool; `DATABASE_URL` must be a restricted non-owner runtime role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, public-schema CREATE, REPLICATION, or membership in any other PostgreSQL role. Startup verifies this role and ENABLE + FORCE RLS on all ten protected tables. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener defaults to 127.0.0.1:8080; plaintext HTTP is loopback-only, and non-loopback binds require `AETHERFLOW_TLS_CERT_PATH` and `AETHERFLOW_TLS_KEY_PATH` with valid PEM material. PostgreSQL TLS chain and hostname verification passed hosted integration tests against a live PostgreSQL 18 fixture (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). Transaction-local RLS GUCs are app-controlled context and do not protect against arbitrary SQL execution or SQL injection.
+**Security boundary:** `AETHERFLOW_API_TOKEN` protects platform/operator compatibility routes; tenant routes authenticate separately against stored tenant credentials and derive tenant identity server-side. `AETHERFLOW_MIGRATION_DATABASE_URL` is the DDL/migration owner pool; `DATABASE_URL` must be a restricted non-owner runtime role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, public-schema CREATE, REPLICATION, or membership in any other PostgreSQL role. Startup verifies this role and ENABLE + FORCE RLS on all ten protected tables. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener defaults to 127.0.0.1:8080; plaintext HTTP is loopback-only, and non-loopback binds require `AETHERFLOW_TLS_CERT_PATH` and `AETHERFLOW_TLS_KEY_PATH` with valid PEM material. PostgreSQL TLS chain and hostname verification passed hosted integration tests against a live PostgreSQL 18 fixture (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). Transaction-local RLS GUCs are app-controlled context and do not protect against arbitrary SQL execution or SQL injection. Browser access is disabled by default. Set `AETHERFLOW_CORS_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins (for example, `https://pooya16pg-spec.github.io`); wildcard origins, paths, cookies, and credentialed CORS are not supported.
+
+## Read-only dashboard
+
+Open the [AetherFlow dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/) to browse workflow runs, task snapshots, active workers, and redacted event history. It is a read-only browser client; it does not submit or cancel work. The Bearer token is held in page memory only and is not persisted to local storage, cookies, or the URL. Use HTTPS for remote APIs.
+
+To connect a hosted API, configure `AETHERFLOW_CORS_ALLOWED_ORIGINS=https://pooya16pg-spec.github.io` on the API server and restart it. The origin must match exactly. Operator listing is intentionally limited to the reserved `legacy-default` tenant; tenant credentials list only their own runs. Event responses never include raw outbox payloads.
 
 ## CLI
 

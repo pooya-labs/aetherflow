@@ -15,7 +15,12 @@ info:
     and private key. PostgreSQL connections use Rustls and native CA roots,
     with chain and hostname validation required by default. Each HTTP request
     body is limited to 2 MiB; decoded task input is limited to 1 MiB per task.
-    Inspection omits payload bytes.
+    Inspection omits payload bytes. Dashboard list endpoints use bounded
+    keyset pagination; event-history responses contain only redacted metadata,
+    never raw outbox JSON. Browser access is disabled unless
+    AETHERFLOW_CORS_ALLOWED_ORIGINS contains an exact HTTP(S) origin. CORS
+    preflight is limited to GET/POST and Authorization/Content-Type; wildcard
+    origins and credentialed CORS are not supported.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development only; control-plane routes require Bearer authentication.

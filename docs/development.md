@@ -74,10 +74,12 @@ Create a high-entropy local operator token and use a disposable local database:
 export AETHERFLOW_API_TOKEN="$(openssl rand -hex 32)"
 export AETHERFLOW_MIGRATION_DATABASE_URL='postgres://aetherflow_migrator:YOUR_MIGRATION_PASSWORD@127.0.0.1:5432/aetherflow_dev'
 export DATABASE_URL='postgres://aetherflow_runtime:YOUR_RUNTIME_PASSWORD@127.0.0.1:5432/aetherflow_dev'
+# Browser access is disabled unless an exact allowed origin is configured.
+export AETHERFLOW_CORS_ALLOWED_ORIGINS='https://pooya16pg-spec.github.io'
 cargo run -p aetherflow-server
 ~~~
 
-When DATABASE_URL is set, both database URLs and AETHERFLOW_API_TOKEN are mandatory. AETHERFLOW_API_TOKEN must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
+When DATABASE_URL is set, both database URLs and AETHERFLOW_API_TOKEN are mandatory. `AETHERFLOW_CORS_ALLOWED_ORIGINS` is optional; an empty or unset value disables browser cross-origin access. AETHERFLOW_API_TOKEN must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
 
 `AETHERFLOW_MIGRATION_DATABASE_URL` is used only by the migration/DDL owner pool. `DATABASE_URL` is used only by the API runtime pool and must authenticate as a restricted non-owner role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, or membership in any other PostgreSQL role. Startup checks all ten protected tables for both ENABLE and FORCE ROW LEVEL SECURITY and fails closed if the runtime role is too privileged. Grant the runtime role only USAGE on schema public, DML on the required tables, and USAGE/SELECT on required sequences; do not grant it membership in the migration role. The migration role needs the DDL privileges required to apply the versioned schema.
 
@@ -91,7 +93,7 @@ curl --fail -H "Authorization: Bearer $AETHERFLOW_API_TOKEN" \
 
 GET /health is public process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
 
-AETHERFLOW_BIND defaults to 127.0.0.1:8080. Plain HTTP is accepted only for loopback addresses. A non-loopback bind requires both AETHERFLOW_TLS_CERT_PATH and AETHERFLOW_TLS_KEY_PATH with a valid PEM certificate chain and private key; both paths also enable HTTPS on loopback. A partial or invalid pair fails startup. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Forced RLS and tenant-scoped storage passed the exact-source Rust/PostgreSQL/NATS/Pages matrix on `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (run IDs 41602415273, 41602415207, 41602415169). For non-loopback HTTPS, provision a certificate whose subject alternative names match the address clients use, then set AETHERFLOW_BIND, AETHERFLOW_TLS_CERT_PATH, and AETHERFLOW_TLS_KEY_PATH. Live PostgreSQL 18 TLS verification passed hosted integration tests: trusted CA + correct host connected, while untrusted CA and hostname mismatch were rejected (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). This does not yet make AetherFlow production-ready.
+AETHERFLOW_BIND defaults to 127.0.0.1:8080. Plain HTTP is accepted only for loopback addresses. A non-loopback bind requires both AETHERFLOW_TLS_CERT_PATH and AETHERFLOW_TLS_KEY_PATH with a valid PEM certificate chain and private key; both paths also enable HTTPS on loopback. A partial or invalid pair fails startup. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Browser preflight accepts only GET/POST and the Authorization/Content-Type headers from an explicitly listed origin; it never enables cookies or wildcard origins. The Pages dashboard is read-only, holds its Bearer token in memory only, and does not persist credentials. Forced RLS and tenant-scoped storage passed the exact-source Rust/PostgreSQL/NATS/Pages matrix on `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (run IDs 41602415273, 41602415207, 41602415169). For non-loopback HTTPS, provision a certificate whose subject alternative names match the address clients use, then set AETHERFLOW_BIND, AETHERFLOW_TLS_CERT_PATH, and AETHERFLOW_TLS_KEY_PATH. Live PostgreSQL 18 TLS verification passed hosted integration tests: trusted CA + correct host connected, while untrusted CA and hostname mismatch were rejected (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). This does not yet make AetherFlow production-ready.
 
 ## HTTP v1 resources
 
@@ -100,17 +102,23 @@ The OpenAPI 3.1 source of truth is docs/api/openapi.yaml.
 | Method | Route | Behavior |
 |---|---|---|
 | GET | /health | Process liveness |
+| GET | /api/v1/workflow-runs | List legacy-default runs using a deterministic keyset cursor (operator) |
 | POST | /api/v1/workflow-runs | Submit and durably materialize a workflow-run snapshot |
 | GET | /api/v1/workflow-runs/{workflow_run_id} | Read a workflow-run and task status summary |
+| GET | /api/v1/workflow-runs/{workflow_run_id}/events | Read safe event metadata for a workflow and its tasks (operator) |
 | GET | /api/v1/task-runs/{task_run_id} | Read task status and payload metadata |
 | POST | /api/v1/task-runs/{task_run_id}/cancel | Version-guarded cancellation and workflow aggregation |
 | GET | /api/v1/workers | List live active worker registrations (operator credential) |
+| GET | /api/v1/tenant/workflow-runs | List the authenticated tenant's workflow runs |
 | POST | /api/v1/tenant/workflow-runs | Submit a workflow as the authenticated tenant |
 | GET | /api/v1/tenant/workflow-runs/{workflow_run_id} | Read the authenticated tenant's workflow |
+| GET | /api/v1/tenant/workflow-runs/{workflow_run_id}/events | Read safe event metadata for the authenticated tenant workflow |
 | GET | /api/v1/tenant/task-runs/{task_run_id} | Read the authenticated tenant's task |
 | POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel the authenticated tenant's task with expected_version |
 
 The submit request carries a caller-supplied unique workflow_run_id, a workflow ID, task IDs/dependencies, a retry policy, and optional base64 task input. Input is limited to 1 MiB after base64 decoding; the HTTP request body is limited to 2 MiB. A reused workflow-run ID returns 409 Conflict; no idempotent replay contract is implemented. Workflow and task inspection never return input/output bytes.
+
+The responsive read-only dashboard is published at https://pooya16pg-spec.github.io/aetherflow/dashboard/. Set `AETHERFLOW_CORS_ALLOWED_ORIGINS` to that exact origin before using it against a remote API. Operator dashboard queries intentionally see only `legacy-default`; tenant credentials remain tenant-scoped. The dashboard pages event history with an opaque cursor and never renders raw outbox payloads.
 
 The HTTP process does not launch a worker. Run durable workers separately through the PostgreSQL runtime. Workflow definitions are currently submitted per run and are not persisted as reusable versioned definitions.
 
