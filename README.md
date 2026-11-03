@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 now includes platform and tenant-authenticated Axum routes, tenant-scoped task/workflow storage, grant-gated workers and event processing, PostgreSQL migrations v4–v6, forced RLS on ten tenant-owned tables, and separate migration-owner/runtime database pools. These newer changes and their integration tests are committed but await hosted verification on the current source tree. The listener remains loopback-only; HTTPS, CLI/SDK, dashboard, and operational hardening remain open. AetherFlow is experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 now includes platform and tenant-authenticated Axum routes, tenant-scoped task/workflow storage, grant-gated workers and event processing, PostgreSQL migrations v4–v7, forced RLS on ten tenant-owned tables, and worker grant row-lock policies, and separate migration-owner/runtime database pools. These newer changes and their integration tests are committed but await hosted verification on the current source tree. The listener remains loopback-only; HTTPS, CLI/SDK, dashboard, and operational hardening remain open. AetherFlow is experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
