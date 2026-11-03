@@ -173,7 +173,7 @@
     <div class="security-note">
       <b>Credential safety</b><br>
       The token stays in this tab's memory only. It is never written to local storage, cookies, or the URL. Requests omit cookies and redirects.
-      <br><a class="help-link" href="../README.md" target="_blank" rel="noreferrer">API and security setup ↗</a>
+      <br><a class="help-link" href="https://github.com/pooya-labs/aetherflow#api-contract" target="_blank" rel="noreferrer">API and security setup ↗</a>
     </div>
     <div class="status-line" aria-live="polite">
       <span class="dot" id="connectionDot"></span>
@@ -271,6 +271,9 @@
     page: 0,
     runs: [],
     selectedId: "",
+    selectedSnapshot: null,
+    eventCursor: null,
+    events: [],
     busy: false
   };
 
@@ -287,6 +290,7 @@
   function setBusy(value) {
     state.busy = value;
     $("connectButton").disabled = value;
+    $("disconnectButton").disabled = value || !state.token;
     $("refreshButton").disabled = value || !state.token;
     $("loadMore").disabled = value || !state.token || !state.cursor;
     $("applyFilter").disabled = value || !state.token;
@@ -473,6 +477,13 @@
       eventList.append(item);
     }
     eventsSection.append(eventList);
+    if (state.eventCursor) {
+      const older = element("button", "btn ghost", "Load older events");
+      older.type = "button";
+      older.style.marginTop = "10px";
+      older.addEventListener("click", loadOlderEvents);
+      eventsSection.append(older);
+    }
     detail.append(eventsSection);
   }
 
@@ -483,6 +494,9 @@
       state.page = 0;
       state.runs = [];
       state.selectedId = "";
+      state.selectedSnapshot = null;
+      state.eventCursor = null;
+      state.events = [];
       detail.className = "detail-empty";
       detail.textContent = "Select a workflow run to inspect its tasks and event timeline.";
     }
@@ -527,9 +541,28 @@
       const root = workflowCollection() + "/" + encodeURIComponent(id);
       const snapshot = await api(root);
       const eventsPage = await api(root + "/events?limit=50");
-      renderDetail(snapshot, Array.isArray(eventsPage.events) ? eventsPage.events : []);
+      state.selectedSnapshot = snapshot;
+      state.eventCursor = eventsPage.next_cursor || null;
+      state.events = Array.isArray(eventsPage.events) ? eventsPage.events : [];
+      renderDetail(snapshot, state.events);
     } catch (error) {
       detail.replaceChildren(element("div", "empty error", error.message));
+    }
+  }
+
+  async function loadOlderEvents() {
+    if (!state.token || !state.eventCursor || !state.selectedId || !state.selectedSnapshot) return;
+    const root = workflowCollection() + "/" + encodeURIComponent(state.selectedId) + "/events";
+    const params = new URLSearchParams();
+    params.set("limit", "50");
+    params.set("cursor", state.eventCursor);
+    try {
+      const page = await api(root + "?" + params.toString());
+      state.events = state.events.concat(Array.isArray(page.events) ? page.events : []);
+      state.eventCursor = page.next_cursor || null;
+      renderDetail(state.selectedSnapshot, state.events);
+    } catch (error) {
+      detail.append(element("div", "empty error", error.message));
     }
   }
 
@@ -608,6 +641,9 @@
     state.page = 0;
     state.runs = [];
     state.selectedId = "";
+    state.selectedSnapshot = null;
+    state.eventCursor = null;
+    state.events = [];
     $("apiToken").value = "";
     $("apiBase").value = "";
     runList.replaceChildren(element("div", "empty", "Disconnected. No credential is retained."));
