@@ -44,7 +44,7 @@ if ! grep -Eq "\\*\\*Current schema in this repository:\\*\\* v${schema_version}
   printf 'Schema-upgrade runbook does not declare schema v%s.\n' "$schema_version" >&2
   exit 1
 fi
-if ! grep -Fq "`$latest_name`" "$upgrade_doc"; then
+if ! grep -Fq "$latest_name" "$upgrade_doc"; then
   printf 'Schema-upgrade runbook does not name latest migration %s.\n' "$latest_name" >&2
   exit 1
 fi
