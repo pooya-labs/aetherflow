@@ -46,7 +46,9 @@ const TENANT_OWNERSHIP_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0004_tenant_ownership.sql");
 const TENANT_SCOPED_INBOX_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0005_tenant_scoped_inbox_identity.sql");
-const MIGRATION_VERSION: i64 = 5;
+const FORCE_TENANT_RLS_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0006_force_tenant_row_level_security.sql");
+const MIGRATION_VERSION: i64 = 6;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -81,6 +83,11 @@ const MIGRATIONS: [Migration; 5] = [
         version: 5,
         name: "0005_tenant_scoped_inbox_identity.sql",
         sql: TENANT_SCOPED_INBOX_MIGRATION_SQL,
+    },
+    Migration {
+        version: 6,
+        name: "0006_force_tenant_row_level_security.sql",
+        sql: FORCE_TENANT_RLS_MIGRATION_SQL,
     },
 ];
 
@@ -428,7 +435,7 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 5);
+        assert_eq!(MIGRATION_VERSION, 6);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
@@ -441,6 +448,11 @@ mod tests {
         assert_eq!(
             MIGRATIONS[4].name,
             "0005_tenant_scoped_inbox_identity.sql"
+        );
+        assert_eq!(MIGRATIONS[5].version, 6);
+        assert_eq!(
+            MIGRATIONS[5].name,
+            "0006_force_tenant_row_level_security.sql"
         );
 
         let initial = initial_migration_checksum();
