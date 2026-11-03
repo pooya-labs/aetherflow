@@ -220,6 +220,62 @@ impl DurableTaskRun {
     }
 }
 
+/// Snapshot of one workflow run persisted in PostgreSQL.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurableWorkflowRun {
+    workflow_run_id: WorkflowRunId,
+    workflow_id: WorkflowId,
+    status: WorkflowStatus,
+    version: u64,
+    created_at: SystemTime,
+    updated_at: SystemTime,
+    task_runs: Vec<DurableTaskRun>,
+}
+
+impl DurableWorkflowRun {
+    /// Returns the workflow-run identifier.
+    #[must_use]
+    pub fn workflow_run_id(&self) -> &WorkflowRunId {
+        &self.workflow_run_id
+    }
+
+    /// Returns the submitted workflow definition identifier.
+    #[must_use]
+    pub fn workflow_id(&self) -> &WorkflowId {
+        &self.workflow_id
+    }
+
+    /// Returns the persisted workflow lifecycle state.
+    #[must_use]
+    pub fn status(&self) -> WorkflowStatus {
+        self.status
+    }
+
+    /// Returns the optimistic workflow-run version.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Returns the database creation timestamp.
+    #[must_use]
+    pub fn created_at(&self) -> SystemTime {
+        self.created_at
+    }
+
+    /// Returns the latest database update timestamp.
+    #[must_use]
+    pub fn updated_at(&self) -> SystemTime {
+        self.updated_at
+    }
+
+    /// Returns task snapshots in stable creation/identifier order.
+    #[must_use]
+    pub fn task_runs(&self) -> &[DurableTaskRun] {
+        &self.task_runs
+    }
+}
+
 /// A durable claim, including its attempt and fencing identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PgTaskClaim {
@@ -2063,6 +2119,66 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(next_status)
+    }
+
+    /// Loads a durable workflow-run summary and its task snapshots.
+    ///
+    /// The workflow row and task rows are read from the same PostgreSQL snapshot
+    /// so the public API cannot combine unrelated workflow/task identifiers.
+    pub async fn get_workflow_run(
+        &self,
+        workflow_run_id: &WorkflowRunId,
+    ) -> Result<DurableWorkflowRun, StorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let row = client
+            .query_opt(
+                "SELECT workflow_id, status, version, created_at, updated_at
+                 FROM workflow_runs
+                 WHERE workflow_run_id = $1",
+                &[&workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| {
+                StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned())
+            })?;
+
+        let workflow_id: String = row.get(0);
+        let status: String = row.get(1);
+        let version: i64 = row.get(2);
+        let created_at: SystemTime = row.get(3);
+        let updated_at: SystemTime = row.get(4);
+        let task_rows = client
+            .query(
+                "SELECT task_run_id
+                 FROM task_runs
+                 WHERE workflow_run_id = $1
+                 ORDER BY created_at, task_run_id",
+                &[&workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let mut task_runs = Vec::with_capacity(task_rows.len());
+        for task_row in task_rows {
+            let task_run_id: String = task_row.get(0);
+            task_runs.push(load_snapshot_from_client(&client, &task_run_id).await?);
+        }
+
+        Ok(DurableWorkflowRun {
+            workflow_run_id: workflow_run_id.clone(),
+            workflow_id: WorkflowId::parse(workflow_id)
+                .map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
+            status: parse_workflow_status(&status)?,
+            version: u64::try_from(version)
+                .map_err(|_| StorageError::InvalidStoredValue("negative workflow version".to_owned()))?,
+            created_at,
+            updated_at,
+            task_runs,
+        })
     }
 
     /// Loads a durable task-run snapshot, including direct dependency references.

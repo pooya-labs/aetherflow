@@ -25,8 +25,8 @@ pub use outbox::{
     PostgresOutboxDispatcher,
 };
 pub use task_repository::{
-    DurableTaskRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository, RecoveredLease,
-    TaskFailure,
+    DurableTaskRun, DurableWorkflowRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository,
+    RecoveredLease, TaskFailure,
 };
 pub use worker::{
     PostgresTaskWorker, PostgresWorkerConfig, PostgresWorkerConfigError, PostgresWorkerError,
