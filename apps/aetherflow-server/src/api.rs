@@ -649,4 +649,177 @@ mod tests {
             serde_json::Value::String("invalid_identifier".to_owned())
         );
     }
+
+    #[tokio::test]
+    async fn postgres_http_workflow_lifecycle_is_versioned_and_redacts_payloads() {
+        use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+        use tokio_postgres::{Config, NoTls};
+
+        let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+            eprintln!("AETHERFLOW_TEST_DATABASE_URL is not set; skipping HTTP/PostgreSQL integration test");
+            return;
+        };
+
+        let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+        let manager = Manager::from_config(
+            config,
+            NoTls,
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
+        );
+        let pool = Pool::builder(manager)
+            .max_size(8)
+            .build()
+            .expect("build PostgreSQL test pool");
+        aetherflow_storage_postgres::PgStore::from_pool(pool.clone())
+            .migrate()
+            .await
+            .expect("ensure PostgreSQL schema is current");
+
+        let state = AppState::from_pool(pool);
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos()
+            .to_string();
+        let workflow_id = format!("api-workflow-{suffix}");
+        let workflow_run_id = format!("api-run-{suffix}");
+        let task_id = format!("api-task-{suffix}");
+        let body = serde_json::json!({
+            "workflow_id": workflow_id,
+            "workflow_run_id": workflow_run_id,
+            "tasks": [{
+                "task_id": task_id,
+                "depends_on": [],
+                "input_base64": "cHJpdmF0ZS1wYXlsb2Fk"
+            }],
+            "retry_policy": {
+                "max_attempts": 1,
+                "initial_backoff_ms": 0,
+                "max_backoff_ms": 0
+            }
+        })
+        .to_string();
+
+        let submit = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.clone()))
+                    .expect("valid workflow submission request"),
+            )
+            .await
+            .expect("workflow submission response");
+        assert_eq!(submit.status(), StatusCode::CREATED);
+        let submit_body = to_bytes(submit.into_body(), 16 * 1024)
+            .await
+            .expect("read workflow receipt");
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&submit_body).expect("valid workflow receipt JSON");
+        assert_eq!(receipt["status"], "running");
+        assert_eq!(receipt["task_runs"][0]["status"], "pending");
+        let task_run_id = receipt["task_runs"][0]["task_run_id"]
+            .as_str()
+            .expect("task-run ID in receipt")
+            .to_owned();
+
+        let duplicate = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("valid duplicate workflow submission request"),
+            )
+            .await
+            .expect("duplicate submission response");
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+        let workflow = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/workflow-runs/{workflow_run_id}"))
+                    .body(Body::empty())
+                    .expect("valid workflow inspection request"),
+            )
+            .await
+            .expect("workflow inspection response");
+        assert_eq!(workflow.status(), StatusCode::OK);
+        let workflow_body = to_bytes(workflow.into_body(), 16 * 1024)
+            .await
+            .expect("read workflow snapshot");
+        let workflow_snapshot: serde_json::Value =
+            serde_json::from_slice(&workflow_body).expect("valid workflow snapshot JSON");
+        assert_eq!(workflow_snapshot["workflow_id"], workflow_id);
+        assert_eq!(workflow_snapshot["task_runs"].as_array().map(Vec::len), Some(1));
+
+        let task = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/task-runs/{task_run_id}"))
+                    .body(Body::empty())
+                    .expect("valid task inspection request"),
+            )
+            .await
+            .expect("task inspection response");
+        assert_eq!(task.status(), StatusCode::OK);
+        let task_body = to_bytes(task.into_body(), 16 * 1024)
+            .await
+            .expect("read task snapshot");
+        let task_snapshot: serde_json::Value =
+            serde_json::from_slice(&task_body).expect("valid task snapshot JSON");
+        assert_eq!(task_snapshot["input_size_bytes"], 15);
+        assert_eq!(task_snapshot["output_present"], false);
+        assert!(task_snapshot.get("input_base64").is_none());
+        assert!(task_snapshot.get("input_payload").is_none());
+        assert!(task_snapshot.get("output_payload").is_none());
+
+        let cancel = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"expected_version":0}"#))
+                    .expect("valid task cancellation request"),
+            )
+            .await
+            .expect("task cancellation response");
+        assert_eq!(cancel.status(), StatusCode::OK);
+        let cancel_body = to_bytes(cancel.into_body(), 16 * 1024)
+            .await
+            .expect("read cancellation response");
+        let cancelled: serde_json::Value =
+            serde_json::from_slice(&cancel_body).expect("valid cancellation response JSON");
+        assert_eq!(cancelled["task_run"]["status"], "cancelled");
+        assert_eq!(cancelled["workflow_status"], "cancelled");
+
+        let stale_cancel = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"expected_version":0}"#))
+                    .expect("valid stale cancellation request"),
+            )
+            .await
+            .expect("stale cancellation response");
+        assert_eq!(stale_cancel.status(), StatusCode::CONFLICT);
+
+        let workers = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workers")
+                    .body(Body::empty())
+                    .expect("valid worker listing request"),
+            )
+            .await
+            .expect("worker listing response");
+        assert_eq!(workers.status(), StatusCode::OK);
+    }
 }
