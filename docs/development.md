@@ -58,11 +58,23 @@ cargo +1.99.1 build --locked -p aetherflow-plugin-guest --target wasm32-unknown-
 cargo +1.99.1 run --locked -p aetherflow-plugin-host --release -- target/wasm32-unknown-unknown/release/aetherflow_plugin_guest.wasm
 ```
 
-The host harness validates the guest's embedded WIT metadata, componentizes the
-core module, and executes it through `WasmPluginRuntime`. It verifies unchanged
-opaque output bytes and runs both a default-deny invocation and an invocation
-with `log.write` explicitly granted. The Rust CI workflow builds and runs this
-example on every main push.
+The host harness validates the guest's embedded WIT metadata and componentizes
+the core module without adding WASI. It verifies a direct default-deny
+invocation, then registers `WasmTaskHandler` in `TaskRegistry` and drives it
+through `TaskScheduler` as a real workflow task. The example checks workflow
+success, unchanged output retained by the task repository, and delivery of one
+explicitly granted `log.write` message to the host sink. The handler executes
+synchronous Wasmtime calls on Tokio's blocking pool. The example uses the
+process-local in-memory repository; a separate WASM + PostgreSQL integration
+suite has not yet been added. The Rust CI workflow builds and runs this example
+on every main push.
+
+**Cancellation boundary:** scheduler cancellation/version fencing prevents a
+late handler result from settling a task whose claim is no longer current. A
+running `spawn_blocking` guest call is not force-aborted when its async future is
+dropped; it remains bounded by the Wasmtime fuel and wall-clock limits. ABI v1
+currently grants no external side-effect capability beyond opt-in bounded
+logging.
 
 ## PostgreSQL persistence work
 
