@@ -100,6 +100,24 @@ pub(crate) async fn apply_worker_identity_to_transaction(
     Ok(())
 }
 
+/// Installs the reserved legacy tenant for compatibility worker operations.
+pub(crate) async fn apply_legacy_worker_context_to_transaction(
+    transaction: &Transaction<'_>,
+) -> Result<(), StorageError> {
+    transaction
+        .query_one(
+            "SELECT
+                set_config('aetherflow.tenant_id', 'legacy-default', true),
+                set_config('aetherflow.worker_id', '', true),
+                set_config('aetherflow.principal_id', '', true),
+                set_config('aetherflow.tenant_role', 'legacy_worker', true)",
+            &[],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?;
+    Ok(())
+}
+
 /// Changes the active tenant for the remainder of one database transaction.
 ///
 /// Only call this after validating the relevant tenant credential or worker
