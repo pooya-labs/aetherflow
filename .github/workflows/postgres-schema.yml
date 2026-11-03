@@ -9,6 +9,7 @@ on:
       - "crates/aetherflow-storage-postgres/**"
       - "crates/aetherflow-transport-nats/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
+      - "apps/aetherflow-server/**"
       - ".github/workflows/postgres-schema.yml"
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - "crates/aetherflow-storage-postgres/**"
       - "crates/aetherflow-transport-nats/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
+      - "apps/aetherflow-server/**"
       - ".github/workflows/postgres-schema.yml"
   workflow_dispatch:
 
@@ -89,6 +91,9 @@ jobs:
 
       - name: Run PostgreSQL storage integration tests
         run: cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
+
+      - name: Run PostgreSQL-backed HTTP API integration tests
+        run: cargo +1.99.1 test -p aetherflow-server --locked -- --test-threads=1
 
       - name: Start three-node NATS JetStream cluster
         run: |
