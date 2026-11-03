@@ -34,7 +34,29 @@ tags:
   - name: Workers
   - name: Tenant workflow runs
   - name: Tenant task runs
+  - name: Observability
 paths:
+  /api/v1/metrics:
+    get:
+      tags: [Observability]
+      operationId: getPrometheusMetrics
+      summary: Export bounded process-level HTTP metrics
+      description: |
+        Returns aggregate HTTP counters and a bounded latency histogram.
+        No paths, query strings, tenant IDs, workflow IDs, task IDs, or other
+        high-cardinality labels are exported. The endpoint requires the
+        platform operator Bearer credential and is unavailable in health-only mode.
+      responses:
+        '200':
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /health:
     get:
       security: []
