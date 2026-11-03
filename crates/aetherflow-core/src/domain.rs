@@ -29,6 +29,7 @@ macro_rules! define_id {
 }
 
 define_id!(TenantId, "Identifies an owning tenant.");
+define_id!(PrincipalId, "Identifies an authenticated tenant principal.");
 define_id!(WorkflowId, "Identifies a workflow definition.");
 define_id!(
     WorkflowRunId,
@@ -383,6 +384,9 @@ mod tests {
         let tenant = TenantId::parse("tenant_acme").expect("valid tenant ID");
 
         assert_eq!(tenant.as_str(), "tenant_acme");
+        let principal = PrincipalId::parse("principal_ops").expect("valid principal ID");
+        assert_eq!(principal.as_str(), "principal_ops");
+        assert!(PrincipalId::parse("principal/ops").is_err());
         assert!(TenantId::parse("../tenant").is_err());
         assert_eq!(workflow.as_str(), "workflow_01");
         assert_eq!(run.as_str(), "run_01");

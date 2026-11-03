@@ -12,6 +12,8 @@ mod inbox;
 mod membership;
 mod outbox;
 mod task_repository;
+mod tenant;
+mod tenant_auth;
 mod worker;
 
 pub use coordinator::{PgWorkflowCoordinator, PgWorkflowSubmission};
@@ -24,6 +26,8 @@ pub use outbox::{
     OutboxDispatcherError, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
     PostgresOutboxDispatcher,
 };
+pub use tenant::{TenantContext, TenantPermission, TenantRole};
+pub use tenant_auth::PgTenantCredentialRepository;
 pub use task_repository::{
     DurableTaskRun, DurableWorkflowRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository,
     RecoveredLease, TaskFailure,
@@ -101,6 +105,8 @@ pub enum StorageError {
     Database(String),
     /// A workflow-run identifier has already been used.
     WorkflowRunConflict(String),
+    /// A tenant credential is malformed, unknown, revoked, expired, or not authorized.
+    InvalidTenantCredential,
     /// Migration metadata exists but does not describe the expected schema.
     UntrackedSchema,
     /// The database schema is newer than this binary supports.

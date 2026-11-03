@@ -1,5 +1,6 @@
 use aetherflow_storage_postgres::{
-    MigrationOutcome, PgStore, StorageError, initial_migration_checksum,
+    MigrationOutcome, PgStore, PgTenantCredentialRepository, StorageError,
+    TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -95,11 +96,6 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
              INSERT INTO tenant_principals
                (principal_id, tenant_id, display_name, status)
              VALUES ('principal-a', 'tenant-a', 'Tenant A operator', 'active');
-             INSERT INTO tenant_credentials
-               (credential_id, tenant_id, principal_id, token_sha256, token_prefix, role, status)
-             VALUES
-               ('credential-a', 'tenant-a', 'principal-a', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                'aether123', 'tenant_operator', 'active');
              INSERT INTO workflow_runs (workflow_run_id, workflow_id, tenant_id, status)
              VALUES
                ('workflow-a', 'workflow-definition-a', 'tenant-a', 'pending'),
@@ -116,6 +112,85 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("tenant-owned rows and same-tenant dependency are accepted");
+
+    let tenant_token = "AetherFlowTenantCredentialTest0123456789";
+    let tenant_digest = format!("{:x}", sha2::Sha256::digest(tenant_token.as_bytes()));
+    let token_prefix = &tenant_token[..12];
+    client
+        .execute(
+            "INSERT INTO tenant_credentials
+               (credential_id, tenant_id, principal_id, token_sha256, token_prefix, role, status)
+             VALUES ('credential-a', 'tenant-a', 'principal-a', $1, $2, 'tenant_operator', 'active')",
+            &[&tenant_digest, &token_prefix],
+        )
+        .await
+        .expect("seed active tenant credential");
+
+    let credentials = PgTenantCredentialRepository::from_pool(pool.clone());
+    let context = credentials
+        .authenticate_token(tenant_token)
+        .await
+        .expect("active tenant credential authenticates");
+    assert_eq!(context.tenant_id().as_str(), "tenant-a");
+    assert_eq!(context.principal_id().as_str(), "principal-a");
+    assert_eq!(context.role(), TenantRole::Operator);
+    assert!(context.allows(TenantPermission::Read));
+    assert!(context.allows(TenantPermission::Submit));
+    assert!(context.allows(TenantPermission::Cancel));
+    assert!(!context.allows(TenantPermission::ManageCredentials));
+
+    let last_used: Option<std::time::SystemTime> = client
+        .query_one(
+            "SELECT last_used_at FROM tenant_credentials WHERE credential_id = 'credential-a'",
+            &[],
+        )
+        .await
+        .expect("read credential usage timestamp")
+        .get(0);
+    assert!(last_used.is_some());
+
+    let bad_token = credentials
+        .authenticate_token("AetherFlowTenantCredentialTest0123456780")
+        .await;
+    assert!(matches!(bad_token, Err(StorageError::InvalidTenantCredential)));
+
+    client
+        .execute(
+            "UPDATE tenant_credentials
+             SET status = 'revoked', revoked_at = clock_timestamp()
+             WHERE credential_id = 'credential-a'",
+            &[],
+        )
+        .await
+        .expect("revoke tenant credential");
+    let revoked_token = credentials.authenticate_token(tenant_token).await;
+    assert!(matches!(
+        revoked_token,
+        Err(StorageError::InvalidTenantCredential)
+    ));
+    client
+        .execute(
+            "UPDATE tenant_credentials
+             SET status = 'active', revoked_at = NULL, expires_at = clock_timestamp() - INTERVAL '1 second'
+             WHERE credential_id = 'credential-a'",
+            &[],
+        )
+        .await
+        .expect("expire tenant credential");
+    let expired_token = credentials.authenticate_token(tenant_token).await;
+    assert!(matches!(
+        expired_token,
+        Err(StorageError::InvalidTenantCredential)
+    ));
+    client
+        .execute(
+            "UPDATE tenant_credentials
+             SET expires_at = NULL
+             WHERE credential_id = 'credential-a'",
+            &[],
+        )
+        .await
+        .expect("restore tenant credential for remaining migration assertions");
 
     let cross_tenant_task = client
         .execute(
