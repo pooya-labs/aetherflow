@@ -10,6 +10,7 @@ mod trace_context;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use axum_server::tls_rustls::RustlsConfig;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -269,16 +270,23 @@ fn validate_http_transport(
 /// Installs the explicitly selected Rustls crypto provider before constructing
 /// PostgreSQL or HTTPS TLS configurations.
 fn ensure_rustls_crypto_provider() -> Result<(), std::io::Error> {
-    if rustls::crypto::CryptoProvider::get_default().is_none()
-        && rustls::crypto::ring::default_provider()
-            .install_default()
-            .is_err()
-    {
-        return Err(std::io::Error::other(
+    static INITIALIZATION: OnceLock<()> = OnceLock::new();
+
+    // Rustls stores its default provider process-wide. Serialize initialization
+    // so concurrent server tests/startup paths cannot race to install it.
+    INITIALIZATION.get_or_init(|| {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+    });
+
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(
             "unable to install the rustls ring crypto provider",
-        ));
+        ))
     }
-    Ok(())
 }
 
 /// Ensures the API is connected through a role that cannot bypass tenant RLS.
@@ -467,6 +475,18 @@ mod tests {
         postgres_pool_with_ssl_mode, should_export_otlp, validate_http_transport,
         verify_runtime_database_role,
     };
+
+    #[test]
+    fn rustls_provider_initialization_is_safe_under_concurrency() {
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                scope.spawn(|| {
+                    ensure_rustls_crypto_provider()
+                        .expect("concurrent Rustls provider initialization succeeds");
+                });
+            }
+        });
+    }
 
     #[test]
     fn otlp_export_requires_an_endpoint_and_honors_explicit_disable() {
