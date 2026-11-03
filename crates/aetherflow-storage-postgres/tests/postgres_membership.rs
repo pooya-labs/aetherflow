@@ -9,8 +9,9 @@ use aetherflow_core::domain::{
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_storage_postgres::{
     MembershipStatus, MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore,
-    PgTaskRepository, StorageError, TaskFailure,
+    PgTaskRepository, PgTenantCredentialRepository, StorageError, TaskFailure,
 };
+use sha2::{Digest, Sha256};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::{
     io::copy_bidirectional,
@@ -929,9 +930,50 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         WorkerId::parse(format!("partition-new-worker-{suffix}")).expect("valid new worker ID");
     let retry_policy = RetryPolicy::new(NonZeroU32::new(2).expect("positive retry budget"), 0, 0)
         .expect("valid retry policy");
+    let tenant_id = format!("partition-tenant-{suffix}");
+    let principal_id = format!("partition-principal-{suffix}");
+    let credential_id = format!("partition-credential-{suffix}");
+    let tenant_token = format!("AetherFlowPartitionCredential{suffix}");
+    let tenant_digest = format!("{:x}", Sha256::digest(tenant_token.as_bytes()));
+    let token_prefix = &tenant_token[..12];
+
+    let setup_client = admin_pool
+        .get()
+        .await
+        .expect("get admin connection for tenant fixture");
+    setup_client
+        .execute(
+            "INSERT INTO tenants (tenant_id, display_name, status)
+             VALUES ($1, 'Partition test tenant', 'active')",
+            &[&tenant_id],
+        )
+        .await
+        .expect("create tenant for the partition test");
+    setup_client
+        .execute(
+            "INSERT INTO tenant_principals (principal_id, tenant_id, display_name, status)
+             VALUES ($1, $2, 'Partition test operator', 'active')",
+            &[&principal_id, &tenant_id],
+        )
+        .await
+        .expect("create tenant principal for the partition test");
+    setup_client
+        .execute(
+            "INSERT INTO tenant_credentials
+               (credential_id, tenant_id, principal_id, token_sha256, token_prefix, role, status)
+             VALUES ($1, $2, $3, $4, $5, 'tenant_operator', 'active')",
+            &[&credential_id, &tenant_id, &principal_id, &tenant_digest, &token_prefix],
+        )
+        .await
+        .expect("create tenant credential for the partition test");
+    let tenant_context = PgTenantCredentialRepository::from_pool(admin_pool.clone())
+        .authenticate_token(&tenant_token)
+        .await
+        .expect("authenticate the partition test tenant");
 
     admin_tasks
-        .create_workflow(
+        .create_workflow_for_tenant(
+            &tenant_context,
             &workflow_run_id,
             &workflow_id,
             None,
@@ -945,11 +987,7 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             )],
         )
         .await
-        .expect("create task before database partition");
-    admin_tasks
-        .promote_due_tasks(8)
-        .await
-        .expect("promote partition test task");
+        .expect("create tenant-owned task before database partition");
 
     // Use a dedicated database role for the old process so its DB access can
     // be cut without interrupting the replacement node or the test controller.
@@ -1053,6 +1091,8 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
     };
 
     let shared_markers = PartitionTestDirectory::new(&suffix);
+    let registered_path = shared_markers.join("old-worker.registered");
+    let grant_path = shared_markers.join("old-worker.grant-ready");
     let ready_path = shared_markers.join("old-worker.ready");
     let partition_path = shared_markers.join("partition");
     let partition_ack_path = shared_markers.join("partition-ack");
@@ -1102,6 +1142,14 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         (
             "AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID",
             format!("partition-old-attempt-{suffix}"),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_REGISTERED_PATH",
+            registered_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "AETHERFLOW_PARTITION_CHILD_GRANT_PATH",
+            grant_path.to_string_lossy().into_owned(),
         ),
         (
             "AETHERFLOW_PARTITION_CHILD_READY_PATH",
@@ -1165,6 +1213,27 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             .expect("spawn old worker in a separate OS process"),
     );
 
+    let registration_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !registered_path.exists() && tokio::time::Instant::now() < registration_deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    if !registered_path.exists() {
+        let _ = old_worker_process.0.kill();
+        let _ = old_worker_process.0.wait();
+        panic!("old worker process did not publish its registration before timeout");
+    }
+    admin_client
+        .execute(
+            "INSERT INTO worker_tenant_grants
+               (tenant_id, worker_id, status, granted_by_principal_id)
+             VALUES ($1, $2, 'active', $3)",
+            &[&tenant_id, &old_worker_id.as_str(), &principal_id],
+        )
+        .await
+        .expect("grant the old worker access to the partition tenant");
+    std::fs::write(&grant_path, "granted")
+        .expect("release the old worker after committing its tenant grant");
+
     let ready_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !ready_path.exists() && tokio::time::Instant::now() < ready_deadline {
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1214,6 +1283,15 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
         )
         .await
         .expect("replacement worker registers under new epoch");
+    admin_client
+        .execute(
+            "INSERT INTO worker_tenant_grants
+               (tenant_id, worker_id, status, granted_by_principal_id)
+             VALUES ($1, $2, 'active', $3)",
+            &[&tenant_id, &new_worker_id.as_str(), &principal_id],
+        )
+        .await
+        .expect("grant the replacement worker access to the partition tenant");
 
     // The new epoch owns recovery after the old task lease expires. The old
     // claim remains fenced even though the database connection is restored.
@@ -1352,6 +1430,8 @@ async fn postgres_partition_old_worker_child_process() {
         Ok(task_id),
         Ok(task_run_id),
         Ok(attempt_id),
+        Ok(registered_path),
+        Ok(grant_path),
         Ok(ready_path),
         Ok(partition_path),
         Ok(partition_ack_path),
@@ -1368,6 +1448,8 @@ async fn postgres_partition_old_worker_child_process() {
         std::env::var("AETHERFLOW_PARTITION_CHILD_TASK_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_TASK_RUN_ID"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_ATTEMPT_ID"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_REGISTERED_PATH"),
+        std::env::var("AETHERFLOW_PARTITION_CHILD_GRANT_PATH"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_READY_PATH"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_PARTITION_PATH"),
         std::env::var("AETHERFLOW_PARTITION_CHILD_PARTITION_ACK_PATH"),
@@ -1409,6 +1491,19 @@ async fn postgres_partition_old_worker_child_process() {
         )
         .await
         .expect("old child worker registers");
+    std::fs::write(&registered_path, "registered")
+        .expect("publish worker registration before tenant grant");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !std::path::Path::new(&grant_path).exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("parent should grant the tenant before task claim");
+    tasks
+        .promote_due_tasks_registered(&registration, 8)
+        .await
+        .expect("old child worker promotes its granted tenant task");
     let claim = tasks
         .claim_next_registered_for_tasks(
             &registration,
