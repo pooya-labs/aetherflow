@@ -66,6 +66,9 @@ jobs:
       - name: Verify formatting
         run: cargo +1.99.1 fmt --all -- --check
 
+      - name: Validate dashboard JavaScript syntax
+        run: node --check dashboard/app.js
+
       - name: Run Clippy
         run: cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings
 
