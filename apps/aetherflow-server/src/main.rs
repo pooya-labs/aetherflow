@@ -259,9 +259,15 @@ async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>>
 }
 
 fn postgres_pool(database_url: &str) -> Result<Pool, Box<dyn Error>> {
+    postgres_pool_with_ssl_mode(database_url, database_ssl_mode()?)
+}
+
+fn postgres_pool_with_ssl_mode(
+    database_url: &str,
+    ssl_mode: SslMode,
+) -> Result<Pool, Box<dyn Error>> {
     ensure_rustls_crypto_provider()?;
 
-    let ssl_mode = database_ssl_mode()?;
     let tls = if ssl_mode == SslMode::Disable {
         MakeRustlsConnect::new(
             rustls::ClientConfig::builder()
@@ -332,11 +338,12 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio_postgres::config::SslMode;
     use tokio_postgres::{Config, NoTls};
+    use tokio_postgres_rustls::MakeRustlsConnect;
     use tokio_rustls::TlsConnector;
 
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
-        validate_http_transport, verify_runtime_database_role,
+        postgres_pool_with_ssl_mode, validate_http_transport, verify_runtime_database_role,
     };
 
     #[tokio::test]
@@ -394,6 +401,82 @@ mod tests {
         assert!(
             verify_runtime_database_role(&member_pool).await.is_err(),
             "a runtime login that can SET ROLE to another role must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_rustls_accepts_trusted_ca_and_rejects_untrusted_or_wrong_hostname() {
+        let Ok(database_url) = std::env::var("AETHERFLOW_TLS_TEST_DATABASE_URL") else {
+            eprintln!("AETHERFLOW_TLS_TEST_DATABASE_URL is not set; skipping PostgreSQL TLS test");
+            return;
+        };
+        let Ok(hostname_mismatch_url) =
+            std::env::var("AETHERFLOW_TLS_HOSTNAME_MISMATCH_DATABASE_URL")
+        else {
+            eprintln!(
+                "AETHERFLOW_TLS_HOSTNAME_MISMATCH_DATABASE_URL is not set; skipping PostgreSQL TLS test"
+            );
+            return;
+        };
+
+        ensure_rustls_crypto_provider().expect("install ring crypto provider");
+
+        // Exercise the same native CA store used by the production pool. The
+        // hosted fixture is signed by a temporary CA installed in the runner
+        // trust store and contains the 127.0.0.1 IP subject alternative name.
+        let trusted_pool =
+            postgres_pool_with_ssl_mode(&database_url, SslMode::Require)
+                .expect("build PostgreSQL pool with native CA roots");
+        let trusted_client = trusted_pool
+            .get()
+            .await
+            .expect("accept a trusted PostgreSQL certificate with a matching IP SAN");
+        let row = trusted_client
+            .query_one(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await
+            .expect("inspect PostgreSQL TLS session");
+        assert!(
+            row.get::<_, bool>(0),
+            "the trusted PostgreSQL integration connection must use TLS"
+        );
+        drop(trusted_client);
+        drop(trusted_pool);
+
+        // An otherwise identical Rustls client with no trust anchors must
+        // reject the real PostgreSQL certificate chain.
+        let mut config: Config = database_url.parse().expect("valid PostgreSQL test URL");
+        config.ssl_mode(SslMode::Require);
+        let untrusted_tls = MakeRustlsConnect::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth(),
+        );
+        let manager = Manager::from_config(
+            config,
+            untrusted_tls,
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
+        );
+        let untrusted_pool = Pool::builder(manager)
+            .max_size(1)
+            .build()
+            .expect("build PostgreSQL pool without trusted roots");
+        assert!(
+            untrusted_pool.get().await.is_err(),
+            "PostgreSQL TLS must reject a certificate whose CA is not trusted"
+        );
+
+        // This hostname resolves to the same server but does not match its SAN.
+        let mismatch_pool =
+            postgres_pool_with_ssl_mode(&hostname_mismatch_url, SslMode::Require)
+                .expect("build hostname-mismatch PostgreSQL pool");
+        assert!(
+            mismatch_pool.get().await.is_err(),
+            "PostgreSQL TLS must reject a trusted certificate with the wrong hostname"
         );
     }
 

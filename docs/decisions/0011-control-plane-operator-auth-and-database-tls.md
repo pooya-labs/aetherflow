@@ -1,8 +1,8 @@
 # ADR-0011: Control-plane operator authentication and PostgreSQL TLS
 
-- **Status:** Accepted for the single-operator development boundary
+- **Status:** Accepted; HTTP listener TLS boundary added
 - **Date:** 2026-11-03
-- **Scope:** HTTP control-plane credentials and the server's PostgreSQL client transport
+- **Scope:** HTTP control-plane credentials, HTTP listener TLS, and PostgreSQL client transport
 
 ## Context
 
@@ -28,9 +28,15 @@ The existing storage model has global workflow/task IDs and no tenant key on dur
 4. Private database CAs must be installed in the operating system's native trust store before starting the service. The application does not silently trust a certificate supplied by an arbitrary endpoint.
 5. This TLS setting protects the server-to-PostgreSQL connection. It does not enable HTTPS on the HTTP listener.
 
-### Exposure and authorization boundary
+### HTTP listener TLS boundary
 
-The listener continues to default to loopback and rejects non-loopback binds. The operator token is a useful local control-plane gate, but **tenant isolation and multi-principal authorization remain unimplemented**. Durable records are still global to this server/database. Do not expose the listener to an untrusted network until the schema, repositories, API reads/writes, and authorization policy all enforce tenant ownership, and HTTP transport is protected by HTTPS or an equivalent trusted TLS-terminating boundary.
+1. The listener defaults to `127.0.0.1:8080`; plaintext HTTP is permitted only on loopback.
+2. A non-loopback bind requires both `AETHERFLOW_TLS_CERT_PATH` and `AETHERFLOW_TLS_KEY_PATH`. The server parses the PEM certificate chain and private key before database migrations or binding and fails closed for a partial or invalid pair.
+3. A loopback bind may use plain HTTP for local development or HTTPS when both TLS paths are supplied.
+4. Rustls listener tests verify a successful handshake, malformed PEM rejection, untrusted-chain rejection, hostname-mismatch rejection, and rejection of raw HTTP on the TLS socket. These passed Rust CI on source `54b17742aee822f37a4a3b034968bbcd3e851c13`.
+5. Operators remain responsible for certificate issuance, renewal, private-key protection, and matching certificate SANs to the address clients use.
+
+Tenant ownership, tenant-authenticated routes, forced RLS on tenant tables, and worker-to-tenant grants are implemented under ADR-0012. Direct non-loopback HTTP exposure is blocked unless HTTPS is configured. Live PostgreSQL Rustls trust/hostname verification is still the next hosted security gate.
 
 ## Consequences
 
@@ -39,8 +45,8 @@ The listener continues to default to loopback and rejects non-loopback binds. Th
 - A shared operator token is intentionally simple and is appropriate only for one trusted operator/service boundary.
 - The PostgreSQL client now uses encrypted transport by default and fails closed on untrusted certificates or a hostname mismatch.
 - `DATABASE_SSL_MODE=disable` is a deliberate local-development escape hatch; it must not be used for remote databases.
-- Rate limiting, per-principal audit identity, token rotation without restart, RBAC, tenant-scoped storage, and HTTP HTTPS deployment remain future work.
+- Rate limiting, per-principal audit identity, token rotation without restart, stronger operational controls, and the M08 threat-model/SLO work remain future work.
 
 ## Revisit when
 
-Before opening non-loopback access, design tenant identity and ownership in PostgreSQL, add tenant predicates to every durable query and mutation, add per-principal authorization and audit attribution, and document an HTTPS deployment boundary.
+Before production deployment, complete live PostgreSQL certificate-chain and hostname verification, publish the threat model and operational guidance, and add the remaining M08 observability, backup/restore, load, and supply-chain controls.
