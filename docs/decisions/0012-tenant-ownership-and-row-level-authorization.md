@@ -1,8 +1,14 @@
 # ADR-0012: Tenant ownership and row-level authorization
 
-- **Status:** Accepted design; implementation is pending
+- **Status:** Accepted; tenant ownership schema migration v4 implemented and hosted-verified; runtime tenant enforcement remains pending
 - **Date:** 2026-11-03
 - **Scope:** Tenant identity, API principals and credentials, durable workflow ownership, worker grants, and PostgreSQL row-level isolation
+
+## Implementation status (2026-11-03)
+
+The additive PostgreSQL migration v4 has been implemented and hosted-verified on PostgreSQL 18. It creates the tenant/principal/credential registry and worker-to-tenant grant table, backfills existing workflow, task, dependency, attempt, outbox, and inbox records into `legacy-default`, and adds tenant-consistent composite foreign keys and tenant-leading indexes. True v3-to-v4 backfill, checksum drift, cross-tenant FK rejection, and schema ledger/table/index invariants passed in [PostgreSQL/NATS run 41575288110](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41575288110) on source 3a7d704.
+
+This does **not** mean row-level tenant isolation is active. Repository methods and the API still lack authenticated `TenantContext`, RLS is not enabled, tenant credentials and route roles are not enforced, and workers do not yet enforce `worker_tenant_grants`. The global operator token remains a local/platform bootstrap credential, not a tenant identity. Keep the HTTP listener loopback-only and do not create customer tenant data until the full implementation sequence below is complete.
 
 ## Context
 
