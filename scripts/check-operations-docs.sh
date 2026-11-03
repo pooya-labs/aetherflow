@@ -54,7 +54,11 @@ mapfile -t protected_tables < <(
     sed -nE "s/.*'([a-z_]+)'.*/\\1/p"
 )
 mapfile -t documented_tables < <(
-  sed -n '/SELECT count(\\*) AS forced_rls_tables/,/AND c.relforcerowsecurity;/p' "$upgrade_doc" |
+  awk '
+    index($0, "SELECT count(*) AS forced_rls_tables") { in_query = 1 }
+    in_query { print }
+    in_query && index($0, "AND c.relforcerowsecurity;") { in_query = 0 }
+  ' "$upgrade_doc" |
     sed -nE "s/.*'([a-z_]+)'.*/\\1/p"
 )
 
