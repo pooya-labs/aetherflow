@@ -193,6 +193,9 @@ impl fmt::Display for StorageError {
             Self::WorkflowRunConflict(id) => {
                 write!(formatter, "workflow run already exists: {id}")
             }
+            Self::InvalidTenantCredential => {
+                formatter.write_str("tenant credential is invalid or not authorized")
+            }
             Self::UntrackedSchema => formatter.write_str(
                 "PostgreSQL schema metadata exists without the expected migration history",
             ),
