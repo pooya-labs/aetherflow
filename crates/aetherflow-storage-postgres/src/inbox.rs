@@ -106,7 +106,7 @@ impl InboxClaim {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InboxClaimResult {
     /// The caller owns a new or reclaimed processing lease.
-    Acquired(InboxClaim),
+    Acquired(Box<InboxClaim>),
     /// This consumer has already completed the event and may ack broker redelivery.
     AlreadyProcessed,
     /// Another worker currently owns an unexpired processing lease.
@@ -181,12 +181,12 @@ impl PgInboxRepository {
         if registration.is_none() && tenant_id != "legacy-default" {
             return Err(StorageError::InvalidTenantCredential);
         }
-        if let Some(registration) = registration {
-            if registration.worker_id() != worker_id {
-                return Err(StorageError::WorkerRegistrationLost(
-                    worker_id.as_str().to_owned(),
-                ));
-            }
+        if let Some(registration) = registration
+            && registration.worker_id() != worker_id
+        {
+            return Err(StorageError::WorkerRegistrationLost(
+                worker_id.as_str().to_owned(),
+            ));
         }
 
         let lease_millis = lease_duration.as_millis();
@@ -231,7 +231,7 @@ impl PgInboxRepository {
         let result = if let Some(row) = row {
             let claim_token: i64 = row.get(0);
             let attempts: i64 = row.get(1);
-            InboxClaimResult::Acquired(InboxClaim {
+            InboxClaimResult::Acquired(Box::new(InboxClaim {
                 tenant_id: tenant_id.to_owned(),
                 consumer_name: consumer_name.to_owned(),
                 event_id: event_id.to_owned(),
@@ -247,7 +247,7 @@ impl PgInboxRepository {
                         "consumer inbox attempt count is outside the supported range".to_owned(),
                     )
                 })?,
-            })
+            }))
         } else {
             let row = transaction
                 .query_opt(
