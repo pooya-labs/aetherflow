@@ -706,9 +706,11 @@ impl PgTaskRepository {
         Ok(promoted)
     }
 
-    /// Claims one ready task with SKIP LOCKED, an attempt row, fencing token, and outbox event.
+    /// Claims one ready legacy-default task with SKIP LOCKED, an attempt row,
+    /// fencing token, and outbox event.
     ///
-    /// This low-level API does not validate cluster membership. Distributed
+    /// This low-level API does not validate cluster membership or tenant grants.
+    /// It is intentionally restricted to the reserved legacy tenant. Distributed
     /// workers must use `claim_next_registered`.
     pub async fn claim_next(
         &self,
@@ -792,27 +794,36 @@ impl PgTaskRepository {
                 .map(|task_id| task_id.as_str().to_owned())
                 .collect::<Vec<_>>()
         });
+        let granted_worker_id = registration.map(|value| value.worker_id().as_str());
         let candidate = transaction
             .query_opt(
-                "SELECT task.task_run_id \
+                "SELECT task.tenant_id, task.task_run_id \
              FROM task_runs AS task \
              WHERE task.status = 'ready' \
                AND task.available_at <= clock_timestamp() \
                AND task.attempts_started < task.max_attempts \
                AND ($1::text[] IS NULL OR task.task_id = ANY($1)) \
+               AND (task.tenant_id = 'legacy-default' OR EXISTS ( \
+                   SELECT 1 FROM worker_tenant_grants AS grant_row \
+                   WHERE grant_row.tenant_id = task.tenant_id \
+                     AND grant_row.worker_id = $2 \
+                     AND grant_row.status = 'active' \
+                     AND (grant_row.expires_at IS NULL OR grant_row.expires_at > clock_timestamp()) \
+               )) \
                AND NOT EXISTS ( \
                    SELECT 1 \
                    FROM task_run_dependencies AS edge \
                    JOIN task_runs AS parent \
                      ON parent.workflow_run_id = edge.workflow_run_id \
                     AND parent.task_run_id = edge.parent_task_run_id \
-                   WHERE edge.workflow_run_id = task.workflow_run_id \
+                   WHERE edge.tenant_id = task.tenant_id \
+                     AND edge.workflow_run_id = task.workflow_run_id \
                      AND edge.child_task_run_id = task.task_run_id \
                      AND parent.status <> 'succeeded' \
                ) \
              ORDER BY task.available_at, task.created_at, task.task_run_id \
              LIMIT 1 FOR UPDATE OF task SKIP LOCKED",
-                &[&supported_task_ids],
+                &[&supported_task_ids, &granted_worker_id],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
@@ -824,17 +835,26 @@ impl PgTaskRepository {
                 .map_err(|error| StorageError::Database(error.to_string()))?;
             return Ok(None);
         };
-        let task_run_id: String = candidate.get(0);
+        let tenant_id: String = candidate.get(0);
+        let task_run_id: String = candidate.get(1);
+        if let Some(registration) = registration {
+            lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        }
         let updated = transaction.query_opt(
             "UPDATE task_runs \
              SET status = 'running', version = version + 1, \
                  attempts_started = attempts_started + 1, fencing_token = fencing_token + 1, \
-                 claimed_by = $2, \
-                 lease_expires_at = clock_timestamp() + make_interval(secs => $3), \
+                 claimed_by = $3, \
+                 lease_expires_at = clock_timestamp() + make_interval(secs => $4), \
                  started_at = COALESCE(started_at, clock_timestamp()), updated_at = clock_timestamp() \
-             WHERE task_run_id = $1 AND status = 'ready' \
+             WHERE task_run_id = $1 AND tenant_id = $2 AND status = 'ready' \
              RETURNING attempts_started, fencing_token, version",
-            &[&task_run_id, &worker_id.as_str(), &lease_seconds],
+            &[
+                &task_run_id,
+                &tenant_id,
+                &worker_id.as_str(),
+                &lease_seconds,
+            ],
         ).await.map_err(|error| StorageError::Database(error.to_string()))?
          .ok_or_else(|| StorageError::InconsistentState(
              "locked ready task disappeared before claim update".to_owned(),
@@ -846,10 +866,11 @@ impl PgTaskRepository {
         transaction
             .execute(
                 "INSERT INTO task_attempts \
-             (attempt_id, task_run_id, attempt_number, worker_id, fencing_token, outcome) \
-             VALUES ($1, $2, $3, $4, $5, 'running')",
+             (attempt_id, tenant_id, task_run_id, attempt_number, worker_id, fencing_token, outcome) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running')",
                 &[
                     &attempt_id.as_str(),
+                    &tenant_id,
                     &task_run_id,
                     &attempt_number,
                     &worker_id.as_str(),
@@ -858,8 +879,9 @@ impl PgTaskRepository {
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            &tenant_id,
             "task_run",
             &task_run_id,
             version,
@@ -873,7 +895,7 @@ impl PgTaskRepository {
         )
         .await?;
 
-        let snapshot = load_snapshot(&transaction, &task_run_id).await?;
+        let snapshot = load_snapshot_for_tenant(&transaction, &tenant_id, &task_run_id).await?;
         transaction
             .commit()
             .await
@@ -2508,6 +2530,35 @@ fn sql_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| {
         StorageError::InvalidStoredValue("integer exceeds PostgreSQL BIGINT".to_owned())
     })
+}
+
+async fn lock_worker_tenant_grant(
+    transaction: &Transaction<'_>,
+    registration: &WorkerRegistration,
+    tenant_id: &str,
+) -> Result<(), StorageError> {
+    if tenant_id == "legacy-default" {
+        return Ok(());
+    }
+
+    let grant = transaction
+        .query_opt(
+            "SELECT tenant_id FROM worker_tenant_grants
+             WHERE tenant_id = $1 AND worker_id = $2 AND status = 'active'
+               AND (expires_at IS NULL OR expires_at > clock_timestamp())
+             FOR SHARE",
+            &[&tenant_id, &registration.worker_id().as_str()],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?;
+    if grant.is_none() {
+        return Err(StorageError::WorkerRegistrationLost(format!(
+            "{} has no active grant for tenant {}",
+            registration.worker_id().as_str(),
+            tenant_id
+        )));
+    }
+    Ok(())
 }
 
 async fn append_outbox_for_tenant(
