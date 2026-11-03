@@ -979,15 +979,18 @@ impl PgTaskRepository {
             // Existing work may settle while draining, but a stale epoch cannot write.
             lock_worker_registration(&transaction, registration, false).await?;
         }
+        let tenant_id =
+            lock_task_tenant_for_worker(&transaction, task_run_id, worker_id, registration).await?;
         let row = transaction
             .query_opt(
                 "UPDATE task_runs \
-             SET lease_expires_at = clock_timestamp() + make_interval(secs => $5) \
-             WHERE task_run_id = $1 AND status = 'running' AND claimed_by = $2 \
-               AND version = $3 AND fencing_token = $4 \
+             SET lease_expires_at = clock_timestamp() + make_interval(secs => $6) \
+             WHERE tenant_id = $1 AND task_run_id = $2 AND status = 'running' AND claimed_by = $3 \
+               AND version = $4 AND fencing_token = $5 \
                AND lease_expires_at > clock_timestamp() \
              RETURNING attempts_started, lease_expires_at",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &worker_id.as_str(),
                     &expected_version,
@@ -997,15 +1000,16 @@ impl PgTaskRepository {
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
-        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
+        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
         let attempt_number: i32 = row.get(0);
         let expiry: SystemTime = row.get(1);
         let updated = transaction
             .execute(
                 "UPDATE task_attempts SET heartbeat_at = clock_timestamp() \
-             WHERE task_run_id = $1 AND attempt_number = $2 AND worker_id = $3 \
-               AND fencing_token = $4 AND outcome = 'running'",
+             WHERE tenant_id = $1 AND task_run_id = $2 AND attempt_number = $3 \
+               AND worker_id = $4 AND fencing_token = $5 AND outcome = 'running'",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &attempt_number,
                     &worker_id.as_str(),
@@ -2530,6 +2534,36 @@ fn sql_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| {
         StorageError::InvalidStoredValue("integer exceeds PostgreSQL BIGINT".to_owned())
     })
+}
+
+async fn lock_task_tenant_for_worker(
+    transaction: &Transaction<'_>,
+    task_run_id: &TaskRunId,
+    worker_id: &WorkerId,
+    registration: Option<&WorkerRegistration>,
+) -> Result<String, StorageError> {
+    let row = transaction
+        .query_opt(
+            "SELECT tenant_id FROM task_runs WHERE task_run_id = $1 FOR UPDATE",
+            &[&task_run_id.as_str()],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?
+        .ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
+    let tenant_id: String = row.get(0);
+
+    if let Some(registration) = registration {
+        if registration.worker_id() != worker_id {
+            return Err(StorageError::WorkerRegistrationLost(
+                worker_id.as_str().to_owned(),
+            ));
+        }
+        lock_worker_tenant_grant(transaction, registration, &tenant_id).await?;
+    } else if tenant_id != "legacy-default" {
+        return Err(StorageError::ClaimLost(task_run_id.as_str().to_owned()));
+    }
+
+    Ok(tenant_id)
 }
 
 async fn lock_worker_tenant_grant(
