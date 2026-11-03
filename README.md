@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 now includes tenant-scoped dashboard listing and redacted event-history APIs, cursor pagination, an explicit browser-origin allowlist with bounded CORS preflight, and a responsive read-only Pages dashboard. Migration v8 adds history indexes without modifying prior migrations. The CLI and typed Rust SDK are hosted-verified; the control-plane remains experimental and is not production-ready.
+> **Project status:** M00–M07 are complete; M08 is in progress. The server now emits structured JSON logs, request-scoped tracing spans, and bounded Prometheus HTTP metrics at the operator-authenticated `/api/v1/metrics` endpoint. Exact main SHA `7e733cb53871f86bd30e47993a6b0b4c28ab68ee` passed Rust CI, PostgreSQL/NATS integration, and Pages deployment. W3C trace-context propagation and an OTLP exporter are the next observability tasks. The control plane remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/) · [Open the read-only dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/).
 
