@@ -394,22 +394,15 @@ mod tests {
         let remote: SocketAddr = "0.0.0.0:8443".parse().expect("valid wildcard address");
 
         assert!(
-            !validate_http_transport(loopback, false, false)
-                .expect("loopback HTTP is allowed")
+            !validate_http_transport(loopback, false, false).expect("loopback HTTP is allowed")
         );
-        assert!(
-            validate_http_transport(loopback, true, true)
-                .expect("loopback HTTPS is allowed")
-        );
+        assert!(validate_http_transport(loopback, true, true).expect("loopback HTTPS is allowed"));
         assert!(validate_http_transport(loopback, true, false).is_err());
         assert!(validate_http_transport(loopback, false, true).is_err());
         assert!(validate_http_transport(remote, false, false).is_err());
         assert!(validate_http_transport(remote, true, false).is_err());
         assert!(validate_http_transport(remote, false, true).is_err());
-        assert!(
-            validate_http_transport(remote, true, true)
-                .expect("remote HTTPS is allowed")
-        );
+        assert!(validate_http_transport(remote, true, true).expect("remote HTTPS is allowed"));
     }
 
     #[tokio::test]
