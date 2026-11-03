@@ -38,7 +38,9 @@ const CONSUMER_INBOX_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0002_consumer_inbox.sql");
 const NODE_MEMBERSHIP_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0003_node_membership.sql");
-const MIGRATION_VERSION: i64 = 3;
+const TENANT_OWNERSHIP_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0004_tenant_ownership.sql");
+const MIGRATION_VERSION: i64 = 4;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -48,7 +50,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 4] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -63,6 +65,11 @@ const MIGRATIONS: [Migration; 3] = [
         version: 3,
         name: "0003_node_membership.sql",
         sql: NODE_MEMBERSHIP_MIGRATION_SQL,
+    },
+    Migration {
+        version: 4,
+        name: "0004_tenant_ownership.sql",
+        sql: TENANT_OWNERSHIP_MIGRATION_SQL,
     },
 ];
 
@@ -408,18 +415,21 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 3);
+        assert_eq!(MIGRATION_VERSION, 4);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
         assert_eq!(MIGRATIONS[1].name, "0002_consumer_inbox.sql");
         assert_eq!(MIGRATIONS[2].version, 3);
         assert_eq!(MIGRATIONS[2].name, "0003_node_membership.sql");
+        assert_eq!(MIGRATIONS[3].version, 4);
+        assert_eq!(MIGRATIONS[3].name, "0004_tenant_ownership.sql");
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
         let membership = migration_checksum(&MIGRATIONS[2]);
-        for checksum in [initial, inbox, membership] {
+        let tenant_ownership = migration_checksum(&MIGRATIONS[3]);
+        for checksum in [initial, inbox, membership, tenant_ownership] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
             assert!(checksum.bytes().all(|byte| !byte.is_ascii_uppercase()));

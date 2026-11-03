@@ -28,6 +28,7 @@ macro_rules! define_id {
     };
 }
 
+define_id!(TenantId, "Identifies an owning tenant.");
 define_id!(WorkflowId, "Identifies a workflow definition.");
 define_id!(
     WorkflowRunId,
@@ -363,7 +364,7 @@ impl RetryPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId,
+        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId, TenantId,
         TaskStatus, TransitionError, Versioned, WorkerId, WorkflowId, WorkflowRunId,
         WorkflowStatus,
     };
@@ -379,6 +380,10 @@ mod tests {
         let worker = WorkerId::parse("worker_01").expect("valid worker ID");
         let key = IdempotencyKey::parse("payment-order-123").expect("valid idempotency key");
 
+        let tenant = TenantId::parse("tenant_acme").expect("valid tenant ID");
+
+        assert_eq!(tenant.as_str(), "tenant_acme");
+        assert!(TenantId::parse("../tenant").is_err());
         assert_eq!(workflow.as_str(), "workflow_01");
         assert_eq!(run.as_str(), "run_01");
         assert_eq!(task.as_str(), "task_01");
