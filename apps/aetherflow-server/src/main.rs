@@ -138,7 +138,7 @@ async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>>
                 ) AS has_role_memberships
              FROM pg_roles AS role
              WHERE role.rolname = current_user",
-            &[&RLS_TABLES[..]],
+            &[&&RLS_TABLES[..]],
         )
         .await?;
     let is_superuser: bool = row.get(0);
