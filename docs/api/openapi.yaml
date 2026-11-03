@@ -4,14 +4,16 @@ info:
   version: 1.0.0
   summary: Versioned control-plane contract for durable workflow execution.
   description: |
-    Implemented by the Axum server in apps/aetherflow-server. Durable routes
-    require DATABASE_URL and AETHERFLOW_API_TOKEN; without DATABASE_URL,
-    only GET /health is available. The API token is one high-entropy
-    single-operator Bearer credential, not multi-user authorization or tenant
-    isolation. The listener remains loopback-only and rejects non-loopback
-    binds. PostgreSQL connections use Rustls and native CA roots; TLS is
-    required by default. Each HTTP request body is limited to 2 MiB; decoded
-    task input is limited to 1 MiB per task. Inspection omits payload bytes.
+    Implemented by the Axum server in apps/aetherflow-server. Without
+    DATABASE_URL, only GET /health is available. AETHERFLOW_API_TOKEN is a
+    separate high-entropy platform-operator credential; it does not identify
+    or select a tenant. Routes under /api/v1/tenant/* require a tenant-bound
+    Bearer credential and enforce tenant roles. The listener remains
+    loopback-only; forced PostgreSQL RLS and external HTTPS exposure are not
+    enabled yet. PostgreSQL connections use Rustls and native CA roots; TLS
+    is required by default. Each HTTP request body is limited to 2 MiB;
+    decoded task input is limited to 1 MiB per task. Inspection omits payload
+    bytes.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development only; control-plane routes require Bearer authentication.
@@ -22,6 +24,8 @@ tags:
   - name: Workflow runs
   - name: Task runs
   - name: Workers
+  - name: Tenant workflow runs
+  - name: Tenant task runs
 paths:
   /health:
     get:
@@ -167,6 +171,138 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
+  /api/v1/tenant/workflow-runs:
+    post:
+      tags: [Tenant workflow runs]
+      security:
+        - tenantBearerAuth: []
+      operationId: submitTenantWorkflowRun
+      summary: Submit a workflow owned by the authenticated tenant
+      description: |
+        Tenant ownership is derived from the validated credential, never from
+        request fields or headers. Requires the tenant Submit permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRunSubmission'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Tenant-owned workflow and tasks were created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/tenant/workflow-runs/{workflow_run_id}:
+    get:
+      tags: [Tenant workflow runs]
+      security:
+        - tenantBearerAuth: []
+      operationId: getTenantWorkflowRun
+      summary: Read a workflow owned by the authenticated tenant
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunId'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Workflow and task snapshots belonging to the authenticated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/tenant/task-runs/{task_run_id}:
+    get:
+      tags: [Tenant task runs]
+      security:
+        - tenantBearerAuth: []
+      operationId: getTenantTaskRun
+      summary: Read a task owned by the authenticated tenant
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Task-run state without payload bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/tenant/task-runs/{task_run_id}/cancel:
+    post:
+      tags: [Tenant task runs]
+      security:
+        - tenantBearerAuth: []
+      operationId: cancelTenantTaskRun
+      summary: Cancel a task owned by the authenticated tenant
+      description: |
+        Requires the tenant Cancel permission and expected_version. The
+        parent workflow is aggregated within the same tenant boundary.
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelTaskRunRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Task cancellation and tenant workflow aggregation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelTaskRunResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/v1/workers:
     get:
       tags: [Workers]
@@ -196,7 +332,11 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: URL-safe operator token
+      bearerFormat: URL-safe platform operator token
+    tenantBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: URL-safe tenant credential
   parameters:
     WorkflowRunId:
       name: workflow_run_id
@@ -212,12 +352,18 @@ components:
         $ref: '#/components/schemas/EntityId'
   responses:
     Unauthorized:
-      description: Missing or invalid operator Bearer token.
+      description: Missing or invalid operator or tenant Bearer credential.
       headers:
         WWW-Authenticate:
           schema:
             type: string
           example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: The tenant credential is valid but its role does not permit this operation.
       content:
         application/json:
           schema:
@@ -492,7 +638,7 @@ components:
             code:
               type: string
               enum:
-                [invalid_request, invalid_identifier, invalid_workflow, payload_too_large, not_found, conflict, stale_version, unauthorized, auth_not_configured, database_unavailable, internal]
+                [invalid_request, invalid_identifier, invalid_workflow, payload_too_large, not_found, conflict, stale_version, unauthorized, forbidden, auth_not_configured, database_unavailable, internal]
             message:
               type: string
               maxLength: 512
