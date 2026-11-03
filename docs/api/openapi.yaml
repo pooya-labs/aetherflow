@@ -1,0 +1,458 @@
+openapi: 3.1.0
+info:
+  title: AetherFlow Control Plane API
+  version: 1.0.0
+  summary: Versioned control-plane contract for durable workflow execution.
+  description: |
+    This document defines the v1 HTTP contract. It is a design contract; routes
+    are not considered implemented until the server and integration tests land.
+    The service currently has no authentication or tenant isolation and must be
+    bound to loopback until those controls are implemented.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local development only; do not expose to an untrusted network.
+tags:
+  - name: Health
+  - name: Workflow runs
+  - name: Task runs
+  - name: Workers
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Check process health
+      responses:
+        '200':
+          description: Process is accepting requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/workflow-runs:
+    post:
+      tags: [Workflow runs]
+      operationId: submitWorkflowRun
+      summary: Validate and durably submit a workflow run
+      description: |
+        The caller supplies a unique workflow_run_id. The workflow definition
+        is submitted as a snapshot and is not stored as a reusable definition.
+        Reusing an existing workflow_run_id or a conflicting task identity
+        returns 409. No idempotent replay behavior is promised in v1.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRunSubmission'
+      responses:
+        '201':
+          description: Workflow run and its task runs were durably created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/workflow-runs/{workflow_run_id}:
+    get:
+      tags: [Workflow runs]
+      operationId: getWorkflowRun
+      summary: Read a durable workflow-run snapshot
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunId'
+      responses:
+        '200':
+          description: Workflow run and its current task-run snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/task-runs/{task_run_id}:
+    get:
+      tags: [Task runs]
+      operationId: getTaskRun
+      summary: Read a durable task-run snapshot
+      description: |
+        Input and output bytes are intentionally omitted. The response reports
+        only decoded payload sizes and whether an output exists.
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      responses:
+        '200':
+          description: Task-run state without payload bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskRunSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/task-runs/{task_run_id}/cancel:
+    post:
+      tags: [Task runs]
+      operationId: cancelTaskRun
+      summary: Cancel a task run using optimistic concurrency
+      description: |
+        Cancellation is guarded by expected_version. If another worker or
+        operator has already changed the task version or it is terminal, the
+        request returns 409. On acceptance the service aggregates the parent
+        workflow state before responding.
+      parameters:
+        - $ref: '#/components/parameters/TaskRunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelTaskRunRequest'
+      responses:
+        '200':
+          description: Task cancellation and parent workflow aggregation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelTaskRunResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/workers:
+    get:
+      tags: [Workers]
+      operationId: listActiveWorkers
+      summary: List active worker registrations
+      description: |
+        Returns live registrations only. Membership and lease timestamps are
+        operational metadata; credentials and process environment are never
+        exposed.
+      responses:
+        '200':
+          description: Active worker registrations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerListResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    WorkflowRunId:
+      name: workflow_run_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/EntityId'
+    TaskRunId:
+      name: task_run_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/EntityId'
+  responses:
+    BadRequest:
+      description: Invalid identifier, malformed JSON, unknown status, or invalid workflow definition.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Duplicate run identity, stale expected version, or terminal-state race.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: Decoded input exceeds the 1 MiB task payload limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The requested workflow run or task run does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: PostgreSQL is unavailable or the durable operation cannot be completed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Unexpected server error. Internal database details are not returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    EntityId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9_-]+$'
+      description: Existing AetherFlow bounded ASCII identifier contract.
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    WorkflowRunSubmission:
+      type: object
+      additionalProperties: false
+      required: [workflow_id, workflow_run_id, tasks, retry_policy]
+      properties:
+        workflow_id:
+          $ref: '#/components/schemas/EntityId'
+        workflow_run_id:
+          $ref: '#/components/schemas/EntityId'
+        tasks:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/WorkflowTaskInput'
+        retry_policy:
+          $ref: '#/components/schemas/RetryPolicy'
+    WorkflowTaskInput:
+      type: object
+      additionalProperties: false
+      required: [task_id]
+      properties:
+        task_id:
+          $ref: '#/components/schemas/EntityId'
+        depends_on:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/EntityId'
+          default: []
+        input_base64:
+          type: string
+          contentEncoding: base64
+          description: Optional opaque task input. Decoded length must not exceed 1 MiB.
+    RetryPolicy:
+      type: object
+      additionalProperties: false
+      required: [max_attempts, initial_backoff_ms, max_backoff_ms]
+      properties:
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: Includes the initial attempt.
+        initial_backoff_ms:
+          type: integer
+          format: int64
+          minimum: 0
+        max_backoff_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Must be greater than or equal to initial_backoff_ms.
+    WorkflowRunReceipt:
+      type: object
+      additionalProperties: false
+      required: [workflow_id, workflow_run_id, status, version, task_runs]
+      properties:
+        workflow_id:
+          $ref: '#/components/schemas/EntityId'
+        workflow_run_id:
+          $ref: '#/components/schemas/EntityId'
+        status:
+          $ref: '#/components/schemas/WorkflowStatus'
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        task_runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskRunReceipt'
+    TaskRunReceipt:
+      type: object
+      additionalProperties: false
+      required: [task_id, task_run_id, status]
+      properties:
+        task_id:
+          $ref: '#/components/schemas/EntityId'
+        task_run_id:
+          $ref: '#/components/schemas/EntityId'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+    WorkflowRunSnapshot:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowRunReceipt'
+        - type: object
+          required: [created_at, updated_at]
+          properties:
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    TaskRunSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        [task_run_id, workflow_run_id, task_id, status, version, attempts_started, input_size_bytes, output_present, dependency_task_run_ids, created_at, updated_at]
+      properties:
+        task_run_id:
+          $ref: '#/components/schemas/EntityId'
+        workflow_run_id:
+          $ref: '#/components/schemas/EntityId'
+        task_id:
+          $ref: '#/components/schemas/EntityId'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        attempts_started:
+          type: integer
+          minimum: 0
+        input_size_bytes:
+          type: integer
+          minimum: 0
+          maximum: 1048576
+        output_size_bytes:
+          type: integer
+          minimum: 0
+          maximum: 1048576
+          nullable: true
+        output_present:
+          type: boolean
+        dependency_task_run_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityId'
+        claimed_by:
+          allOf:
+            - $ref: '#/components/schemas/EntityId'
+          nullable: true
+        fencing_token:
+          type: integer
+          format: int64
+          minimum: 0
+        lease_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CancelTaskRunRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 0
+    CancelTaskRunResponse:
+      type: object
+      additionalProperties: false
+      required: [task_run, workflow_status]
+      properties:
+        task_run:
+          $ref: '#/components/schemas/TaskRunSnapshot'
+        workflow_status:
+          $ref: '#/components/schemas/WorkflowStatus'
+    WorkerListResponse:
+      type: object
+      additionalProperties: false
+      required: [workers]
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSnapshot'
+    WorkerSnapshot:
+      type: object
+      additionalProperties: false
+      required: [worker_id, node_id, node_incarnation_id, membership_epoch, status, concurrency_limit, lease_expires_at]
+      properties:
+        worker_id:
+          $ref: '#/components/schemas/EntityId'
+        node_id:
+          $ref: '#/components/schemas/EntityId'
+        node_incarnation_id:
+          $ref: '#/components/schemas/EntityId'
+        membership_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          type: string
+          enum: [active, draining]
+        concurrency_limit:
+          type: integer
+          minimum: 1
+        lease_expires_at:
+          type: string
+          format: date-time
+    WorkflowStatus:
+      type: string
+      enum: [pending, running, succeeded, failed, cancelled, timed_out]
+    TaskStatus:
+      type: string
+      enum: [pending, ready, running, retry_waiting, succeeded, failed, cancelled, timed_out]
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                [invalid_request, invalid_identifier, invalid_workflow, payload_too_large, not_found, conflict, stale_version, database_unavailable, internal]
+            message:
+              type: string
+              maxLength: 512
+            request_id:
+              type: string
+              maxLength: 128

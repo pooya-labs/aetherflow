@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M06 now includes a reproducible ABI v1 guest example and a `WasmTaskHandler` that runs through the actual `TaskRegistry`/`TaskScheduler` path; hosted Rust CI [41563269188](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563269188) passed the full workspace and example execution, and Pages [41563320198](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563320198) passed on the implementation tip. M05 distributed coordination remains backed by PostgreSQL 18 + NATS combined-chaos coverage [41402000557](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000557). M07 versioned API/OpenAPI design is next. APIs remain experimental; the complete distributed workflow engine is not production-ready.
+> **Project status:** M00–M06 are complete. The M06 WASM adapter and scheduler-backed example passed hosted Rust CI [41563269188](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563269188); Pages [41565088903](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41565088903) passed on the M06 documentation checkpoint. M07 is now underway: ADR-0010 and the [OpenAPI 3.1 v1 contract](docs/api/openapi.yaml) define the control-plane resources and safety boundaries; HTTP routes are not yet implemented. The complete platform remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -40,6 +40,10 @@ AetherFlow will **not** claim universal exactly-once execution. External side ef
 | Deployment | Docker Compose; Kubernetes only after operational needs are demonstrated |
 
 Technology choices are provisional until validated by implementation and recorded in architecture decision records.
+
+## API contract
+
+The initial versioned control-plane contract is published at [docs/api/openapi.yaml](docs/api/openapi.yaml), with compatibility and security decisions in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). The OpenAPI document is a design contract, not a claim that the HTTP routes are already implemented.
 
 ## Repository map
 
