@@ -93,7 +93,8 @@ pub(crate) async fn apply_worker_identity_to_transaction(
                 set_config('aetherflow.tenant_id', '', true),
                 set_config('aetherflow.worker_id', $1, true),
                 set_config('aetherflow.principal_id', '', true),
-                set_config('aetherflow.tenant_role', 'worker', true)",
+                set_config('aetherflow.tenant_role', 'worker', true),
+                set_config('aetherflow.credential_sha256', '', true)",
             &[&worker_id.as_str()],
         )
         .await
@@ -111,7 +112,8 @@ pub(crate) async fn apply_legacy_worker_context_to_transaction(
                 set_config('aetherflow.tenant_id', 'legacy-default', true),
                 set_config('aetherflow.worker_id', '', true),
                 set_config('aetherflow.principal_id', '', true),
-                set_config('aetherflow.tenant_role', 'legacy_worker', true)",
+                set_config('aetherflow.tenant_role', 'legacy_worker', true),
+                set_config('aetherflow.credential_sha256', '', true)",
             &[],
         )
         .await
@@ -189,7 +191,8 @@ impl TenantContext {
                     set_config('aetherflow.tenant_id', $1, true),
                     set_config('aetherflow.principal_id', $2, true),
                     set_config('aetherflow.tenant_role', $3, true),
-                set_config('aetherflow.worker_id', '', true)",
+                set_config('aetherflow.worker_id', '', true),
+                set_config('aetherflow.credential_sha256', '', true)",
                 &[
                     &self.tenant_id.as_str(),
                     &self.principal_id.as_str(),
