@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 includes platform and tenant-authenticated Axum routes, tenant-scoped storage, grant-gated workers/events, PostgreSQL migrations v4–v7, forced RLS on ten tenant tables, restricted runtime DB roles, and a Rustls HTTPS boundary for non-loopback listeners. The HTTPS listener tests passed Rust CI on [54b1774](https://github.com/pooya16pg-spec/aetherflow/commit/54b17742aee822f37a4a3b034968bbcd3e851c13). Live PostgreSQL TLS tests against PostgreSQL 18 passed on [369065c](https://github.com/pooya16pg-spec/aetherflow/commit/369065c85b2126f97fb55f107b5d34518829cc80), including trusted CA acceptance and untrusted CA/hostname-mismatch rejection. The CLI is hosted-verified, the typed Rust SDK is in its first implementation pass, and dashboard/operational hardening remain open. AetherFlow is experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 includes tenant-authenticated control-plane routes, tenant-scoped persistence, forced RLS, grant-gated workers/events, verified PostgreSQL Rustls connections, and HTTPS enforcement for remote listeners. The CLI is hosted-verified on [0c19b9b](https://github.com/pooya-labs/aetherflow/commit/0c19b9b7d8124472c81ce53056612344f0ebab57). The typed Rust SDK, including pre-decode base64 checks and bounded JSON serialization, passed Rust CI on [047d02f](https://github.com/pooya-labs/aetherflow/commit/047d02f619b6f73720be9a28220d4fa3a1fb1ed3) (run [41619828879](https://github.com/pooya-labs/aetherflow/actions/runs/41619828879)); Pages also passed on the same SHA (run [41619827150](https://github.com/pooya-labs/aetherflow/actions/runs/41619827150)). The dashboard and M08 operational hardening remain open. AetherFlow is experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -80,7 +80,7 @@ Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the --tenant flag.
 
 ## Rust SDK
 
-A typed asynchronous Rust client lives in `crates/aetherflow-sdk`. It models the v1 workflow, task, worker, and error contracts; validates workflow DAGs and payload limits locally; separates anonymous, operator, and tenant scopes; rejects remote plain HTTP; disables redirects; and redacts credentials from Debug output. The SDK is now under hosted CI verification.
+A typed asynchronous Rust client lives in `crates/aetherflow-sdk`. It models the v1 workflow, task, worker, and error contracts; validates workflow DAGs and payload limits locally; separates anonymous, operator, and tenant scopes; rejects remote plain HTTP; disables redirects; and redacts credentials from Debug output. The SDK is hosted-verified on exact source [047d02f](https://github.com/pooya-labs/aetherflow/commit/047d02f619b6f73720be9a28220d4fa3a1fb1ed3). The client enforces a 1 MiB decoded task-input cap and writes JSON requests into a 2 MiB bounded writer before sending them.
 
 See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
