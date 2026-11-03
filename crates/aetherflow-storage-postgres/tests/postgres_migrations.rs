@@ -332,8 +332,8 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
 
     // Tenant-scoped cancellation must update the owned task, its running
     // attempt, and its outbox event in the same tenant.
-    let running_task_id = TaskRunId::parse("tenant-created-parent-run")
-        .expect("valid tenant-owned running task ID");
+    let running_task_id =
+        TaskRunId::parse("tenant-created-parent-run").expect("valid tenant-owned running task ID");
     client
         .execute(
             "UPDATE task_runs
@@ -465,8 +465,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     let missing_aggregate = tasks
         .aggregate_workflow_run_for_tenant(
             &context,
-            &WorkflowRunId::parse("tenant-a-missing-workflow")
-                .expect("valid missing workflow ID"),
+            &WorkflowRunId::parse("tenant-a-missing-workflow").expect("valid missing workflow ID"),
         )
         .await;
     assert!(matches!(
