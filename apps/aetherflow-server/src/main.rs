@@ -98,6 +98,8 @@ async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>>
                 role.rolbypassrls,
                 role.rolcreaterole,
                 role.rolcreatedb,
+                role.rolreplication,
+                has_schema_privilege(role.oid, 'public', 'CREATE'),
                 EXISTS (
                     SELECT 1
                     FROM pg_class AS relation
@@ -138,21 +140,25 @@ async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>>
     let bypasses_rls: bool = row.get(1);
     let can_create_roles: bool = row.get(2);
     let can_create_databases: bool = row.get(3);
-    let owns_or_can_assume_table_owner: bool = row.get(4);
-    let can_assume_rls_bypass_role: bool = row.get(5);
-    let forced_rls_table_count: i64 = row.get(6);
+    let can_replicate: bool = row.get(4);
+    let can_create_public_objects: bool = row.get(5);
+    let owns_or_can_assume_table_owner: bool = row.get(6);
+    let can_assume_rls_bypass_role: bool = row.get(7);
+    let forced_rls_table_count: i64 = row.get(8);
 
     if is_superuser
         || bypasses_rls
         || can_create_roles
         || can_create_databases
+        || can_replicate
+        || can_create_public_objects
         || owns_or_can_assume_table_owner
         || can_assume_rls_bypass_role
         || forced_rls_table_count != RLS_TABLES.len() as i64
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "DATABASE_URL must use a restricted runtime role: no superuser, BYPASSRLS, role/database creation, protected-table ownership, or membership in an owner/bypass role; all ten tenant tables must have ENABLE and FORCE ROW LEVEL SECURITY",
+            "DATABASE_URL must use a restricted runtime role: no superuser, BYPASSRLS, REPLICATION, role/database creation, public-schema CREATE, protected-table ownership, or membership in an owner/bypass role; all ten tenant tables must have ENABLE and FORCE ROW LEVEL SECURITY",
         )
         .into());
     }
