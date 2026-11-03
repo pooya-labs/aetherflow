@@ -17,9 +17,11 @@ use tokio_postgres::config::SslMode;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use aetherflow_storage_postgres::PgStore;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    init_tracing();
     let address = std::env::var("AETHERFLOW_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse::<SocketAddr>()?;
@@ -47,7 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // connection. The server never reuses this pool for API requests.
             let migration_pool = postgres_pool(&migration_database_url)?;
             let migration = PgStore::from_pool(migration_pool.clone()).migrate().await?;
-            eprintln!("PostgreSQL schema ready: {migration:?}");
+            tracing::info!(migration = ?migration, "PostgreSQL schema ready");
             drop(migration_pool);
 
             // The API pool must be a non-owner, non-superuser, non-BYPASSRLS
@@ -57,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             api::AppState::from_pool(runtime_pool, &api_token)?
         }
         Err(_) => {
-            eprintln!(
+            tracing::warn!(
                 "DATABASE_URL is not set; starting health-only mode, durable API routes return 503"
             );
             api::AppState::without_database()
@@ -68,24 +70,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let state = state.with_cors_allowed_origins(&cors_origins)?;
     let router = api::router(state);
     if let Some(tls_config) = tls_config {
-        println!(
-            "AetherFlow {} HTTPS control plane listening on {}",
-            aetherflow_core::VERSION,
-            address
+        tracing::info!(
+            version = aetherflow_core::VERSION,
+            bind_address = %address,
+            transport = "https",
+            "AetherFlow control plane listening"
         );
         axum_server::bind_rustls(address, tls_config)
             .serve(router.into_make_service())
             .await?;
     } else {
         let listener = tokio::net::TcpListener::bind(address).await?;
-        println!(
-            "AetherFlow {} loopback HTTP control plane listening on {}",
-            aetherflow_core::VERSION,
-            listener.local_addr()?
+        tracing::info!(
+            version = aetherflow_core::VERSION,
+            bind_address = %listener.local_addr()?,
+            transport = "http",
+            "AetherFlow control plane listening"
         );
         axum::serve(listener, router).await?;
     }
     Ok(())
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_current_span(true)
+        .with_span_list(true)
+        .init();
 }
 
 /// Loads a complete server certificate/key pair and enforces TLS for external binds.
@@ -288,9 +303,9 @@ fn postgres_pool_with_ssl_mode(
                 )
             })?;
         if !certificate_warnings.is_empty() {
-            eprintln!(
-                "PostgreSQL native certificate loader reported {} warning(s); valid certificates were retained",
-                certificate_warnings.len()
+            tracing::warn!(
+                warning_count = certificate_warnings.len(),
+                "PostgreSQL native certificate loader reported warnings; valid certificates were retained"
             );
         }
         tls
