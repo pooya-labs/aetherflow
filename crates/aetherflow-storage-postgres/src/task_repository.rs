@@ -1944,10 +1944,10 @@ impl PgTaskRepository {
         Ok(recovered)
     }
 
-    /// Claims pending outbox events for publication using row locks and claim fencing.
+    /// Claims pending legacy-default outbox events using row locks and claim fencing.
     ///
-    /// Return these events to the caller, publish outside the transaction, then
-    /// call acknowledge_outbox_event or retry_outbox_event with the returned token.
+    /// This compatibility dispatcher is intentionally restricted to legacy-default.
+    /// Tenant events require the registered, tenant-aware dispatcher path.
     pub async fn claim_outbox_events(
         &self,
         publisher_id: &WorkerId,
@@ -1972,7 +1972,7 @@ impl PgTaskRepository {
                 "WITH candidates AS ( \
                 SELECT event_id \
                 FROM outbox_events \
-                WHERE published_at IS NULL AND available_at <= clock_timestamp() \
+                WHERE tenant_id = 'legacy-default' AND published_at IS NULL AND available_at <= clock_timestamp() \
                   AND (claim_expires_at IS NULL OR claim_expires_at <= clock_timestamp()) \
                 ORDER BY available_at, event_id \
                 LIMIT $1 FOR UPDATE SKIP LOCKED \
@@ -2049,7 +2049,7 @@ impl PgTaskRepository {
             .execute(
                 "UPDATE outbox_events \
              SET published_at = clock_timestamp(), claim_owner = NULL, claim_expires_at = NULL \
-             WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
+             WHERE tenant_id = 'legacy-default' AND event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
                AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
                 &[&event_id, &publisher_id.as_str(), &claim_token],
             )
@@ -2085,7 +2085,7 @@ impl PgTaskRepository {
                 "UPDATE outbox_events \
              SET available_at = clock_timestamp() + make_interval(secs => $4), \
                  claim_owner = NULL, claim_expires_at = NULL, last_error = $5 \
-             WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
+             WHERE tenant_id = 'legacy-default' AND event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
                AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
                 &[
                     &event_id,
