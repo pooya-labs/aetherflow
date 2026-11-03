@@ -1,11 +1,13 @@
 use aetherflow_core::domain::{
-    RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
+    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId,
+    WorkflowId, WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgTenantCredentialRepository,
-    PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole, initial_migration_checksum,
+    MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore, PgTaskRepository,
+    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole,
+    initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -329,6 +331,118 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("read coordinator-owned workflow tenant")
         .get(0);
     assert_eq!(coordinated_tenant, "tenant-a");
+
+    // A registered worker can claim only a tenant with a live explicit grant.
+    // Make tenant B's task older so an unfiltered claim would pick it first.
+    let coordinated_task_run_id = coordinated_submission
+        .task_runs()
+        .next()
+        .expect("one coordinated task")
+        .1
+        .clone();
+    client
+        .execute(
+            "UPDATE task_runs
+             SET status = 'ready', available_at = clock_timestamp() - INTERVAL '2 minutes'
+             WHERE tenant_id = 'tenant-b' AND task_run_id = 'task-b-child'",
+            &[],
+        )
+        .await
+        .expect("prepare an earlier ungranted tenant B task");
+    client
+        .execute(
+            "UPDATE task_runs
+             SET status = 'ready', available_at = clock_timestamp()
+             WHERE tenant_id = 'tenant-a' AND task_run_id = $1",
+            &[&coordinated_task_run_id.as_str()],
+        )
+        .await
+        .expect("prepare the granted tenant A task");
+
+    let membership = PgMembershipRepository::from_pool(pool.clone());
+    let node_id = NodeId::parse("node-grant-claim-test").expect("valid claim-test node ID");
+    let incarnation_id = NodeIncarnationId::parse("incarnation-grant-claim-test")
+        .expect("valid claim-test incarnation ID");
+    let node = membership
+        .join_node(
+            &node_id,
+            &incarnation_id,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("join claim-test node");
+    let granted_worker_id =
+        WorkerId::parse("worker-grant-claim-test").expect("valid granted worker ID");
+    let granted_registration = membership
+        .register_worker(
+            &node,
+            &granted_worker_id,
+            std::num::NonZeroU32::new(2).expect("non-zero concurrency"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("register granted worker");
+    client
+        .execute(
+            "INSERT INTO worker_tenant_grants
+               (tenant_id, worker_id, status, granted_by_principal_id)
+             VALUES ('tenant-a', $1, 'active', 'principal-a')",
+            &[&granted_worker_id.as_str()],
+        )
+        .await
+        .expect("grant worker access to tenant A");
+
+    let granted_claim = tasks
+        .claim_next_registered(
+            &granted_registration,
+            &AttemptId::parse("tenant-grant-claim-attempt")
+                .expect("valid grant claim attempt ID"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("registered worker claim query succeeds")
+        .expect("worker with tenant A grant can claim one task");
+    assert_eq!(
+        granted_claim.task_run().task_run_id(),
+        &coordinated_task_run_id
+    );
+    assert_eq!(
+        granted_claim.task_run().workflow_run_id(),
+        &coordinated_run_id
+    );
+
+    let ungranted_worker_id =
+        WorkerId::parse("worker-without-tenant-grant").expect("valid ungranted worker ID");
+    let ungranted_registration = membership
+        .register_worker(
+            &node,
+            &ungranted_worker_id,
+            std::num::NonZeroU32::new(1).expect("non-zero concurrency"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("register worker without tenant grant");
+    let ungranted_claim = tasks
+        .claim_next_registered(
+            &ungranted_registration,
+            &AttemptId::parse("tenant-ungranted-claim-attempt")
+                .expect("valid ungranted attempt ID"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("ungranted claim check succeeds");
+    assert!(ungranted_claim.is_none());
+
+    let legacy_claim = tasks
+        .claim_next(
+            &WorkerId::parse("legacy-low-level-worker").expect("valid legacy worker ID"),
+            &AttemptId::parse("legacy-low-level-claim-attempt")
+                .expect("valid legacy attempt ID"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("legacy low-level claim check succeeds");
+    assert!(legacy_claim.is_none());
 
     // Tenant-scoped cancellation must update the owned task, its running
     // attempt, and its outbox event in the same tenant.
