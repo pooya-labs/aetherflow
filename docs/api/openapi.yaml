@@ -314,22 +314,35 @@ components:
         status:
           $ref: '#/components/schemas/TaskStatus'
     WorkflowRunSnapshot:
-      allOf:
-        - $ref: '#/components/schemas/WorkflowRunReceipt'
-        - type: object
-          required: [created_at, updated_at]
-          properties:
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
+      type: object
+      additionalProperties: false
+      required: [workflow_id, workflow_run_id, status, version, task_runs, created_at, updated_at]
+      properties:
+        workflow_id:
+          $ref: '#/components/schemas/EntityId'
+        workflow_run_id:
+          $ref: '#/components/schemas/EntityId'
+        status:
+          $ref: '#/components/schemas/WorkflowStatus'
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        task_runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskRunReceipt'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     TaskRunSnapshot:
       type: object
       additionalProperties: false
       required:
-        [task_run_id, workflow_run_id, task_id, status, version, attempts_started, input_size_bytes, output_present, dependency_task_run_ids, created_at, updated_at]
+        [task_run_id, workflow_run_id, task_id, status, version, attempts_started, available_at, input_size_bytes, output_size_bytes, output_present, dependency_task_run_ids, created_at, updated_at]
       properties:
         task_run_id:
           $ref: '#/components/schemas/EntityId'
@@ -346,15 +359,17 @@ components:
         attempts_started:
           type: integer
           minimum: 0
+        available_at:
+          type: string
+          format: date-time
         input_size_bytes:
           type: integer
           minimum: 0
           maximum: 1048576
         output_size_bytes:
-          type: integer
+          type: [integer, "null"]
           minimum: 0
           maximum: 1048576
-          nullable: true
         output_present:
           type: boolean
         dependency_task_run_ids:
@@ -362,17 +377,89 @@ components:
           items:
             $ref: '#/components/schemas/EntityId'
         claimed_by:
-          allOf:
-            - $ref: '#/components/schemas/EntityId'
-          nullable: true
-        fencing_token:
+          type: [string, "null"]
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+    CancelTaskRunRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version:
           type: integer
           format: int64
           minimum: 0
+    CancelTaskRunResponse:
+      type: object
+      additionalProperties: false
+      required: [task_run, workflow_status]
+      properties:
+        task_run:
+          $ref: '#/components/schemas/TaskRunSnapshot'
+        workflow_status:
+          $ref: '#/components/schemas/WorkflowStatus'
+    WorkerListResponse:
+      type: object
+      additionalProperties: false
+      required: [workers]
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSnapshot'
+    WorkerSnapshot:
+      type: object
+      additionalProperties: false
+      required: [worker_id, node_id, node_incarnation_id, membership_epoch, status, concurrency_limit, lease_expires_at]
+      properties:
+        worker_id:
+          $ref: '#/components/schemas/EntityId'
+        node_id:
+          $ref: '#/components/schemas/EntityId'
+        node_incarnation_id:
+          $ref: '#/components/schemas/EntityId'
+        membership_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          type: string
+          const: active
+        concurrency_limit:
+          type: integer
+          minimum: 1
         lease_expires_at:
           type: string
           format: date-time
-          nullable: true
+    WorkflowStatus:
+      type: string
+      enum: [pending, running, succeeded, failed, cancelled, timed_out]
+    TaskStatus:
+      type: string
+      enum: [pending, ready, running, retry_waiting, succeeded, failed, cancelled, timed_out]
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                [invalid_request, invalid_identifier, invalid_workflow, payload_too_large, not_found, conflict, stale_version, database_unavailable, internal]
+            message:
+              type: string
+              maxLength: 512
+            request_id:
+              type: string
+              maxLength: 128
+
+        lease_expires_at:
+          type: [string, "null"]
+          format: date-time
         created_at:
           type: string
           format: date-time
