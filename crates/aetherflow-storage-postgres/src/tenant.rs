@@ -90,6 +90,7 @@ pub(crate) async fn apply_worker_identity_to_transaction(
     transaction
         .query_one(
             "SELECT
+                set_config('aetherflow.tenant_id', '', true),
                 set_config('aetherflow.worker_id', $1, true),
                 set_config('aetherflow.principal_id', '', true),
                 set_config('aetherflow.tenant_role', 'worker', true)",
@@ -308,5 +309,81 @@ mod tests {
         assert_eq!(after_commit.get::<_, String>(0), "");
         assert_eq!(after_commit.get::<_, String>(1), "");
         assert_eq!(after_commit.get::<_, String>(2), "");
+
+        // A worker transaction receives only its worker identity until a
+        // selected, grant-validated tenant is applied.
+        let worker_transaction = client
+            .transaction()
+            .await
+            .expect("begin worker-scoped transaction");
+        let worker_id = aetherflow_core::domain::WorkerId::parse("worker_guc_test")
+            .expect("valid worker ID");
+        super::apply_worker_identity_to_transaction(&worker_transaction, &worker_id)
+            .await
+            .expect("apply worker identity");
+        super::apply_tenant_id_to_transaction(&worker_transaction, "tenant_worker_test")
+            .await
+            .expect("apply selected tenant");
+        let worker_active = worker_transaction
+            .query_one(
+                "SELECT current_setting('aetherflow.tenant_id', true),
+                        current_setting('aetherflow.worker_id', true),
+                        current_setting('aetherflow.principal_id', true),
+                        current_setting('aetherflow.tenant_role', true)",
+                &[],
+            )
+            .await
+            .expect("read worker transaction context");
+        assert_eq!(worker_active.get::<_, String>(0), "tenant_worker_test");
+        assert_eq!(worker_active.get::<_, String>(1), "worker_guc_test");
+        assert_eq!(worker_active.get::<_, String>(2), "");
+        assert_eq!(worker_active.get::<_, String>(3), "worker");
+        worker_transaction
+            .commit()
+            .await
+            .expect("commit worker transaction");
+
+        // Compatibility operations explicitly use legacy-default and must
+        // also restore the connection's prior settings on commit.
+        let legacy_transaction = client
+            .transaction()
+            .await
+            .expect("begin legacy transaction");
+        super::apply_legacy_worker_context_to_transaction(&legacy_transaction)
+            .await
+            .expect("apply legacy worker context");
+        let legacy_active = legacy_transaction
+            .query_one(
+                "SELECT current_setting('aetherflow.tenant_id', true),
+                        current_setting('aetherflow.worker_id', true),
+                        current_setting('aetherflow.principal_id', true),
+                        current_setting('aetherflow.tenant_role', true)",
+                &[],
+            )
+            .await
+            .expect("read legacy transaction context");
+        assert_eq!(legacy_active.get::<_, String>(0), "legacy-default");
+        assert_eq!(legacy_active.get::<_, String>(1), "");
+        assert_eq!(legacy_active.get::<_, String>(2), "");
+        assert_eq!(legacy_active.get::<_, String>(3), "legacy_worker");
+        legacy_transaction
+            .commit()
+            .await
+            .expect("commit legacy transaction");
+
+        let after_worker_and_legacy = client
+            .query_one(
+                "SELECT
+                    COALESCE(current_setting('aetherflow.tenant_id', true), ''),
+                    COALESCE(current_setting('aetherflow.worker_id', true), ''),
+                    COALESCE(current_setting('aetherflow.principal_id', true), ''),
+                    COALESCE(current_setting('aetherflow.tenant_role', true), '')",
+                &[],
+            )
+            .await
+            .expect("inspect connection after worker and legacy transactions");
+        for index in 0..4 {
+            assert_eq!(after_worker_and_legacy.get::<_, String>(index), "");
+        }
     }
 }
