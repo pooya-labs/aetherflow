@@ -11,10 +11,14 @@
 
 use std::time::Duration;
 
-use aetherflow_core::domain::WorkerId;
+use aetherflow_core::domain::{TenantId, WorkerId};
+use tokio_postgres::Transaction;
+
+use crate::membership::lock_worker_registration;
+use crate::task_repository::lock_worker_tenant_grant;
 use deadpool_postgres::Pool;
 
-use crate::StorageError;
+use crate::{StorageError, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
 const MAX_EVENT_ID_BYTES: usize = 255;
@@ -26,10 +30,10 @@ const CLAIM_INBOX_SQL: &str = "
         claim_token, lease_expires_at
     )
     VALUES (
-        'legacy-default', $1, $2, 'processing', 1, $3, 1,
-        clock_timestamp() + ($4::BIGINT * INTERVAL '1 millisecond')
+        $1, $2, $3, 'processing', 1, $4, 1,
+        clock_timestamp() + ($5::BIGINT * INTERVAL '1 millisecond')
     )
-    ON CONFLICT (consumer_name, event_id) DO UPDATE
+    ON CONFLICT (tenant_id, consumer_name, event_id) DO UPDATE
     SET status = 'processing',
         attempts = inbox.attempts + 1,
         claim_owner = EXCLUDED.claim_owner,
@@ -48,14 +52,22 @@ const CLAIM_INBOX_SQL: &str = "
 /// A fenced lease for processing one event for one logical consumer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InboxClaim {
+    tenant_id: String,
     consumer_name: String,
     event_id: String,
     worker_id: WorkerId,
+    registration: Option<WorkerRegistration>,
     claim_token: u64,
     attempts: u64,
 }
 
 impl InboxClaim {
+    /// Returns the tenant that owns this inbox claim.
+    #[must_use]
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
     /// Returns the logical consumer identity.
     #[must_use]
     pub fn consumer_name(&self) -> &str {
@@ -111,11 +123,9 @@ impl PgInboxRepository {
         Self { pool }
     }
 
-    /// Attempts to claim an event for a logical consumer.
+    /// Attempts to claim an event in the reserved compatibility tenant.
     ///
-    /// A repeated processed event returns AlreadyProcessed. A concurrent
-    /// delivery with an unexpired lease returns Busy. Pending or expired
-    /// processing rows are reclaimed atomically and receive a higher token.
+    /// The legacy entry point cannot claim customer-owned tenant events.
     pub async fn try_claim(
         &self,
         consumer_name: &str,
@@ -123,8 +133,58 @@ impl PgInboxRepository {
         worker_id: &WorkerId,
         lease_duration: Duration,
     ) -> Result<InboxClaimResult, StorageError> {
+        self.try_claim_inner(
+            "legacy-default",
+            None,
+            consumer_name,
+            event_id,
+            worker_id,
+            lease_duration,
+        )
+        .await
+    }
+
+    /// Claims an event for a tenant explicitly granted to the registered worker.
+    pub async fn try_claim_for_tenant(
+        &self,
+        tenant_id: &TenantId,
+        registration: &WorkerRegistration,
+        consumer_name: &str,
+        event_id: &str,
+        lease_duration: Duration,
+    ) -> Result<InboxClaimResult, StorageError> {
+        self.try_claim_inner(
+            tenant_id.as_str(),
+            Some(registration),
+            consumer_name,
+            event_id,
+            registration.worker_id(),
+            lease_duration,
+        )
+        .await
+    }
+
+    async fn try_claim_inner(
+        &self,
+        tenant_id: &str,
+        registration: Option<&WorkerRegistration>,
+        consumer_name: &str,
+        event_id: &str,
+        worker_id: &WorkerId,
+        lease_duration: Duration,
+    ) -> Result<InboxClaimResult, StorageError> {
         validate_consumer_name(consumer_name)?;
         validate_event_id(event_id)?;
+        if registration.is_none() && tenant_id != "legacy-default" {
+            return Err(StorageError::InvalidTenantCredential);
+        }
+        if let Some(registration) = registration {
+            if registration.worker_id() != worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    worker_id.as_str().to_owned(),
+                ));
+            }
+        }
 
         let lease_millis = lease_duration.as_millis();
         if lease_millis == 0 || lease_millis > MAX_LEASE_MILLIS {
@@ -133,15 +193,25 @@ impl PgInboxRepository {
         let lease_millis =
             i64::try_from(lease_millis).map_err(|_| StorageError::InvalidLeaseDuration)?;
 
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let row = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, true).await?;
+            lock_worker_tenant_grant(&transaction, registration, tenant_id).await?;
+        }
+
+        let row = transaction
             .query_opt(
                 CLAIM_INBOX_SQL,
                 &[
+                    &tenant_id,
                     &consumer_name,
                     &event_id,
                     &worker_id.as_str(),
@@ -151,13 +221,15 @@ impl PgInboxRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
-        if let Some(row) = row {
+        let result = if let Some(row) = row {
             let claim_token: i64 = row.get(0);
             let attempts: i64 = row.get(1);
-            return Ok(InboxClaimResult::Acquired(InboxClaim {
+            InboxClaimResult::Acquired(InboxClaim {
+                tenant_id: tenant_id.to_owned(),
                 consumer_name: consumer_name.to_owned(),
                 event_id: event_id.to_owned(),
                 worker_id: worker_id.clone(),
+                registration: registration.cloned(),
                 claim_token: u64::try_from(claim_token).map_err(|_| {
                     StorageError::InvalidStoredValue(
                         "consumer inbox claim token is outside the supported range".to_owned(),
@@ -168,47 +240,58 @@ impl PgInboxRepository {
                         "consumer inbox attempt count is outside the supported range".to_owned(),
                     )
                 })?,
-            }));
-        }
-
-        let row = client
-            .query_opt(
-                "SELECT status FROM consumer_inbox WHERE tenant_id = 'legacy-default' AND consumer_name = $1 AND event_id = $2",
-                &[&consumer_name, &event_id],
-            )
-            .await
-            .map_err(|error| StorageError::Database(error.to_string()))?
-            .ok_or_else(|| {
-                StorageError::InconsistentState(
-                    "consumer inbox claim conflicted but its row disappeared".to_owned(),
+            })
+        } else {
+            let row = transaction
+                .query_opt(
+                    "SELECT status FROM consumer_inbox
+                     WHERE tenant_id = $1 AND consumer_name = $2 AND event_id = $3",
+                    &[&tenant_id, &consumer_name, &event_id],
                 )
-            })?;
-        let status: String = row.get(0);
-        match status.as_str() {
-            "processed" => Ok(InboxClaimResult::AlreadyProcessed),
-            "pending" | "processing" => Ok(InboxClaimResult::Busy),
-            other => Err(StorageError::InvalidStoredValue(format!(
-                "unexpected consumer inbox status: {other}"
-            ))),
-        }
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?
+                .ok_or_else(|| {
+                    StorageError::InconsistentState(
+                        "consumer inbox claim conflicted but its row disappeared".to_owned(),
+                    )
+                })?;
+            let status: String = row.get(0);
+            match status.as_str() {
+                "processed" => InboxClaimResult::AlreadyProcessed,
+                "pending" | "processing" => InboxClaimResult::Busy,
+                other => {
+                    return Err(StorageError::InvalidStoredValue(format!(
+                        "unexpected consumer inbox status: {other}"
+                    )));
+                }
+            }
+        };
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(result)
     }
 
     /// Marks a claim processed after its handler succeeds.
     ///
-    /// The operation is fenced by consumer, event, worker, token, and unexpired
-    /// database lease. Repeating the same successful acknowledgement is safe.
+    /// Registered claims revalidate membership and tenant grant in this transaction.
+    /// Repeating the same successful acknowledgement remains safe.
     pub async fn acknowledge(&self, claim: &InboxClaim) -> Result<(), StorageError> {
-        let client = self
+        let claim_token = claim_token_sql(claim)?;
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let claim_token = i64::try_from(claim.claim_token).map_err(|_| {
-            StorageError::InvalidStoredValue(
-                "consumer inbox claim token is outside the supported range".to_owned(),
-            )
-        })?;
-        let updated = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_claim_registration(&transaction, claim, false).await?;
+
+        let updated = transaction
             .execute(
                 "UPDATE consumer_inbox
                  SET status = 'processed',
@@ -217,13 +300,14 @@ impl PgInboxRepository {
                      last_error = NULL,
                      processed_at = clock_timestamp(),
                      updated_at = clock_timestamp()
-                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
-                   AND event_id = $2
+                 WHERE tenant_id = $1 AND consumer_name = $2
+                   AND event_id = $3
                    AND status = 'processing'
-                   AND claim_owner = $3
-                   AND claim_token = $4
+                   AND claim_owner = $4
+                   AND claim_token = $5
                    AND lease_expires_at > clock_timestamp()",
                 &[
+                    &claim.tenant_id,
                     &claim.consumer_name,
                     &claim.event_id,
                     &claim.worker_id.as_str(),
@@ -234,14 +318,18 @@ impl PgInboxRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
         if updated == 1 {
+            transaction
+                .commit()
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
             return Ok(());
         }
 
-        let row = client
+        let row = transaction
             .query_opt(
                 "SELECT status, claim_token FROM consumer_inbox
-                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1 AND event_id = $2",
-                &[&claim.consumer_name, &claim.event_id],
+                 WHERE tenant_id = $1 AND consumer_name = $2 AND event_id = $3",
+                &[&claim.tenant_id, &claim.consumer_name, &claim.event_id],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
@@ -249,18 +337,19 @@ impl PgInboxRepository {
             let status: String = row.get(0);
             let token: i64 = row.get(1);
             if status == "processed" && token == claim_token {
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|error| StorageError::Database(error.to_string()))?;
                 return Ok(());
             }
         }
-
         Err(inbox_claim_lost(claim))
     }
 
     /// Extends a live inbox claim using database time.
     ///
-    /// A claim can be renewed only by its current worker and fencing token,
-    /// before the existing lease expires. Once a lease has expired, it cannot
-    /// be revived; the caller must let another worker reclaim it.
+    /// A registered worker must still hold a live grant for the claim tenant.
     pub async fn renew(
         &self,
         claim: &InboxClaim,
@@ -272,30 +361,32 @@ impl PgInboxRepository {
         }
         let lease_millis =
             i64::try_from(lease_millis).map_err(|_| StorageError::InvalidLeaseDuration)?;
-        let claim_token = i64::try_from(claim.claim_token).map_err(|_| {
-            StorageError::InvalidStoredValue(
-                "consumer inbox claim token is outside the supported range".to_owned(),
-            )
-        })?;
-
-        let client = self
+        let claim_token = claim_token_sql(claim)?;
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let updated = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_claim_registration(&transaction, claim, false).await?;
+
+        let updated = transaction
             .execute(
                 "UPDATE consumer_inbox
                  SET lease_expires_at =
-                         clock_timestamp() + ($5::BIGINT * INTERVAL '1 millisecond'),
+                         clock_timestamp() + ($6::BIGINT * INTERVAL '1 millisecond'),
                      updated_at = clock_timestamp()
-                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
-                   AND event_id = $2
+                 WHERE tenant_id = $1 AND consumer_name = $2
+                   AND event_id = $3
                    AND status = 'processing'
-                   AND claim_owner = $3
-                   AND claim_token = $4
+                   AND claim_owner = $4
+                   AND claim_token = $5
                    AND lease_expires_at > clock_timestamp()",
                 &[
+                    &claim.tenant_id,
                     &claim.consumer_name,
                     &claim.event_id,
                     &claim.worker_id.as_str(),
@@ -306,17 +397,19 @@ impl PgInboxRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
-        if updated == 1 {
-            Ok(())
-        } else {
-            Err(inbox_claim_lost(claim))
+        if updated != 1 {
+            return Err(inbox_claim_lost(claim));
         }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(())
     }
 
     /// Releases a failed claim for immediate redelivery.
     ///
-    /// The next owner receives a higher fencing token. The caller should avoid
-    /// acknowledging the broker message after releasing this claim.
+    /// A registered worker must still hold a live grant for the claim tenant.
     pub async fn release(
         &self,
         claim: &InboxClaim,
@@ -326,31 +419,34 @@ impl PgInboxRepository {
             return Err(StorageError::InvalidInboxError);
         }
 
-        let claim_token = i64::try_from(claim.claim_token).map_err(|_| {
-            StorageError::InvalidStoredValue(
-                "consumer inbox claim token is outside the supported range".to_owned(),
-            )
-        })?;
-        let client = self
+        let claim_token = claim_token_sql(claim)?;
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let updated = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_claim_registration(&transaction, claim, false).await?;
+
+        let updated = transaction
             .execute(
                 "UPDATE consumer_inbox
                  SET status = 'pending',
                      claim_owner = NULL,
                      lease_expires_at = NULL,
-                     last_error = $5,
+                     last_error = $6,
                      updated_at = clock_timestamp()
-                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
-                   AND event_id = $2
+                 WHERE tenant_id = $1 AND consumer_name = $2
+                   AND event_id = $3
                    AND status = 'processing'
-                   AND claim_owner = $3
-                   AND claim_token = $4
+                   AND claim_owner = $4
+                   AND claim_token = $5
                    AND lease_expires_at > clock_timestamp()",
                 &[
+                    &claim.tenant_id,
                     &claim.consumer_name,
                     &claim.event_id,
                     &claim.worker_id.as_str(),
@@ -361,12 +457,44 @@ impl PgInboxRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
-        if updated == 1 {
-            Ok(())
-        } else {
-            Err(inbox_claim_lost(claim))
+        if updated != 1 {
+            return Err(inbox_claim_lost(claim));
         }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(())
     }
+
+}
+
+async fn lock_claim_registration(
+    transaction: &Transaction<'_>,
+    claim: &InboxClaim,
+    require_active: bool,
+) -> Result<(), StorageError> {
+    match claim.registration.as_ref() {
+        Some(registration) => {
+            if registration.worker_id() != &claim.worker_id {
+                return Err(StorageError::WorkerRegistrationLost(
+                    claim.worker_id.as_str().to_owned(),
+                ));
+            }
+            lock_worker_registration(transaction, registration, require_active).await?;
+            lock_worker_tenant_grant(transaction, registration, &claim.tenant_id).await
+        }
+        None if claim.tenant_id == "legacy-default" => Ok(()),
+        None => Err(StorageError::InvalidTenantCredential),
+    }
+}
+
+fn claim_token_sql(claim: &InboxClaim) -> Result<i64, StorageError> {
+    i64::try_from(claim.claim_token).map_err(|_| {
+        StorageError::InvalidStoredValue(
+            "consumer inbox claim token is outside the supported range".to_owned(),
+        )
+    })
 }
 
 fn validate_consumer_name(consumer_name: &str) -> Result<(), StorageError> {
