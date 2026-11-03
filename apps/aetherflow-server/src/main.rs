@@ -8,7 +8,7 @@ mod api;
 
 use std::error::Error;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum_server::tls_rustls::RustlsConfig;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -100,18 +100,27 @@ async fn load_http_tls_config(address: SocketAddr) -> Result<Option<RustlsConfig
         return Ok(None);
     }
 
-    ensure_rustls_crypto_provider()?;
     let certificate_path = certificate_path.expect("TLS mode requires a certificate path");
     let private_key_path = private_key_path.expect("TLS mode requires a private-key path");
-    let config = RustlsConfig::from_pem_file(&certificate_path, &private_key_path)
+    let config = load_http_tls_config_from_paths(&certificate_path, &private_key_path).await?;
+    Ok(Some(config))
+}
+
+/// Parses a PEM certificate chain and private key, failing closed for invalid or missing files.
+async fn load_http_tls_config_from_paths(
+    certificate_path: &Path,
+    private_key_path: &Path,
+) -> Result<RustlsConfig, Box<dyn Error>> {
+    ensure_rustls_crypto_provider()?;
+    RustlsConfig::from_pem_file(certificate_path, private_key_path)
         .await
         .map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("unable to load the HTTPS certificate/key pair: {error}"),
             )
-        })?;
-    Ok(Some(config))
+            .into()
+        })
 }
 
 /// Returns true when TLS is required; rejects incomplete pairs and remote HTTP.
@@ -326,8 +335,8 @@ mod tests {
     use tokio_rustls::TlsConnector;
 
     use super::{
-        ensure_rustls_crypto_provider, parse_database_ssl_mode, validate_http_transport,
-        verify_runtime_database_role,
+        ensure_rustls_crypto_provider, load_http_tls_config_from_paths,
+        parse_database_ssl_mode, validate_http_transport, verify_runtime_database_role,
     };
 
     #[tokio::test]
@@ -403,6 +412,38 @@ mod tests {
         assert!(validate_http_transport(remote, true, false).is_err());
         assert!(validate_http_transport(remote, false, true).is_err());
         assert!(validate_http_transport(remote, true, true).expect("remote HTTPS is allowed"));
+    }
+
+    #[tokio::test]
+    async fn invalid_or_missing_https_pem_files_fail_closed() {
+        ensure_rustls_crypto_provider().expect("install ring crypto provider");
+        let directory = std::env::temp_dir().join(format!(
+            "aetherflow-invalid-tls-pem-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create TLS test directory");
+        let certificate_path = directory.join("certificate.pem");
+        let private_key_path = directory.join("private-key.pem");
+
+        assert!(
+            load_http_tls_config_from_paths(&certificate_path, &private_key_path)
+                .await
+                .is_err(),
+            "missing certificate and key files must be rejected"
+        );
+
+        std::fs::write(&certificate_path, b"not a PEM certificate")
+            .expect("write invalid certificate fixture");
+        std::fs::write(&private_key_path, b"not a PEM private key")
+            .expect("write invalid private-key fixture");
+        assert!(
+            load_http_tls_config_from_paths(&certificate_path, &private_key_path)
+                .await
+                .is_err(),
+            "invalid PEM material must be rejected"
+        );
+
+        std::fs::remove_dir_all(&directory).expect("remove TLS test directory");
     }
 
     #[tokio::test]
