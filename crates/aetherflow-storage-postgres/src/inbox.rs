@@ -1,8 +1,8 @@
 //! Durable consumer inbox and event deduplication.
 //!
-//! The compatibility inbox is a lease-based idempotency ledger restricted to
-//! legacy-default. Tenant-aware inbox operations need a tenant-scoped API and
-//! tenant-leading primary key before customer event processing is enabled.
+//! The compatibility inbox is restricted to legacy-default. Registered
+//! workers can process customer tenant events only through the tenant-aware
+//! methods, which validate a live worker grant on every lease transition.
 //! A broker message should be acknowledged only after the application has
 //! successfully completed its work and this repository has acknowledged the
 //! inbox claim. Delivery remains at-least-once: external side effects must use
@@ -12,12 +12,11 @@
 use std::time::Duration;
 
 use aetherflow_core::domain::{TenantId, WorkerId};
+use deadpool_postgres::Pool;
 use tokio_postgres::Transaction;
 
 use crate::membership::lock_worker_registration;
 use crate::task_repository::lock_worker_tenant_grant;
-use deadpool_postgres::Pool;
-
 use crate::{StorageError, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
