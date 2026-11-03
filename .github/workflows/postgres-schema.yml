@@ -10,6 +10,7 @@ on:
       - "crates/aetherflow-transport-nats/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - "apps/aetherflow-server/**"
+      - "scripts/verify-operations-restore.sh"
       - ".github/workflows/postgres-schema.yml"
   pull_request:
     paths:
@@ -560,3 +561,23 @@ jobs:
 
           ROLLBACK;
           SQL
+
+      - name: Install pinned NATS CLI v0.4.0 for the NATS 2.12 restore drill
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/nats-0.4.0-amd64.deb"
+          curl --fail --location --retry 3 \
+            --output "$package" \
+            https://github.com/nats-io/natscli/releases/download/v0.4.0/nats-0.4.0-amd64.deb
+          printf '%s  %s\n' \
+            'fdc0897c08b41f1587838fbcbe3bb84cc7da5dce0aa9afe34fd8da7a8197b202' \
+            "$package" | sha256sum --check -
+          sudo apt-get install --yes "$package"
+          nats --version | grep --fixed-strings --quiet '0.4.0'
+
+      - name: Rehearse isolated PostgreSQL and JetStream backup and restore
+        env:
+          NATS_CLUSTER_URL: nats://127.0.0.1:4222
+          NATS_RESTORE_URL: nats://127.0.0.1:4225
+        run: bash scripts/verify-operations-restore.sh
