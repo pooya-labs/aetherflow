@@ -424,9 +424,8 @@ mod tests {
         // Exercise the same native CA store used by the production pool. The
         // hosted fixture is signed by a temporary CA installed in the runner
         // trust store and contains the 127.0.0.1 IP subject alternative name.
-        let trusted_pool =
-            postgres_pool_with_ssl_mode(&database_url, SslMode::Require)
-                .expect("build PostgreSQL pool with native CA roots");
+        let trusted_pool = postgres_pool_with_ssl_mode(&database_url, SslMode::Require)
+            .expect("build PostgreSQL pool with native CA roots");
         let trusted_client = trusted_pool
             .get()
             .await
@@ -471,9 +470,8 @@ mod tests {
         );
 
         // This hostname resolves to the same server but does not match its SAN.
-        let mismatch_pool =
-            postgres_pool_with_ssl_mode(&hostname_mismatch_url, SslMode::Require)
-                .expect("build hostname-mismatch PostgreSQL pool");
+        let mismatch_pool = postgres_pool_with_ssl_mode(&hostname_mismatch_url, SslMode::Require)
+            .expect("build hostname-mismatch PostgreSQL pool");
         assert!(
             mismatch_pool.get().await.is_err(),
             "PostgreSQL TLS must reject a trusted certificate with the wrong hostname"
