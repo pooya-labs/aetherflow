@@ -624,7 +624,7 @@ impl PgMembershipRepository {
 /// requires both records to remain active. A worker already running a task may
 /// continue heartbeat/settlement while both records are draining, but neither
 /// lease may be expired and the incarnation/epoch must still match.
-pub(crate) async fn lock_worker_registration(
+pub(crate) pub(crate) async fn lock_worker_registration(
     transaction: &Transaction<'_>,
     registration: &WorkerRegistration,
     require_active: bool,
