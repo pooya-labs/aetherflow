@@ -58,7 +58,8 @@ mod tests {
         headers.insert("tracestate", HeaderValue::from_static("vendor=value"));
 
         let context = extract_trace_context(&headers);
-        let span_context = context.span().span_context();
+        let span = context.span();
+        let span_context = span.span_context();
         assert!(span_context.is_valid());
         assert!(span_context.is_sampled());
         assert_eq!(

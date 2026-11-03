@@ -355,7 +355,9 @@ async fn observe_http_request(
         http_method = method,
         otel_trace_id = tracing::field::Empty
     );
-    span.set_parent(extract_trace_context(request.headers()));
+    if let Err(error) = span.set_parent(extract_trace_context(request.headers())) {
+        tracing::warn!(%error, "unable to attach incoming W3C trace context");
+    }
     let trace_id = span.context().span().span_context().trace_id().to_string();
     span.record("otel_trace_id", tracing::field::display(trace_id));
     let response = next.run(request).instrument(span.clone()).await;
