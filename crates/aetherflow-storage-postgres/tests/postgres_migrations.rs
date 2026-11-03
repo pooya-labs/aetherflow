@@ -2,12 +2,12 @@ use aetherflow_core::domain::{
     AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId,
     WorkflowId, WorkflowRunId, WorkflowStatus,
 };
-use aetherflow_runtime::repository::TaskInput;
+use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore, PgTaskRepository,
-    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantPermission,
-    TenantRole, initial_migration_checksum,
+    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TaskFailure,
+    TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -409,6 +409,99 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         granted_claim.task_run().workflow_run_id(),
         &coordinated_run_id
     );
+
+    // Revoking the tenant grant after claim fences every subsequent worker write.
+    let claimed_task_id = granted_claim.task_run().task_run_id().clone();
+    let claimed_version = granted_claim.task_run().version();
+    let claimed_fencing_token = granted_claim.fencing_token();
+    client
+        .execute(
+            "UPDATE worker_tenant_grants
+             SET status = 'revoked', revoked_at = clock_timestamp()
+             WHERE tenant_id = 'tenant-a' AND worker_id = $1",
+            &[&granted_worker_id.as_str()],
+        )
+        .await
+        .expect("revoke tenant A worker grant");
+
+    let rejected_heartbeat = tasks
+        .heartbeat_registered(
+            &claimed_task_id,
+            &granted_registration,
+            claimed_version,
+            claimed_fencing_token,
+            std::time::Duration::from_secs(30),
+        )
+        .await;
+    assert!(matches!(
+        rejected_heartbeat,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+
+    let rejected_failure = tasks
+        .record_failure_registered(
+            &claimed_task_id,
+            &granted_registration,
+            claimed_version,
+            claimed_fencing_token,
+            TaskFailure::permanent("grant_revoked", "tenant grant was revoked"),
+        )
+        .await;
+    assert!(matches!(
+        rejected_failure,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+
+    let rejected_completion = tasks
+        .complete_registered(
+            &claimed_task_id,
+            &granted_registration,
+            claimed_version,
+            claimed_fencing_token,
+            TaskOutput::new(Vec::new()).expect("valid empty task output"),
+        )
+        .await;
+    assert!(matches!(
+        rejected_completion,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+
+    let rejected_aggregation = tasks
+        .aggregate_workflow_run_registered(&coordinated_run_id, &granted_registration)
+        .await;
+    assert!(matches!(
+        rejected_aggregation,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+
+    client
+        .execute(
+            "UPDATE worker_tenant_grants
+             SET status = 'active', revoked_at = NULL
+             WHERE tenant_id = 'tenant-a' AND worker_id = $1",
+            &[&granted_worker_id.as_str()],
+        )
+        .await
+        .expect("restore tenant A worker grant");
+
+    let completed = tasks
+        .complete_registered(
+            &claimed_task_id,
+            &granted_registration,
+            claimed_version,
+            claimed_fencing_token,
+            TaskOutput::new(b"tenant-a-completed".to_vec())
+                .expect("valid task output"),
+        )
+        .await
+        .expect("active grant permits task completion");
+    assert_eq!(completed.status(), TaskStatus::Succeeded);
+
+    let aggregated = tasks
+        .aggregate_workflow_run_registered(&coordinated_run_id, &granted_registration)
+        .await
+        .expect("active grant permits workflow aggregation");
+    assert_eq!(aggregated, WorkflowStatus::Succeeded);
 
     let ungranted_worker_id =
         WorkerId::parse("worker-without-tenant-grant").expect("valid ungranted worker ID");
