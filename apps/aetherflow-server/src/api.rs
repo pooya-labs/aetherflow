@@ -6,10 +6,10 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Extension, Path, Request, State};
+use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL};
 use chrono::{DateTime, SecondsFormat, Utc};
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     DurableTaskRun, DurableWorkflowRun, PgMembershipRepository, PgTaskRepository,
     PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantContext,
-    TenantPermission,
+    TenantPermission, WorkflowEventSummary, WorkflowRunSummary,
 };
 
 /// Cloneable HTTP application state. The health endpoint remains available
@@ -89,7 +89,14 @@ impl AppState {
 /// Builds the v1 router. Health is public; durable control-plane routes require Bearer auth.
 pub fn router(state: AppState) -> Router {
     let operator_control_plane = Router::new()
-        .route("/api/v1/workflow-runs", post(submit_workflow))
+        .route(
+            "/api/v1/workflow-runs",
+            get(list_workflow_runs).post(submit_workflow),
+        )
+        .route(
+            "/api/v1/workflow-runs/{workflow_run_id}/events",
+            get(list_workflow_events),
+        )
         .route(
             "/api/v1/workflow-runs/{workflow_run_id}",
             get(get_workflow_run),
@@ -108,7 +115,14 @@ pub fn router(state: AppState) -> Router {
     // Tenant API keys are deliberately separate from the platform operator
     // credential. No tenant ID is accepted from request data or headers.
     let tenant_control_plane = Router::new()
-        .route("/api/v1/tenant/workflow-runs", post(submit_tenant_workflow))
+        .route(
+            "/api/v1/tenant/workflow-runs",
+            get(list_tenant_workflow_runs).post(submit_tenant_workflow),
+        )
+        .route(
+            "/api/v1/tenant/workflow-runs/{workflow_run_id}/events",
+            get(list_tenant_workflow_events),
+        )
         .route(
             "/api/v1/tenant/workflow-runs/{workflow_run_id}",
             get(get_tenant_workflow_run),
@@ -290,6 +304,22 @@ impl ApiError {
             StatusCode::FORBIDDEN,
             "forbidden",
             "the authenticated tenant role does not permit this operation",
+        )
+    }
+
+    fn invalid_cursor() -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_cursor",
+            "the pagination cursor is malformed or does not match this resource",
+        )
+    }
+
+    fn internal() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "the server could not complete the request",
         )
     }
 
@@ -500,6 +530,326 @@ fn parse_workflow_request(
     .map_err(|_| ApiError::invalid_workflow())?;
 
     Ok((workflow_id, workflow_run_id, definition, retry_policy))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowRunListQuery {
+    status: Option<String>,
+    limit: Option<u16>,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventHistoryQuery {
+    limit: Option<u16>,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowRunCursor {
+    created_at_micros: u64,
+    workflow_run_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventHistoryCursor {
+    before_event_id: i64,
+}
+
+#[derive(Serialize)]
+struct WorkflowRunListResponse {
+    items: Vec<WorkflowRunListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WorkflowRunListItem {
+    workflow_id: String,
+    workflow_run_id: String,
+    status: &'static str,
+    version: u64,
+    task_count: u64,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<&WorkflowRunSummary> for WorkflowRunListItem {
+    fn from(value: &WorkflowRunSummary) -> Self {
+        Self {
+            workflow_id: value.workflow_id().as_str().to_owned(),
+            workflow_run_id: value.workflow_run_id().as_str().to_owned(),
+            status: workflow_status_name(value.status()),
+            version: value.version(),
+            task_count: value.task_count(),
+            created_at: format_timestamp(value.created_at()),
+            updated_at: format_timestamp(value.updated_at()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct WorkflowEventListResponse {
+    events: Vec<WorkflowEventListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WorkflowEventListItem {
+    event_id: i64,
+    aggregate_type: String,
+    aggregate_id: String,
+    aggregate_version: u64,
+    event_type: String,
+    status: Option<String>,
+    created_at: String,
+    published_at: Option<String>,
+}
+
+impl From<&WorkflowEventSummary> for WorkflowEventListItem {
+    fn from(value: &WorkflowEventSummary) -> Self {
+        Self {
+            event_id: value.event_id(),
+            aggregate_type: value.aggregate_type().to_owned(),
+            aggregate_id: value.aggregate_id().to_owned(),
+            aggregate_version: value.aggregate_version(),
+            event_type: value.event_type().to_owned(),
+            status: value.status().map(str::to_owned),
+            created_at: format_timestamp(value.created_at()),
+            published_at: value.published_at().map(format_timestamp),
+        }
+    }
+}
+
+fn decode_cursor<T>(encoded: &str) -> Result<T, ApiError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if encoded.is_empty() || encoded.len() > 1024 {
+        return Err(ApiError::invalid_cursor());
+    }
+    let decoded = BASE64_URL
+        .decode(encoded)
+        .map_err(|_| ApiError::invalid_cursor())?;
+    if decoded.is_empty() || decoded.len() > 512 {
+        return Err(ApiError::invalid_cursor());
+    }
+    serde_json::from_slice(&decoded).map_err(|_| ApiError::invalid_cursor())
+}
+
+fn encode_cursor<T: Serialize>(cursor: &T) -> Result<String, ApiError> {
+    let encoded = serde_json::to_vec(cursor).map_err(|_| ApiError::internal())?;
+    if encoded.len() > 512 {
+        return Err(ApiError::internal());
+    }
+    Ok(BASE64_URL.encode(encoded))
+}
+
+fn page_limit(requested: Option<u16>) -> Result<i64, ApiError> {
+    let limit = requested.unwrap_or(50);
+    if !(1..=100).contains(&limit) {
+        return Err(ApiError::invalid_request(StatusCode::BAD_REQUEST));
+    }
+    Ok(i64::from(limit))
+}
+
+fn validate_workflow_status_filter(status: Option<&str>) -> Result<(), ApiError> {
+    if status.is_some_and(|value| {
+        !matches!(
+            value,
+            "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out"
+        )
+    }) {
+        return Err(ApiError::invalid_request(StatusCode::BAD_REQUEST));
+    }
+    Ok(())
+}
+
+fn workflow_run_cursor_position(
+    cursor: Option<&str>,
+) -> Result<Option<(SystemTime, WorkflowRunId)>, ApiError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let cursor: WorkflowRunCursor = decode_cursor(cursor)?;
+    let created_at = UNIX_EPOCH
+        .checked_add(Duration::from_micros(cursor.created_at_micros))
+        .ok_or_else(ApiError::invalid_cursor)?;
+    let workflow_run_id =
+        WorkflowRunId::parse(cursor.workflow_run_id).map_err(|_| ApiError::invalid_cursor())?;
+    Ok(Some((created_at, workflow_run_id)))
+}
+
+fn timestamp_micros(value: SystemTime) -> Result<u64, ApiError> {
+    let duration = value
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ApiError::internal())?;
+    u64::try_from(duration.as_micros()).map_err(|_| ApiError::internal())
+}
+
+async fn list_workflow_runs(
+    State(state): State<AppState>,
+    query: Result<Query<WorkflowRunListQuery>, QueryRejection>,
+) -> Result<Json<WorkflowRunListResponse>, ApiError> {
+    let Query(query) = query.map_err(|rejection| {
+        ApiError::invalid_request(rejection.into_response().status())
+    })?;
+    validate_workflow_status_filter(query.status.as_deref())?;
+    let limit = page_limit(query.limit)?;
+    let position = workflow_run_cursor_position(query.cursor.as_deref())?;
+    let (before_created_at, before_workflow_run_id) = position
+        .as_ref()
+        .map_or((None, None), |(time, id)| (Some(*time), Some(id)));
+    let page = state
+        .database()?
+        .tasks
+        .list_legacy_workflow_runs(
+            query.status.as_deref(),
+            limit,
+            before_created_at,
+            before_workflow_run_id,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_cursor = if page.has_more() {
+        let last = page.items().last().ok_or_else(ApiError::internal)?;
+        Some(encode_cursor(&WorkflowRunCursor {
+            created_at_micros: timestamp_micros(last.created_at())?,
+            workflow_run_id: last.workflow_run_id().as_str().to_owned(),
+        })?)
+    } else {
+        None
+    };
+    let items = page.items().iter().map(WorkflowRunListItem::from).collect();
+    Ok(Json(WorkflowRunListResponse { items, next_cursor }))
+}
+
+async fn list_tenant_workflow_runs(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    query: Result<Query<WorkflowRunListQuery>, QueryRejection>,
+) -> Result<Json<WorkflowRunListResponse>, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Read)?;
+    let Query(query) = query.map_err(|rejection| {
+        ApiError::invalid_request(rejection.into_response().status())
+    })?;
+    validate_workflow_status_filter(query.status.as_deref())?;
+    let limit = page_limit(query.limit)?;
+    let position = workflow_run_cursor_position(query.cursor.as_deref())?;
+    let (before_created_at, before_workflow_run_id) = position
+        .as_ref()
+        .map_or((None, None), |(time, id)| (Some(*time), Some(id)));
+    let page = state
+        .database()?
+        .tasks
+        .list_workflow_runs_for_tenant(
+            &context,
+            query.status.as_deref(),
+            limit,
+            before_created_at,
+            before_workflow_run_id,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_cursor = if page.has_more() {
+        let last = page.items().last().ok_or_else(ApiError::internal)?;
+        Some(encode_cursor(&WorkflowRunCursor {
+            created_at_micros: timestamp_micros(last.created_at())?,
+            workflow_run_id: last.workflow_run_id().as_str().to_owned(),
+        })?)
+    } else {
+        None
+    };
+    let items = page.items().iter().map(WorkflowRunListItem::from).collect();
+    Ok(Json(WorkflowRunListResponse { items, next_cursor }))
+}
+
+async fn list_workflow_events(
+    State(state): State<AppState>,
+    Path(raw_workflow_run_id): Path<String>,
+    query: Result<Query<EventHistoryQuery>, QueryRejection>,
+) -> Result<Json<WorkflowEventListResponse>, ApiError> {
+    let workflow_run_id =
+        WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
+    let Query(query) = query.map_err(|rejection| {
+        ApiError::invalid_request(rejection.into_response().status())
+    })?;
+    let limit = page_limit(query.limit)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_cursor::<EventHistoryCursor>)
+        .transpose()?;
+    if cursor.as_ref().is_some_and(|value| value.before_event_id <= 0) {
+        return Err(ApiError::invalid_cursor());
+    }
+    let page = state
+        .database()?
+        .tasks
+        .list_legacy_workflow_events(
+            &workflow_run_id,
+            limit,
+            cursor.map(|value| value.before_event_id),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_cursor = if page.has_more() {
+        let last = page.events().last().ok_or_else(ApiError::internal)?;
+        Some(encode_cursor(&EventHistoryCursor {
+            before_event_id: last.event_id(),
+        })?)
+    } else {
+        None
+    };
+    let events = page.events().iter().map(WorkflowEventListItem::from).collect();
+    Ok(Json(WorkflowEventListResponse { events, next_cursor }))
+}
+
+async fn list_tenant_workflow_events(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    Path(raw_workflow_run_id): Path<String>,
+    query: Result<Query<EventHistoryQuery>, QueryRejection>,
+) -> Result<Json<WorkflowEventListResponse>, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Read)?;
+    let workflow_run_id =
+        WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
+    let Query(query) = query.map_err(|rejection| {
+        ApiError::invalid_request(rejection.into_response().status())
+    })?;
+    let limit = page_limit(query.limit)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(decode_cursor::<EventHistoryCursor>)
+        .transpose()?;
+    if cursor.as_ref().is_some_and(|value| value.before_event_id <= 0) {
+        return Err(ApiError::invalid_cursor());
+    }
+    let page = state
+        .database()?
+        .tasks
+        .list_workflow_events_for_tenant(
+            &context,
+            &workflow_run_id,
+            limit,
+            cursor.map(|value| value.before_event_id),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let next_cursor = if page.has_more() {
+        let last = page.events().last().ok_or_else(ApiError::internal)?;
+        Some(encode_cursor(&EventHistoryCursor {
+            before_event_id: last.event_id(),
+        })?)
+    } else {
+        None
+    };
+    let events = page.events().iter().map(WorkflowEventListItem::from).collect();
+    Ok(Json(WorkflowEventListResponse { events, next_cursor }))
 }
 
 async fn submit_workflow(
@@ -895,6 +1245,48 @@ mod tests {
 
         headers.remove(AUTHORIZATION);
         assert!(!authorization_matches(&expected, &headers));
+    }
+
+    #[tokio::test]
+    async fn dashboard_routes_validate_query_and_cursor_before_database_access() {
+        let invalid_cursor = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workflow-runs?cursor=not-a-valid-cursor")
+                    .body(Body::empty())
+                    .expect("valid workflow list request"),
+            )
+            .await
+            .expect("invalid cursor response");
+        assert_eq!(invalid_cursor.status(), StatusCode::BAD_REQUEST);
+        let invalid_cursor_body = to_bytes(invalid_cursor.into_body(), 1024)
+            .await
+            .expect("read cursor error");
+        let invalid_cursor_error: serde_json::Value =
+            serde_json::from_slice(&invalid_cursor_body).expect("valid cursor error JSON");
+        assert_eq!(invalid_cursor_error["error"]["code"], "invalid_cursor");
+
+        let invalid_status = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workflow-runs?status=unknown")
+                    .body(Body::empty())
+                    .expect("valid status filter request"),
+            )
+            .await
+            .expect("invalid status response");
+        assert_eq!(invalid_status.status(), StatusCode::BAD_REQUEST);
+
+        let too_many = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workflow-runs?limit=101")
+                    .body(Body::empty())
+                    .expect("valid page-size request"),
+            )
+            .await
+            .expect("invalid page-size response");
+        assert_eq!(too_many.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
