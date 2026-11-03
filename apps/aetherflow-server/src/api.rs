@@ -656,7 +656,9 @@ mod tests {
         use tokio_postgres::{Config, NoTls};
 
         let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
-            eprintln!("AETHERFLOW_TEST_DATABASE_URL is not set; skipping HTTP/PostgreSQL integration test");
+            eprintln!(
+                "AETHERFLOW_TEST_DATABASE_URL is not set; skipping HTTP/PostgreSQL integration test"
+            );
             return;
         };
 
@@ -755,7 +757,10 @@ mod tests {
         let workflow_snapshot: serde_json::Value =
             serde_json::from_slice(&workflow_body).expect("valid workflow snapshot JSON");
         assert_eq!(workflow_snapshot["workflow_id"], workflow_id);
-        assert_eq!(workflow_snapshot["task_runs"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            workflow_snapshot["task_runs"].as_array().map(Vec::len),
+            Some(1)
+        );
 
         let task = router(state.clone())
             .oneshot(
