@@ -2023,6 +2023,9 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, true).await?;
+            apply_worker_identity_to_transaction(&transaction, publisher_id).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         let registered_worker_id = registration.map(|value| value.worker_id().as_str());
@@ -2138,17 +2141,24 @@ impl PgTaskRepository {
         claim_token: u64,
     ) -> Result<(), StorageError> {
         let claim_token = sql_i64(claim_token)?;
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let updated = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        apply_legacy_worker_context_to_transaction(&transaction).await?;
+        let updated = transaction
             .execute(
-                "UPDATE outbox_events \
-             SET published_at = clock_timestamp(), claim_owner = NULL, claim_expires_at = NULL \
-             WHERE tenant_id = 'legacy-default' AND event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
-               AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
+                "UPDATE outbox_events
+                 SET published_at = clock_timestamp(), claim_owner = NULL,
+                     claim_expires_at = NULL
+                 WHERE tenant_id = 'legacy-default' AND event_id = $1
+                   AND published_at IS NULL AND claim_owner = $2
+                   AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
                 &[&event_id, &publisher_id.as_str(), &claim_token],
             )
             .await
@@ -2156,6 +2166,10 @@ impl PgTaskRepository {
         if updated != 1 {
             return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
         }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(())
     }
 
@@ -2183,6 +2197,7 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         lock_worker_registration(&transaction, registration, false).await?;
+        apply_worker_identity_to_transaction(&transaction, publisher_id).await?;
         let row = transaction
             .query_opt(
                 "SELECT tenant_id FROM outbox_events
@@ -2196,6 +2211,7 @@ impl PgTaskRepository {
             .ok_or_else(|| StorageError::ClaimLost(format!("outbox event {event_id}")))?;
         let tenant_id: String = row.get(0);
         lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
         let updated = transaction
             .execute(
                 "UPDATE outbox_events
@@ -2232,18 +2248,24 @@ impl PgTaskRepository {
     ) -> Result<(), StorageError> {
         let claim_token = sql_i64(claim_token)?;
         let retry_delay_seconds = retry_delay.as_secs_f64();
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let updated = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        apply_legacy_worker_context_to_transaction(&transaction).await?;
+        let updated = transaction
             .execute(
-                "UPDATE outbox_events \
-             SET available_at = clock_timestamp() + make_interval(secs => $4), \
-                 claim_owner = NULL, claim_expires_at = NULL, last_error = $5 \
-             WHERE tenant_id = 'legacy-default' AND event_id = $1 AND published_at IS NULL AND claim_owner = $2 \
-               AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
+                "UPDATE outbox_events
+                 SET available_at = clock_timestamp() + make_interval(secs => $4),
+                     claim_owner = NULL, claim_expires_at = NULL, last_error = $5
+                 WHERE tenant_id = 'legacy-default' AND event_id = $1
+                   AND published_at IS NULL AND claim_owner = $2
+                   AND claim_token = $3 AND claim_expires_at > clock_timestamp()",
                 &[
                     &event_id,
                     &publisher_id.as_str(),
@@ -2257,6 +2279,10 @@ impl PgTaskRepository {
         if updated != 1 {
             return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
         }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(())
     }
 
@@ -2287,6 +2313,7 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         lock_worker_registration(&transaction, registration, false).await?;
+        apply_worker_identity_to_transaction(&transaction, publisher_id).await?;
         let row = transaction
             .query_opt(
                 "SELECT tenant_id FROM outbox_events
@@ -2300,6 +2327,7 @@ impl PgTaskRepository {
             .ok_or_else(|| StorageError::ClaimLost(format!("outbox event {event_id}")))?;
         let tenant_id: String = row.get(0);
         lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
         let updated = transaction
             .execute(
                 "UPDATE outbox_events
