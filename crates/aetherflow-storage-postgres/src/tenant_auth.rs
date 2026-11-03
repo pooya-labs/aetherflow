@@ -32,10 +32,7 @@ impl PgTenantCredentialRepository {
     /// All credential failures share InvalidTenantCredential; callers must not
     /// disclose whether a token was unknown, revoked, expired, or bound to a
     /// disabled principal/tenant.
-    pub async fn authenticate_token(
-        &self,
-        token: &str,
-    ) -> Result<TenantContext, StorageError> {
+    pub async fn authenticate_token(&self, token: &str) -> Result<TenantContext, StorageError> {
         if !valid_token_shape(token) {
             return Err(StorageError::InvalidTenantCredential);
         }

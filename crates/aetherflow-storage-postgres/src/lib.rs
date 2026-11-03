@@ -26,12 +26,12 @@ pub use outbox::{
     OutboxDispatcherError, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
     PostgresOutboxDispatcher,
 };
-pub use tenant::{TenantContext, TenantPermission, TenantRole};
-pub use tenant_auth::PgTenantCredentialRepository;
 pub use task_repository::{
     DurableTaskRun, DurableWorkflowRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository,
     RecoveredLease, TaskFailure,
 };
+pub use tenant::{TenantContext, TenantPermission, TenantRole};
+pub use tenant_auth::PgTenantCredentialRepository;
 pub use worker::{
     PostgresTaskWorker, PostgresWorkerConfig, PostgresWorkerConfigError, PostgresWorkerError,
 };

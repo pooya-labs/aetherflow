@@ -1,6 +1,6 @@
 use aetherflow_storage_postgres::{
-    MigrationOutcome, PgStore, PgTenantCredentialRepository, StorageError,
-    TenantPermission, TenantRole, initial_migration_checksum,
+    MigrationOutcome, PgStore, PgTenantCredentialRepository, StorageError, TenantPermission,
+    TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -152,7 +152,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     let bad_token = credentials
         .authenticate_token("AetherFlowTenantCredentialTest0123456780")
         .await;
-    assert!(matches!(bad_token, Err(StorageError::InvalidTenantCredential)));
+    assert!(matches!(
+        bad_token,
+        Err(StorageError::InvalidTenantCredential)
+    ));
 
     client
         .execute(
