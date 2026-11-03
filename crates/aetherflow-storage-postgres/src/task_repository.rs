@@ -336,6 +336,7 @@ impl RecoveredLease {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutboxClaim {
     event_id: i64,
+    tenant_id: String,
     aggregate_type: String,
     aggregate_id: String,
     aggregate_version: u64,
@@ -352,6 +353,12 @@ impl OutboxClaim {
     #[must_use]
     pub fn event_id(&self) -> i64 {
         self.event_id
+    }
+
+    /// Returns the tenant that owns this event.
+    #[must_use]
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
     }
 
     /// Returns the aggregate category.
@@ -1945,10 +1952,42 @@ impl PgTaskRepository {
 
     /// Claims pending legacy-default outbox events using row locks and claim fencing.
     ///
-    /// This compatibility dispatcher is intentionally restricted to legacy-default.
-    /// Tenant events require the registered, tenant-aware dispatcher path.
+    /// The compatibility dispatcher is intentionally restricted to legacy-default.
     pub async fn claim_outbox_events(
         &self,
+        publisher_id: &WorkerId,
+        limit: i64,
+        lease_duration: Duration,
+    ) -> Result<Vec<OutboxClaim>, StorageError> {
+        self.claim_outbox_events_inner(None, publisher_id, limit, lease_duration)
+            .await
+    }
+
+    /// Claims outbox events for a registered publisher with per-tenant grants.
+    pub async fn claim_outbox_events_registered(
+        &self,
+        registration: &WorkerRegistration,
+        publisher_id: &WorkerId,
+        limit: i64,
+        lease_duration: Duration,
+    ) -> Result<Vec<OutboxClaim>, StorageError> {
+        if registration.worker_id() != publisher_id {
+            return Err(StorageError::WorkerRegistrationLost(
+                publisher_id.as_str().to_owned(),
+            ));
+        }
+        self.claim_outbox_events_inner(
+            Some(registration),
+            publisher_id,
+            limit,
+            lease_duration,
+        )
+        .await
+    }
+
+    async fn claim_outbox_events_inner(
+        &self,
+        registration: Option<&WorkerRegistration>,
         publisher_id: &WorkerId,
         limit: i64,
         lease_duration: Duration,
@@ -1966,45 +2005,87 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
-        let rows = transaction
+        if let Some(registration) = registration {
+            lock_worker_registration(&transaction, registration, true).await?;
+        }
+
+        let registered_worker_id = registration.map(|value| value.worker_id().as_str());
+        let candidates = transaction
             .query(
-                "WITH candidates AS ( \
-                SELECT event_id \
-                FROM outbox_events \
-                WHERE tenant_id = 'legacy-default' AND published_at IS NULL AND available_at <= clock_timestamp() \
-                  AND (claim_expires_at IS NULL OR claim_expires_at <= clock_timestamp()) \
-                ORDER BY available_at, event_id \
-                LIMIT $1 FOR UPDATE SKIP LOCKED \
-            ) \
-            UPDATE outbox_events AS event \
-            SET claim_owner = $2, claim_token = event.claim_token + 1, \
-                claim_expires_at = clock_timestamp() + make_interval(secs => $3), \
-                publish_attempts = event.publish_attempts + 1 \
-            FROM candidates \
-            WHERE event.event_id = candidates.event_id \
-            RETURNING event.event_id, event.aggregate_type, event.aggregate_id, \
-                      event.aggregate_version, event.event_type, event.payload, \
-                      event.claim_owner, event.claim_token, event.claim_expires_at, \
-                      event.publish_attempts",
-                &[&limit, &publisher_id.as_str(), &lease_seconds],
+                "SELECT event.tenant_id, event.event_id
+                 FROM outbox_events AS event
+                 WHERE event.published_at IS NULL
+                   AND event.available_at <= clock_timestamp()
+                   AND (event.claim_expires_at IS NULL
+                        OR event.claim_expires_at <= clock_timestamp())
+                   AND (
+                       event.tenant_id = 'legacy-default'
+                       OR (
+                           $2::TEXT IS NOT NULL
+                           AND EXISTS (
+                               SELECT 1 FROM worker_tenant_grants AS grant_row
+                               WHERE grant_row.tenant_id = event.tenant_id
+                                 AND grant_row.worker_id = $2
+                                 AND grant_row.status = 'active'
+                                 AND (grant_row.expires_at IS NULL
+                                      OR grant_row.expires_at > clock_timestamp())
+                           )
+                       )
+                   )
+                 ORDER BY event.available_at, event.event_id
+                 LIMIT $1 FOR UPDATE OF event SKIP LOCKED",
+                &[&limit, &registered_worker_id],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
-        let mut claims = Vec::with_capacity(rows.len());
-        for row in rows {
-            let event_id: i64 = row.get(0);
-            let aggregate_type: String = row.get(1);
-            let aggregate_id: String = row.get(2);
-            let aggregate_version: i64 = row.get(3);
-            let event_type: String = row.get(4);
-            let payload: serde_json::Value = row.get(5);
-            let owner: String = row.get(6);
-            let claim_token: i64 = row.get(7);
-            let claim_expires_at: SystemTime = row.get(8);
-            let publish_attempts: i32 = row.get(9);
+        let mut claims = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let tenant_id: String = candidate.get(0);
+            let event_id: i64 = candidate.get(1);
+            if let Some(registration) = registration {
+                if !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await? {
+                    continue;
+                }
+            }
+
+            let row = transaction
+                .query_opt(
+                    "UPDATE outbox_events
+                     SET claim_owner = $3, claim_token = claim_token + 1,
+                         claim_expires_at = clock_timestamp() + make_interval(secs => $4),
+                         publish_attempts = publish_attempts + 1
+                     WHERE tenant_id = $1 AND event_id = $2 AND published_at IS NULL
+                       AND (claim_expires_at IS NULL
+                            OR claim_expires_at <= clock_timestamp())
+                     RETURNING aggregate_type, aggregate_id, aggregate_version,
+                               event_type, payload, claim_owner, claim_token,
+                               claim_expires_at, publish_attempts",
+                    &[
+                        &tenant_id,
+                        &event_id,
+                        &publisher_id.as_str(),
+                        &lease_seconds,
+                    ],
+                )
+                .await
+                .map_err(|error| StorageError::Database(error.to_string()))?;
+            let Some(row) = row else {
+                continue;
+            };
+
+            let aggregate_type: String = row.get(0);
+            let aggregate_id: String = row.get(1);
+            let aggregate_version: i64 = row.get(2);
+            let event_type: String = row.get(3);
+            let payload: serde_json::Value = row.get(4);
+            let owner: String = row.get(5);
+            let claim_token: i64 = row.get(6);
+            let claim_expires_at: SystemTime = row.get(7);
+            let publish_attempts: i32 = row.get(8);
             claims.push(OutboxClaim {
                 event_id,
+                tenant_id,
                 aggregate_type,
                 aggregate_id,
                 aggregate_version: u64::try_from(aggregate_version).map_err(|_| {
@@ -2023,6 +2104,7 @@ impl PgTaskRepository {
                 })?,
             });
         }
+
         claims.sort_by_key(OutboxClaim::event_id);
         transaction
             .commit()
@@ -2057,6 +2139,70 @@ impl PgTaskRepository {
         if updated != 1 {
             return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
         }
+        Ok(())
+    }
+
+    /// Acknowledges an event only while the registered publisher has a live tenant grant.
+    pub async fn acknowledge_outbox_event_registered(
+        &self,
+        event_id: i64,
+        registration: &WorkerRegistration,
+        publisher_id: &WorkerId,
+        claim_token: u64,
+    ) -> Result<(), StorageError> {
+        let claim_token = sql_i64(claim_token)?;
+        if registration.worker_id() != publisher_id {
+            return Err(StorageError::WorkerRegistrationLost(
+                publisher_id.as_str().to_owned(),
+            ));
+        }
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_worker_registration(&transaction, registration, false).await?;
+        let row = transaction
+            .query_opt(
+                "SELECT tenant_id FROM outbox_events
+                 WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2
+                   AND claim_token = $3 AND claim_expires_at > clock_timestamp()
+                 FOR UPDATE",
+                &[&event_id, &publisher_id.as_str(), &claim_token],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| StorageError::ClaimLost(format!("outbox event {event_id}")))?;
+        let tenant_id: String = row.get(0);
+        lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        let updated = transaction
+            .execute(
+                "UPDATE outbox_events
+                 SET published_at = clock_timestamp(), claim_owner = NULL,
+                     claim_expires_at = NULL
+                 WHERE tenant_id = $1 AND event_id = $2 AND published_at IS NULL
+                   AND claim_owner = $3 AND claim_token = $4
+                   AND claim_expires_at > clock_timestamp()",
+                &[
+                    &tenant_id,
+                    &event_id,
+                    &publisher_id.as_str(),
+                    &claim_token,
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        if updated != 1 {
+            return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(())
     }
 
@@ -2099,6 +2245,75 @@ impl PgTaskRepository {
         if updated != 1 {
             return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
         }
+        Ok(())
+    }
+
+    /// Reschedules an event only while the registered publisher has a live tenant grant.
+    pub async fn retry_outbox_event_registered(
+        &self,
+        event_id: i64,
+        registration: &WorkerRegistration,
+        publisher_id: &WorkerId,
+        claim_token: u64,
+        retry_delay: Duration,
+        error_message: &str,
+    ) -> Result<(), StorageError> {
+        let claim_token = sql_i64(claim_token)?;
+        let retry_delay_seconds = retry_delay.as_secs_f64();
+        if registration.worker_id() != publisher_id {
+            return Err(StorageError::WorkerRegistrationLost(
+                publisher_id.as_str().to_owned(),
+            ));
+        }
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_worker_registration(&transaction, registration, false).await?;
+        let row = transaction
+            .query_opt(
+                "SELECT tenant_id FROM outbox_events
+                 WHERE event_id = $1 AND published_at IS NULL AND claim_owner = $2
+                   AND claim_token = $3 AND claim_expires_at > clock_timestamp()
+                 FOR UPDATE",
+                &[&event_id, &publisher_id.as_str(), &claim_token],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| StorageError::ClaimLost(format!("outbox event {event_id}")))?;
+        let tenant_id: String = row.get(0);
+        lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        let updated = transaction
+            .execute(
+                "UPDATE outbox_events
+                 SET available_at = clock_timestamp() + make_interval(secs => $5),
+                     claim_owner = NULL, claim_expires_at = NULL, last_error = $6
+                 WHERE tenant_id = $1 AND event_id = $2 AND published_at IS NULL
+                   AND claim_owner = $3 AND claim_token = $4
+                   AND claim_expires_at > clock_timestamp()",
+                &[
+                    &tenant_id,
+                    &event_id,
+                    &publisher_id.as_str(),
+                    &claim_token,
+                    &retry_delay_seconds,
+                    &error_message,
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        if updated != 1 {
+            return Err(StorageError::ClaimLost(format!("outbox event {event_id}")));
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(())
     }
 
