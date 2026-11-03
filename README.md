@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 includes platform and tenant-authenticated Axum routes, tenant-scoped storage, grant-gated workers/events, PostgreSQL migrations v4–v7, forced RLS on ten tenant tables, restricted runtime DB roles, and a Rustls HTTPS boundary for non-loopback listeners. The HTTPS listener tests passed Rust CI on [54b1774](https://github.com/pooya16pg-spec/aetherflow/commit/54b17742aee822f37a4a3b034968bbcd3e851c13). Live PostgreSQL TLS tests against PostgreSQL 18 passed on [369065c](https://github.com/pooya16pg-spec/aetherflow/commit/369065c85b2126f97fb55f107b5d34518829cc80), including trusted CA acceptance and untrusted CA/hostname-mismatch rejection. CLI/SDK, dashboard, and operational hardening remain. AetherFlow is experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 includes platform and tenant-authenticated Axum routes, tenant-scoped storage, grant-gated workers/events, PostgreSQL migrations v4–v7, forced RLS on ten tenant tables, restricted runtime DB roles, and a Rustls HTTPS boundary for non-loopback listeners. The HTTPS listener tests passed Rust CI on [54b1774](https://github.com/pooya16pg-spec/aetherflow/commit/54b17742aee822f37a4a3b034968bbcd3e851c13). Live PostgreSQL TLS tests against PostgreSQL 18 passed on [369065c](https://github.com/pooya16pg-spec/aetherflow/commit/369065c85b2126f97fb55f107b5d34518829cc80), including trusted CA acceptance and untrusted CA/hostname-mismatch rejection. The CLI is hosted-verified, the typed Rust SDK is in its first implementation pass, and dashboard/operational hardening remain open. AetherFlow is experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -64,7 +64,7 @@ The contract and its compatibility/security decisions are recorded in [ADR-0010]
 
 ## CLI
 
-A first CLI implementation is in the workspace and is being validated by hosted CI. It exposes health, active worker inventory, workflow submit/inspect, and task inspect/cancel commands over the v1 HTTP API. Operator and tenant credentials are read from separate environment variables; tenant mode is selected with --tenant.
+The CLI is implemented and hosted-verified on exact source [0c19b9b](https://github.com/pooya-labs/aetherflow/commit/0c19b9b7d8124472c81ce53056612344f0ebab57), together with successful Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774), PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644), and Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557). It exposes health, active worker inventory, workflow submit/inspect, and task inspect/cancel over the v1 API. Operator and tenant credentials are separate and environment-only; remote cleartext HTTP is rejected and workflow input is bounded before reading.
 
 ~~~bash
 export AETHERFLOW_API_TOKEN="your-operator-token"
@@ -77,6 +77,12 @@ cargo run -p aetherflow-cli -- task cancel task-run-0001 --expected-version 3
 ~~~
 
 Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects a non-default server; the default is http://127.0.0.1:8080. Use --file - to read a submission JSON object from standard input. See [the CLI guide](apps/aetherflow-cli/README.md) and [the API contract](docs/api/openapi.yaml).
+
+## Rust SDK
+
+A typed asynchronous Rust client lives in `crates/aetherflow-sdk`. It models the v1 workflow, task, worker, and error contracts; validates workflow DAGs and payload limits locally; separates anonymous, operator, and tenant scopes; rejects remote plain HTTP; disables redirects; and redacts credentials from Debug output. The SDK is now under hosted CI verification.
+
+See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
 ## Repository map
 

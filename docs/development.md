@@ -23,7 +23,7 @@ The default workspace test command does not require PostgreSQL or NATS. Database
 
 ## Run the CLI
 
-The CLI calls the versioned HTTP API and never connects directly to PostgreSQL or launches worker processes.
+The CLI calls the versioned HTTP API and never connects directly to PostgreSQL or launches worker processes. Its environment-only credential scopes, loopback-only plaintext policy, redirect blocking, and bounded submission reader are hosted-verified on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57` (Rust CI 41614021774, PostgreSQL/NATS 41614021644, Pages 41614915557).
 
 ~~~bash
 export AETHERFLOW_URL='http://127.0.0.1:8080'
@@ -38,6 +38,33 @@ cargo run -p aetherflow-cli -- task cancel task-run-0001 --expected-version 3
 ~~~
 
 Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the global --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects the server; the default is http://127.0.0.1:8080. Tokens are read only from environment variables, never command-line arguments or error output. HTTPS verification stays enabled through Rustls and the platform trust store; the CLI rejects remote plain-HTTP URLs before it can send a bearer token. Plain HTTP is allowed only for loopback development. The --file - form reads a JSON request from standard input through a bounded reader; file and stdin input stop at the API's 2 MiB request limit.
+
+## Use the Rust SDK
+
+The SDK crate is a typed asynchronous HTTP client. It uses separate operator and tenant scopes, performs local identifier/workflow/payload checks, and does not connect to PostgreSQL or launch workers.
+
+~~~rust
+use aetherflow_sdk::{
+    ControlPlaneClient, RetryPolicy, WorkflowRunSubmission, WorkflowTaskInput,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let token = std::env::var("AETHERFLOW_API_TOKEN")?;
+    let client = ControlPlaneClient::operator("http://127.0.0.1:8080", token)?;
+    let submission = WorkflowRunSubmission::new(
+        "demo",
+        "demo-run-001",
+        vec![WorkflowTaskInput::new("first")],
+        RetryPolicy::new(2, 100, 1_000)?,
+    );
+    let receipt = client.submit_workflow_run(&submission).await?;
+    println!("created {}", receipt.workflow_run_id);
+    Ok(())
+}
+~~~
+
+For public liveness checks use `ControlPlaneClient::anonymous`; for tenant-owned workflows/tasks use `ControlPlaneClient::tenant` with `AETHERFLOW_TENANT_TOKEN`. Remote URLs must use HTTPS. Plain HTTP is accepted only for loopback development. See the [SDK guide](../crates/aetherflow-sdk/README.md).
 
 ## Run the HTTP control plane
 
@@ -95,6 +122,7 @@ The HTTP process does not launch a worker. Run durable workers separately throug
 - crates/aetherflow-storage-postgres: migrations, durable task/workflow repositories, membership, outbox, and inbox.
 - crates/aetherflow-transport-nats: JetStream publisher and inbox-backed pull consumer.
 - crates/aetherflow-wasm: WIT ABI and bounded Wasmtime execution.
+- crates/aetherflow-sdk: typed async HTTP client for anonymous health, operator, and tenant control-plane scopes.
 - examples/minimal-plugin: reproducible guest/host example using the scheduler-backed WASM handler.
 
 ## PostgreSQL-backed tests
@@ -147,4 +175,4 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 
 ## Project state
 
-M00–M06 are complete. M07's tenant-authenticated routes, transaction-local contexts, PostgreSQL migrations v4–v7, forced RLS, restricted runtime role, tenant storage/API suites, and JetStream integration passed the exact-source hosted matrix at `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (Rust CI 41602415273, PostgreSQL/NATS 41602415207, Pages 41602415169). The control plane is still not production-ready: CLI/SDK, dashboard, and M08 operational hardening remain future work. Live PostgreSQL TLS trust and hostname validation passed PostgreSQL/NATS CI run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469). The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
+M00–M06 are complete. M07's tenant-authenticated routes, transaction-local contexts, PostgreSQL migrations v4–v7, forced RLS, restricted runtime role, tenant storage/API suites, and JetStream integration passed the exact-source hosted matrix at `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (Rust CI 41602415273, PostgreSQL/NATS 41602415207, Pages 41602415169). The CLI is hosted-verified. The first typed Rust SDK implementation is under CI verification; dashboard and M08 operational hardening remain. The control plane is still experimental and not production-ready. Live PostgreSQL TLS trust and hostname validation passed PostgreSQL/NATS CI run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469). The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.

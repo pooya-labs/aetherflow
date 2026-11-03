@@ -8,6 +8,7 @@ members = [
     "crates/aetherflow-wasm",
     "apps/aetherflow-server",
     "apps/aetherflow-cli",
+    "crates/aetherflow-sdk",
     "examples/minimal-plugin/guest",
     "examples/minimal-plugin/host",
 ]
