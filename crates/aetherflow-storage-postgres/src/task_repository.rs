@@ -1976,13 +1976,8 @@ impl PgTaskRepository {
                 publisher_id.as_str().to_owned(),
             ));
         }
-        self.claim_outbox_events_inner(
-            Some(registration),
-            publisher_id,
-            limit,
-            lease_duration,
-        )
-        .await
+        self.claim_outbox_events_inner(Some(registration), publisher_id, limit, lease_duration)
+            .await
     }
 
     async fn claim_outbox_events_inner(
@@ -2187,12 +2182,7 @@ impl PgTaskRepository {
                  WHERE tenant_id = $1 AND event_id = $2 AND published_at IS NULL
                    AND claim_owner = $3 AND claim_token = $4
                    AND claim_expires_at > clock_timestamp()",
-                &[
-                    &tenant_id,
-                    &event_id,
-                    &publisher_id.as_str(),
-                    &claim_token,
-                ],
+                &[&tenant_id, &event_id, &publisher_id.as_str(), &claim_token],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
