@@ -452,3 +452,46 @@ fn bounded_error(message: &str) -> String {
     }
     message[..end].to_owned()
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::JetStreamEvent;
+
+    #[test]
+    fn legacy_event_envelopes_default_to_the_reserved_legacy_tenant() {
+        let event: JetStreamEvent = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "event_id": "42",
+                "aggregate_type": "workflow_run",
+                "aggregate_id": "legacy-run",
+                "aggregate_version": 1,
+                "event_type": "workflow.started",
+                "payload": {}
+            }"#,
+        )
+        .expect("valid legacy event envelope");
+
+        assert_eq!(event.tenant_id(), "legacy-default");
+    }
+
+    #[test]
+    fn tenant_event_envelopes_preserve_the_explicit_tenant_identity() {
+        let event: JetStreamEvent = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "tenant_id": "tenant-acme",
+                "event_id": "42",
+                "aggregate_type": "workflow_run",
+                "aggregate_id": "acme-run",
+                "aggregate_version": 1,
+                "event_type": "workflow.started",
+                "payload": {}
+            }"#,
+        )
+        .expect("valid tenant event envelope");
+
+        assert_eq!(event.tenant_id(), "tenant-acme");
+    }
+}
