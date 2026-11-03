@@ -212,7 +212,7 @@ async fn require_tenant_bearer(
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| !value.is_empty());
     let Some(token) = token else {
-        return unauthorized_bearer().into_response();
+        return unauthorized_bearer_response();
     };
 
     let database = match state.database() {
@@ -237,6 +237,14 @@ fn unauthorized_bearer() -> ApiError {
         "unauthorized",
         "a valid tenant Bearer credential is required for this resource",
     )
+}
+
+fn unauthorized_bearer_response() -> Response {
+    let mut response = unauthorized_bearer().into_response();
+    response
+        .headers_mut()
+        .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
 }
 
 fn require_tenant_permission(
