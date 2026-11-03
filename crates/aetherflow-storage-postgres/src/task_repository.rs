@@ -672,6 +672,9 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, true).await?;
+            apply_worker_identity_to_transaction(&transaction, registration.worker_id()).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         // The unregistered compatibility path can only touch legacy-default.
@@ -726,6 +729,7 @@ impl PgTaskRepository {
                     continue;
                 }
             }
+            apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
             let updated = transaction
                 .query_opt(
@@ -848,6 +852,9 @@ impl PgTaskRepository {
                 ));
             }
             lock_worker_registration(&transaction, registration, true).await?;
+            apply_worker_identity_to_transaction(&transaction, worker_id).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
         let supported_task_ids = supported_task_ids.map(|task_ids| {
             task_ids
@@ -901,6 +908,7 @@ impl PgTaskRepository {
         if let Some(registration) = registration {
             lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
         }
+        apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
         let updated = transaction.query_opt(
             "UPDATE task_runs \
              SET status = 'running', version = version + 1, \
@@ -1794,6 +1802,9 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, true).await?;
+            apply_worker_identity_to_transaction(&transaction, publisher_id).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         let registered_worker_id = registration.map(|value| value.worker_id().as_str());
@@ -2052,6 +2063,7 @@ impl PgTaskRepository {
                     continue;
                 }
             }
+            apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
             let row = transaction
                 .query_opt(
