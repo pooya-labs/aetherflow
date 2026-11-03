@@ -3,7 +3,7 @@
 //! A TenantContext can only be minted inside this crate after a credential
 //! has been validated against active credential, principal, and tenant rows.
 
-use aetherflow_core::domain::{PrincipalId, TenantId};
+use aetherflow_core::domain::{PrincipalId, TenantId, WorkerId};
 use tokio_postgres::Transaction;
 
 use crate::StorageError;
@@ -78,6 +78,46 @@ pub struct TenantContext {
     role: TenantRole,
 }
 
+/// Installs a worker identity as transaction-local PostgreSQL state.
+///
+/// The active grant still has to be checked and locked by the operation. This
+/// GUC lets future forced-RLS policies restrict set-based worker queries to
+/// tenants granted to this registered worker.
+pub(crate) async fn apply_worker_identity_to_transaction(
+    transaction: &Transaction<'_>,
+    worker_id: &WorkerId,
+) -> Result<(), StorageError> {
+    transaction
+        .query_one(
+            "SELECT
+                set_config('aetherflow.worker_id', $1, true),
+                set_config('aetherflow.principal_id', '', true),
+                set_config('aetherflow.tenant_role', 'worker', true)",
+            &[&worker_id.as_str()],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?;
+    Ok(())
+}
+
+/// Changes the active tenant for the remainder of one database transaction.
+///
+/// Only call this after validating the relevant tenant credential or worker
+/// grant. The setting is transaction-local and cannot leak through the pool.
+pub(crate) async fn apply_tenant_id_to_transaction(
+    transaction: &Transaction<'_>,
+    tenant_id: &str,
+) -> Result<(), StorageError> {
+    transaction
+        .query_one(
+            "SELECT set_config('aetherflow.tenant_id', $1, true)",
+            &[&tenant_id],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?;
+    Ok(())
+}
+
 impl TenantContext {
     pub(crate) fn from_authenticated_credential(
         tenant_id: TenantId,
@@ -129,7 +169,8 @@ impl TenantContext {
                 "SELECT
                     set_config('aetherflow.tenant_id', $1, true),
                     set_config('aetherflow.principal_id', $2, true),
-                    set_config('aetherflow.tenant_role', $3, true)",
+                    set_config('aetherflow.tenant_role', $3, true),
+                set_config('aetherflow.worker_id', '', true)",
                 &[
                     &self.tenant_id.as_str(),
                     &self.principal_id.as_str(),
