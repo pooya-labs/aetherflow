@@ -30,6 +30,7 @@ use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use opentelemetry::trace::TraceContextExt;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
