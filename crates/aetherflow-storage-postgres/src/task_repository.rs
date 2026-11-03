@@ -2930,7 +2930,7 @@ async fn try_lock_worker_tenant_grant(
     Ok(grant.is_some())
 }
 
-async fn lock_worker_tenant_grant(
+pub(crate) async fn lock_worker_tenant_grant(
     transaction: &Transaction<'_>,
     registration: &WorkerRegistration,
     tenant_id: &str,
