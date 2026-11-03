@@ -422,9 +422,43 @@ impl PgTaskRepository {
         Self { pool }
     }
 
-    /// Atomically creates a workflow, all task runs, and dependency edges.
+    /// Atomically creates a legacy/default-owned workflow and its task graph.
+    ///
+    /// Runtime worker paths continue to use this compatibility entry point
+    /// until tenant grants are enforced end-to-end.
     pub async fn create_workflow(
         &self,
+        workflow_run_id: &WorkflowRunId,
+        workflow_id: &WorkflowId,
+        idempotency_key: Option<&IdempotencyKey>,
+        tasks: &[NewTaskRun],
+    ) -> Result<(), StorageError> {
+        self.create_workflow_inner(None, workflow_run_id, workflow_id, idempotency_key, tasks)
+            .await
+    }
+
+    /// Atomically creates a workflow owned by the authenticated tenant.
+    pub async fn create_workflow_for_tenant(
+        &self,
+        context: &TenantContext,
+        workflow_run_id: &WorkflowRunId,
+        workflow_id: &WorkflowId,
+        idempotency_key: Option<&IdempotencyKey>,
+        tasks: &[NewTaskRun],
+    ) -> Result<(), StorageError> {
+        self.create_workflow_inner(
+            Some(context),
+            workflow_run_id,
+            workflow_id,
+            idempotency_key,
+            tasks,
+        )
+        .await
+    }
+
+    async fn create_workflow_inner(
+        &self,
+        context: Option<&TenantContext>,
         workflow_run_id: &WorkflowRunId,
         workflow_id: &WorkflowId,
         idempotency_key: Option<&IdempotencyKey>,
@@ -489,15 +523,22 @@ impl PgTaskRepository {
             .transaction()
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        if let Some(context) = context {
+            context.apply_to_transaction(&transaction).await?;
+        }
+        let tenant_id = context
+            .map(|context| context.tenant_id().as_str())
+            .unwrap_or("legacy-default");
 
         transaction
             .execute(
                 "INSERT INTO workflow_runs \
-             (workflow_run_id, workflow_id, status, version, idempotency_key, started_at) \
-             VALUES ($1, $2, 'running', 1, $3, clock_timestamp())",
+             (workflow_run_id, workflow_id, tenant_id, status, version, idempotency_key, started_at) \
+             VALUES ($1, $2, $3, 'running', 1, $4, clock_timestamp())",
                 &[
                     &workflow_run_id.as_str(),
                     &workflow_id.as_str(),
+                    &tenant_id,
                     &idempotency_key.map(IdempotencyKey::as_str),
                 ],
             )
@@ -520,12 +561,13 @@ impl PgTaskRepository {
             transaction
                 .execute(
                     "INSERT INTO task_runs \
-                 (task_run_id, workflow_run_id, task_id, status, max_attempts, \
+                 (task_run_id, workflow_run_id, tenant_id, task_id, status, max_attempts, \
                   initial_backoff_ms, max_backoff_ms, available_at, input_payload) \
-                 VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8)",
+                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)",
                     &[
                         &task.task_run_id.as_str(),
                         &workflow_run_id.as_str(),
+                        &tenant_id,
                         &task.task_id.as_str(),
                         &max_attempts,
                         &initial_backoff,
@@ -548,9 +590,10 @@ impl PgTaskRepository {
                 transaction
                     .execute(
                         "INSERT INTO task_run_dependencies \
-                     (workflow_run_id, child_task_run_id, parent_task_run_id, dependency_position) \
-                     VALUES ($1, $2, $3, $4)",
+                     (tenant_id, workflow_run_id, child_task_run_id, parent_task_run_id, dependency_position) \
+                     VALUES ($1, $2, $3, $4, $5)",
                         &[
+                            &tenant_id,
                             &workflow_run_id.as_str(),
                             &task.task_run_id.as_str(),
                             &dependency.as_str(),
@@ -564,8 +607,9 @@ impl PgTaskRepository {
             }
         }
 
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            tenant_id,
             "workflow_run",
             workflow_run_id.as_str(),
             1,
@@ -2390,6 +2434,36 @@ fn sql_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| {
         StorageError::InvalidStoredValue("integer exceeds PostgreSQL BIGINT".to_owned())
     })
+}
+
+async fn append_outbox_for_tenant(
+    transaction: &Transaction<'_>,
+    tenant_id: &str,
+    aggregate_type: &str,
+    aggregate_id: &str,
+    aggregate_version: i64,
+    event_type: &str,
+    payload: serde_json::Value,
+) -> Result<(), StorageError> {
+    transaction
+        .execute(
+            "INSERT INTO outbox_events \
+             (tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type, payload) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                &tenant_id,
+                &aggregate_type,
+                &aggregate_id,
+                &aggregate_version,
+                &event_type,
+                &payload,
+            ],
+        )
+        .await
+        .map_err(|error| {
+            StorageError::Database(format!("append outbox event {event_type}: {error:?}"))
+        })?;
+    Ok(())
 }
 
 async fn append_outbox(
