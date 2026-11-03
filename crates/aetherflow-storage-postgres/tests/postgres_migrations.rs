@@ -1,4 +1,6 @@
-use aetherflow_core::domain::{RetryPolicy, TaskId, TaskRunId, WorkflowId, WorkflowRunId};
+use aetherflow_core::domain::{
+    RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
+};
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
@@ -327,6 +329,154 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("read coordinator-owned workflow tenant")
         .get(0);
     assert_eq!(coordinated_tenant, "tenant-a");
+
+    // Tenant-scoped cancellation must update the owned task, its running
+    // attempt, and its outbox event in the same tenant.
+    let running_task_id = TaskRunId::parse("tenant-created-parent-run")
+        .expect("valid tenant-owned running task ID");
+    client
+        .execute(
+            "UPDATE task_runs
+             SET status = 'running', attempts_started = 1,
+                 claimed_by = 'tenant-a-worker', fencing_token = 1,
+                 lease_expires_at = clock_timestamp() + INTERVAL '1 minute',
+                 started_at = clock_timestamp()
+             WHERE tenant_id = 'tenant-a' AND task_run_id = $1",
+            &[&running_task_id.as_str()],
+        )
+        .await
+        .expect("prepare a tenant-owned running task");
+    client
+        .execute(
+            "INSERT INTO task_attempts
+               (attempt_id, tenant_id, task_run_id, attempt_number, worker_id,
+                fencing_token, outcome)
+             VALUES ('tenant-created-attempt', 'tenant-a', $1, 1,
+                     'tenant-a-worker', 1, 'running')",
+            &[&running_task_id.as_str()],
+        )
+        .await
+        .expect("seed tenant-owned running attempt");
+
+    let cancelled_task = tasks
+        .cancel_task_run_for_tenant(&context, &running_task_id, 0)
+        .await
+        .expect("tenant A can cancel its task");
+    assert_eq!(cancelled_task.status(), TaskStatus::Cancelled);
+    assert_eq!(cancelled_task.version(), 1);
+
+    let foreign_cancel = tasks
+        .cancel_task_run_for_tenant(
+            &context,
+            &TaskRunId::parse("task-b-child").expect("valid tenant B task ID"),
+            0,
+        )
+        .await;
+    let missing_cancel = tasks
+        .cancel_task_run_for_tenant(
+            &context,
+            &TaskRunId::parse("tenant-a-missing-task").expect("valid missing task ID"),
+            0,
+        )
+        .await;
+    assert!(matches!(
+        foreign_cancel,
+        Err(StorageError::TaskRunNotFound(_))
+    ));
+    assert!(matches!(
+        missing_cancel,
+        Err(StorageError::TaskRunNotFound(_))
+    ));
+
+    let attempt_outcome: String = client
+        .query_one(
+            "SELECT outcome FROM task_attempts
+             WHERE tenant_id = 'tenant-a' AND task_run_id = $1 AND attempt_number = 1",
+            &[&running_task_id.as_str()],
+        )
+        .await
+        .expect("read cancelled attempt")
+        .get(0);
+    assert_eq!(attempt_outcome, "cancelled");
+
+    let task_cancel_events: i64 = client
+        .query_one(
+            "SELECT count(*) FROM outbox_events
+             WHERE tenant_id = 'tenant-a' AND aggregate_type = 'task_run'
+               AND aggregate_id = $1 AND event_type = 'task.cancelled'",
+            &[&running_task_id.as_str()],
+        )
+        .await
+        .expect("read tenant task cancellation event")
+        .get(0);
+    assert_eq!(task_cancel_events, 1);
+
+    // A tenant-owned terminal task drives atomic parent aggregation. The
+    // pending sibling is cancelled and both task/workflow events stay scoped.
+    let aggregate_status = tasks
+        .aggregate_workflow_run_for_tenant(&context, &created_workflow_run_id)
+        .await
+        .expect("tenant A can aggregate its workflow");
+    assert_eq!(aggregate_status, WorkflowStatus::Cancelled);
+
+    let child_status: String = client
+        .query_one(
+            "SELECT status FROM task_runs
+             WHERE tenant_id = 'tenant-a' AND task_run_id = 'tenant-created-child-run'",
+            &[],
+        )
+        .await
+        .expect("read sibling task after aggregation")
+        .get(0);
+    assert_eq!(child_status, "cancelled");
+
+    let workflow_status: String = client
+        .query_one(
+            "SELECT status FROM workflow_runs
+             WHERE tenant_id = 'tenant-a' AND workflow_run_id = $1",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read tenant workflow terminal state")
+        .get(0);
+    assert_eq!(workflow_status, "cancelled");
+
+    let owned_terminal_events: i64 = client
+        .query_one(
+            "SELECT count(*) FROM outbox_events
+             WHERE tenant_id = 'tenant-a'
+               AND ((aggregate_type = 'task_run' AND aggregate_id = 'tenant-created-child-run'
+                     AND event_type = 'task.cancelled')
+                 OR (aggregate_type = 'workflow_run' AND aggregate_id = $1
+                     AND event_type = 'workflow.cancelled'))",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read tenant-owned aggregation events")
+        .get(0);
+    assert_eq!(owned_terminal_events, 2);
+
+    let foreign_aggregate = tasks
+        .aggregate_workflow_run_for_tenant(
+            &context,
+            &WorkflowRunId::parse("workflow-b").expect("valid tenant B workflow ID"),
+        )
+        .await;
+    let missing_aggregate = tasks
+        .aggregate_workflow_run_for_tenant(
+            &context,
+            &WorkflowRunId::parse("tenant-a-missing-workflow")
+                .expect("valid missing workflow ID"),
+        )
+        .await;
+    assert!(matches!(
+        foreign_aggregate,
+        Err(StorageError::WorkflowRunNotFound(_))
+    ));
+    assert!(matches!(
+        missing_aggregate,
+        Err(StorageError::WorkflowRunNotFound(_))
+    ));
 
     let last_used: Option<std::time::SystemTime> = client
         .query_one(
