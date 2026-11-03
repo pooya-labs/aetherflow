@@ -7,7 +7,7 @@ use aetherflow_core::domain::{IdempotencyKey, RetryPolicy, TaskId, TaskRunId, Wo
 use aetherflow_runtime::workflow::WorkflowDefinition;
 use sha2::{Digest, Sha256};
 
-use crate::{NewTaskRun, PgTaskRepository, StorageError};
+use crate::{NewTaskRun, PgTaskRepository, StorageError, TenantContext};
 
 /// Identifiers assigned when a workflow definition is materialized durably.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,6 +83,67 @@ impl PgWorkflowCoordinator {
         idempotency_key: Option<&IdempotencyKey>,
         available_at: SystemTime,
     ) -> Result<PgWorkflowSubmission, StorageError> {
+        self.submit_workflow_inner(
+            None,
+            workflow_run_id,
+            definition,
+            retry_policy,
+            idempotency_key,
+            available_at,
+        )
+        .await
+    }
+
+    /// Materializes a workflow for the authenticated tenant using the current time.
+    pub async fn submit_workflow_for_tenant(
+        &self,
+        context: &TenantContext,
+        workflow_run_id: &WorkflowRunId,
+        definition: &WorkflowDefinition,
+        retry_policy: RetryPolicy,
+        idempotency_key: Option<&IdempotencyKey>,
+    ) -> Result<PgWorkflowSubmission, StorageError> {
+        self.submit_workflow_for_tenant_at(
+            context,
+            workflow_run_id,
+            definition,
+            retry_policy,
+            idempotency_key,
+            SystemTime::now(),
+        )
+        .await
+    }
+
+    /// Materializes a tenant-owned workflow at an explicit absolute timestamp.
+    pub async fn submit_workflow_for_tenant_at(
+        &self,
+        context: &TenantContext,
+        workflow_run_id: &WorkflowRunId,
+        definition: &WorkflowDefinition,
+        retry_policy: RetryPolicy,
+        idempotency_key: Option<&IdempotencyKey>,
+        available_at: SystemTime,
+    ) -> Result<PgWorkflowSubmission, StorageError> {
+        self.submit_workflow_inner(
+            Some(context),
+            workflow_run_id,
+            definition,
+            retry_policy,
+            idempotency_key,
+            available_at,
+        )
+        .await
+    }
+
+    async fn submit_workflow_inner(
+        &self,
+        context: Option<&TenantContext>,
+        workflow_run_id: &WorkflowRunId,
+        definition: &WorkflowDefinition,
+        retry_policy: RetryPolicy,
+        idempotency_key: Option<&IdempotencyKey>,
+        available_at: SystemTime,
+    ) -> Result<PgWorkflowSubmission, StorageError> {
         let mut task_run_ids = BTreeMap::new();
         for task in definition.tasks() {
             task_run_ids.insert(
@@ -117,14 +178,26 @@ impl PgWorkflowCoordinator {
             ));
         }
 
-        self.repository
-            .create_workflow(
-                workflow_run_id,
-                definition.workflow_id(),
-                idempotency_key,
-                &durable_tasks,
-            )
-            .await?;
+        if let Some(context) = context {
+            self.repository
+                .create_workflow_for_tenant(
+                    context,
+                    workflow_run_id,
+                    definition.workflow_id(),
+                    idempotency_key,
+                    &durable_tasks,
+                )
+                .await?;
+        } else {
+            self.repository
+                .create_workflow(
+                    workflow_run_id,
+                    definition.workflow_id(),
+                    idempotency_key,
+                    &durable_tasks,
+                )
+                .await?;
+        }
 
         Ok(PgWorkflowSubmission {
             workflow_run_id: workflow_run_id.clone(),
