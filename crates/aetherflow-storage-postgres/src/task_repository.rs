@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio_postgres::{Row, Transaction};
 
 use crate::membership::lock_worker_registration;
-use crate::{StorageError, WorkerRegistration};
+use crate::{StorageError, TenantContext, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
 
@@ -2127,6 +2127,123 @@ impl PgTaskRepository {
         Ok(next_status)
     }
 
+    /// Loads one workflow snapshot, constrained to the authenticated tenant.
+    ///
+    /// Both the workflow and every child task query include tenant ownership;
+    /// the transaction-local context is also ready for forced PostgreSQL RLS.
+    pub async fn get_workflow_run_for_tenant(
+        &self,
+        context: &TenantContext,
+        workflow_run_id: &WorkflowRunId,
+    ) -> Result<DurableWorkflowRun, StorageError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction
+            .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        context.apply_to_transaction(&transaction).await?;
+
+        let tenant_id = context.tenant_id().as_str();
+        let row = transaction
+            .query_opt(
+                "SELECT workflow_id, status, version, created_at, updated_at
+                 FROM workflow_runs
+                 WHERE tenant_id = $1 AND workflow_run_id = $2",
+                &[&tenant_id, &workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?
+            .ok_or_else(|| {
+                StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned())
+            })?;
+
+        let workflow_id: String = row.get(0);
+        let status: String = row.get(1);
+        let version: i64 = row.get(2);
+        let created_at: SystemTime = row.get(3);
+        let updated_at: SystemTime = row.get(4);
+        let task_rows = transaction
+            .query(
+                "SELECT task_run_id
+                 FROM task_runs
+                 WHERE tenant_id = $1 AND workflow_run_id = $2
+                 ORDER BY created_at, task_run_id",
+                &[&tenant_id, &workflow_run_id.as_str()],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let mut task_runs = Vec::with_capacity(task_rows.len());
+        for task_row in task_rows {
+            let task_run_id: String = task_row.get(0);
+            task_runs.push(
+                load_snapshot_for_tenant(&transaction, tenant_id, &task_run_id).await?,
+            );
+        }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
+        Ok(DurableWorkflowRun {
+            workflow_run_id: workflow_run_id.clone(),
+            workflow_id: WorkflowId::parse(workflow_id)
+                .map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
+            status: parse_workflow_status(&status)?,
+            version: u64::try_from(version).map_err(|_| {
+                StorageError::InvalidStoredValue("negative workflow version".to_owned())
+            })?,
+            created_at,
+            updated_at,
+            task_runs,
+        })
+    }
+
+    /// Loads one task snapshot, constrained to the authenticated tenant.
+    ///
+    /// A foreign-tenant task is reported exactly like a missing task. The
+    /// transaction carries tenant identity for the later forced-RLS boundary.
+    pub async fn get_task_run_for_tenant(
+        &self,
+        context: &TenantContext,
+        task_run_id: &TaskRunId,
+    ) -> Result<DurableTaskRun, StorageError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction
+            .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        context.apply_to_transaction(&transaction).await?;
+
+        let snapshot = load_snapshot_for_tenant(
+            &transaction,
+            context.tenant_id().as_str(),
+            task_run_id.as_str(),
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(snapshot)
+    }
+
     /// Loads a durable workflow-run summary and its task snapshots.
     ///
     /// The workflow row and task rows are read from the same PostgreSQL snapshot
@@ -2351,6 +2468,35 @@ async fn load_snapshot(
             "SELECT parent_task_run_id FROM task_run_dependencies \
          WHERE child_task_run_id = $1 ORDER BY dependency_position",
             &[&task_run_id],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?;
+    build_snapshot(row, dependencies)
+}
+
+async fn load_snapshot_for_tenant(
+    transaction: &Transaction<'_>,
+    tenant_id: &str,
+    task_run_id: &str,
+) -> Result<DurableTaskRun, StorageError> {
+    let row = transaction
+        .query_opt(
+            "SELECT task_run_id, workflow_run_id, task_id, status, version, \
+                attempts_started, available_at, input_payload, output_payload, \
+                claimed_by, fencing_token, lease_expires_at, created_at, updated_at \
+             FROM task_runs
+             WHERE tenant_id = $1 AND task_run_id = $2",
+            &[&tenant_id, &task_run_id],
+        )
+        .await
+        .map_err(|error| StorageError::Database(error.to_string()))?
+        .ok_or_else(|| StorageError::TaskRunNotFound(task_run_id.to_owned()))?;
+    let dependencies = transaction
+        .query(
+            "SELECT parent_task_run_id FROM task_run_dependencies \
+             WHERE tenant_id = $1 AND child_task_run_id = $2
+             ORDER BY dependency_position",
+            &[&tenant_id, &task_run_id],
         )
         .await
         .map_err(|error| StorageError::Database(error.to_string()))?;
