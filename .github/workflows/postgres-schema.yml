@@ -290,7 +290,7 @@ jobs:
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$');
           ")"
           test "$migration_count" = "8"
-inbox_primary_key="$(psql --no-align --tuples-only --command "
+          inbox_primary_key="$(psql --no-align --tuples-only --command "
             SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
             FROM information_schema.key_column_usage
             WHERE table_schema = 'public' AND table_name = 'consumer_inbox'
