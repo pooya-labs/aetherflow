@@ -335,8 +335,8 @@ mod tests {
     use tokio_rustls::TlsConnector;
 
     use super::{
-        ensure_rustls_crypto_provider, load_http_tls_config_from_paths,
-        parse_database_ssl_mode, validate_http_transport, verify_runtime_database_role,
+        ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
+        validate_http_transport, verify_runtime_database_role,
     };
 
     #[tokio::test]
@@ -417,10 +417,8 @@ mod tests {
     #[tokio::test]
     async fn invalid_or_missing_https_pem_files_fail_closed() {
         ensure_rustls_crypto_provider().expect("install ring crypto provider");
-        let directory = std::env::temp_dir().join(format!(
-            "aetherflow-invalid-tls-pem-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("aetherflow-invalid-tls-pem-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("create TLS test directory");
         let certificate_path = directory.join("certificate.pem");
         let private_key_path = directory.join("private-key.pem");
