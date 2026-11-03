@@ -103,10 +103,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
-    let export_disabled = std::env::var("OTEL_SDK_DISABLED")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
-    let export_none = std::env::var("OTEL_TRACES_EXPORTER")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("none"));
+    let export_disabled =
+        std::env::var("OTEL_SDK_DISABLED").is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+    let export_none =
+        std::env::var("OTEL_TRACES_EXPORTER").is_ok_and(|value| value.eq_ignore_ascii_case("none"));
     let endpoint_configured = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
         .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
         .is_ok_and(|value| !value.trim().is_empty());
@@ -135,9 +135,7 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
             .with_resource(resource)
             .build()
     } else {
-        SdkTracerProvider::builder()
-            .with_resource(resource)
-            .build()
+        SdkTracerProvider::builder().with_resource(resource).build()
     };
 
     global::set_tracer_provider(tracer_provider.clone());
@@ -145,8 +143,7 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
 
     let tracer = tracer_provider.tracer("aetherflow-server");
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_target(true)

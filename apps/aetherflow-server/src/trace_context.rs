@@ -40,8 +40,7 @@ pub(crate) fn extract_trace_context(headers: &HeaderMap) -> Context {
 
 #[allow(dead_code)]
 pub(crate) fn inject_trace_context(context: &Context, headers: &mut HeaderMap) {
-    TraceContextPropagator::new()
-        .inject_context(context, &mut HeaderMapInjector(headers));
+    TraceContextPropagator::new().inject_context(context, &mut HeaderMapInjector(headers));
 }
 
 #[cfg(test)]
@@ -50,20 +49,13 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
     use opentelemetry::trace::TraceContextExt;
 
-    const TRACEPARENT: &str =
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
     #[test]
     fn extracts_valid_w3c_trace_context() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "traceparent",
-            HeaderValue::from_static(TRACEPARENT),
-        );
-        headers.insert(
-            "tracestate",
-            HeaderValue::from_static("vendor=value"),
-        );
+        headers.insert("traceparent", HeaderValue::from_static(TRACEPARENT));
+        headers.insert("tracestate", HeaderValue::from_static("vendor=value"));
 
         let context = extract_trace_context(&headers);
         let span_context = context.span().span_context();
@@ -82,9 +74,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             "traceparent",
-            HeaderValue::from_static(
-                "00-00000000000000000000000000000000-0000000000000000-01",
-            ),
+            HeaderValue::from_static("00-00000000000000000000000000000000-0000000000000000-01"),
         );
 
         let context = extract_trace_context(&headers);
@@ -94,27 +84,15 @@ mod tests {
     #[test]
     fn injects_only_w3c_trace_context_headers() {
         let mut incoming = HeaderMap::new();
-        incoming.insert(
-            "traceparent",
-            HeaderValue::from_static(TRACEPARENT),
-        );
-        incoming.insert(
-            "tracestate",
-            HeaderValue::from_static("vendor=value"),
-        );
+        incoming.insert("traceparent", HeaderValue::from_static(TRACEPARENT));
+        incoming.insert("tracestate", HeaderValue::from_static("vendor=value"));
         let context = extract_trace_context(&incoming);
 
         let mut outgoing = HeaderMap::new();
         inject_trace_context(&context, &mut outgoing);
 
-        assert_eq!(
-            outgoing.get("traceparent").unwrap(),
-            TRACEPARENT
-        );
-        assert_eq!(
-            outgoing.get("tracestate").unwrap(),
-            "vendor=value"
-        );
+        assert_eq!(outgoing.get("traceparent").unwrap(), TRACEPARENT);
+        assert_eq!(outgoing.get("tracestate").unwrap(), "vendor=value");
         assert_eq!(outgoing.len(), 2);
     }
 }

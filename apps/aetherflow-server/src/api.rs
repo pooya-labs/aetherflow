@@ -27,10 +27,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL};
 use chrono::{DateTime, SecondsFormat, Utc};
 use deadpool_postgres::Pool;
+use opentelemetry::trace::TraceContextExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use opentelemetry::trace::TraceContextExt;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -356,12 +356,7 @@ async fn observe_http_request(
         otel_trace_id = tracing::field::Empty
     );
     span.set_parent(extract_trace_context(request.headers()));
-    let trace_id = span
-        .context()
-        .span()
-        .span_context()
-        .trace_id()
-        .to_string();
+    let trace_id = span.context().span().span_context().trace_id().to_string();
     span.record("otel_trace_id", tracing::field::display(trace_id));
     let response = next.run(request).instrument(span.clone()).await;
     let elapsed = started.elapsed();
