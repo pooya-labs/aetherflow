@@ -1,12 +1,13 @@
 use aetherflow_core::domain::{
-    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus, WorkerId,
-    WorkflowId, WorkflowRunId, WorkflowStatus,
+    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus,
+    TenantId, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore, PgTaskRepository,
-    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TaskFailure,
+    InboxClaimResult, MigrationOutcome, NewTaskRun, PgInboxRepository,
+    PgMembershipRepository, PgStore, PgTaskRepository, PgTenantCredentialRepository,
+    PgWorkflowCoordinator, StorageError, TaskFailure,
     TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -102,7 +103,9 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
                ('tenant-b', 'Tenant B', 'active');
              INSERT INTO tenant_principals
                (principal_id, tenant_id, display_name, status)
-             VALUES ('principal-a', 'tenant-a', 'Tenant A operator', 'active');
+             VALUES
+               ('principal-a', 'tenant-a', 'Tenant A operator', 'active'),
+               ('principal-b', 'tenant-b', 'Tenant B operator', 'active');
              INSERT INTO workflow_runs (workflow_run_id, workflow_id, tenant_id, status)
              VALUES
                ('workflow-a', 'workflow-definition-a', 'tenant-a', 'pending'),
@@ -392,6 +395,86 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("grant worker access to tenant A");
 
+    // The same logical consumer/event pair is independently claimable in
+    // two tenants after migration v5 moved tenant_id into the primary key.
+    let inbox = PgInboxRepository::from_pool(pool.clone());
+    let tenant_a_id = TenantId::parse("tenant-a").expect("valid tenant A ID");
+    let tenant_b_id = TenantId::parse("tenant-b").expect("valid tenant B ID");
+    let inbox_claim_a = match inbox
+        .try_claim_for_tenant(
+            &tenant_a_id,
+            &granted_registration,
+            "shared-consumer",
+            "shared-event-id",
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("tenant A inbox claim succeeds")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected acquired tenant A inbox claim, got {other:?}"),
+    };
+    assert_eq!(inbox_claim_a.tenant_id(), "tenant-a");
+
+    let worker_b_id =
+        WorkerId::parse("worker-tenant-b-inbox").expect("valid tenant B worker ID");
+    let registration_b = membership
+        .register_worker(
+            &node,
+            &worker_b_id,
+            std::num::NonZeroU32::new(2).expect("non-zero concurrency"),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("register tenant B inbox worker");
+    client
+        .execute(
+            "INSERT INTO worker_tenant_grants
+               (tenant_id, worker_id, status, granted_by_principal_id)
+             VALUES ('tenant-b', $1, 'active', 'principal-b')",
+            &[&worker_b_id.as_str()],
+        )
+        .await
+        .expect("grant worker access to tenant B");
+    let inbox_claim_b = match inbox
+        .try_claim_for_tenant(
+            &tenant_b_id,
+            &registration_b,
+            "shared-consumer",
+            "shared-event-id",
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("tenant B inbox claim succeeds independently")
+    {
+        InboxClaimResult::Acquired(claim) => claim,
+        other => panic!("expected acquired tenant B inbox claim, got {other:?}"),
+    };
+    assert_eq!(inbox_claim_b.tenant_id(), "tenant-b");
+    assert_eq!(inbox_claim_b.event_id(), inbox_claim_a.event_id());
+
+    let duplicate_tenant_a = inbox
+        .try_claim_for_tenant(
+            &tenant_a_id,
+            &granted_registration,
+            "shared-consumer",
+            "shared-event-id",
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("same-tenant duplicate claim is a normal inbox outcome");
+    assert_eq!(duplicate_tenant_a, InboxClaimResult::Busy);
+    let independent_inbox_rows: i64 = client
+        .query_one(
+            "SELECT count(*) FROM consumer_inbox
+             WHERE consumer_name = 'shared-consumer' AND event_id = 'shared-event-id'",
+            &[],
+        )
+        .await
+        .expect("count tenant-specific inbox identities")
+        .get(0);
+    assert_eq!(independent_inbox_rows, 2);
+
     let granted_claim = tasks
         .claim_next_registered(
             &granted_registration,
@@ -423,6 +506,26 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("revoke tenant A worker grant");
+
+    let rejected_inbox_renew = inbox
+        .renew(&inbox_claim_a, std::time::Duration::from_secs(30))
+        .await;
+    assert!(matches!(
+        rejected_inbox_renew,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+    let rejected_inbox_ack = inbox.acknowledge(&inbox_claim_a).await;
+    assert!(matches!(
+        rejected_inbox_ack,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+    let rejected_inbox_release = inbox
+        .release(&inbox_claim_a, Some("grant revoked"))
+        .await;
+    assert!(matches!(
+        rejected_inbox_release,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
 
     let rejected_heartbeat = tasks
         .heartbeat_registered(
@@ -484,6 +587,15 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("restore tenant A worker grant");
 
+    inbox
+        .acknowledge(&inbox_claim_a)
+        .await
+        .expect("restored tenant A grant permits inbox acknowledgement");
+    inbox
+        .acknowledge(&inbox_claim_b)
+        .await
+        .expect("tenant B grant independently permits inbox acknowledgement");
+
     let completed = tasks
         .complete_registered(
             &claimed_task_id,
@@ -513,6 +625,19 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("register worker without tenant grant");
+    let denied_inbox_claim = inbox
+        .try_claim_for_tenant(
+            &tenant_a_id,
+            &ungranted_registration,
+            "shared-consumer",
+            "ungranted-event",
+            std::time::Duration::from_secs(30),
+        )
+        .await;
+    assert!(matches!(
+        denied_inbox_claim,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
     let ungranted_claim = tasks
         .claim_next_registered(
             &ungranted_registration,
