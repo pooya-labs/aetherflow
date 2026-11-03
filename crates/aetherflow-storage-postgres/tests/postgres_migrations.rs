@@ -436,6 +436,77 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("grant worker access to tenant B");
+
+    let tenant_b_outbox_event_id: i64 = client
+        .query_one(
+            "INSERT INTO outbox_events
+               (tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type, payload)
+             VALUES ('tenant-b', 'workflow_run', 'workflow-b', 1,
+                     'workflow.started', '{}'::jsonb)
+             RETURNING event_id",
+            &[],
+        )
+        .await
+        .expect("seed tenant B outbox event")
+        .get(0);
+
+    let tenant_a_outbox_claims = tasks
+        .claim_outbox_events_registered(
+            &granted_registration,
+            &granted_worker_id,
+            64,
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("tenant A publisher can claim granted outbox events");
+    assert!(!tenant_a_outbox_claims.is_empty());
+    assert!(
+        tenant_a_outbox_claims
+            .iter()
+            .all(|claim| claim.tenant_id() == "tenant-a")
+    );
+    assert!(
+        tenant_a_outbox_claims
+            .iter()
+            .all(|claim| claim.event_id() != tenant_b_outbox_event_id)
+    );
+    let guarded_outbox_claim = tenant_a_outbox_claims
+        .first()
+        .expect("tenant A has at least one outbox event")
+        .clone();
+
+    let tenant_b_outbox_claims = tasks
+        .claim_outbox_events_registered(
+            &registration_b,
+            &worker_b_id,
+            64,
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .expect("tenant B publisher can claim its own events");
+    assert!(!tenant_b_outbox_claims.is_empty());
+    assert!(
+        tenant_b_outbox_claims
+            .iter()
+            .all(|claim| claim.tenant_id() == "tenant-b")
+    );
+    assert!(
+        tenant_b_outbox_claims
+            .iter()
+            .any(|claim| claim.event_id() == tenant_b_outbox_event_id)
+    );
+    for claim in &tenant_b_outbox_claims {
+        tasks
+            .acknowledge_outbox_event_registered(
+                claim.event_id(),
+                &registration_b,
+                &worker_b_id,
+                claim.claim_token(),
+            )
+            .await
+            .expect("tenant B publisher can acknowledge its events");
+    }
+
     let inbox_claim_b = match inbox
         .try_claim_for_tenant(
             &tenant_b_id,
@@ -506,6 +577,33 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("revoke tenant A worker grant");
+
+    let rejected_outbox_ack = tasks
+        .acknowledge_outbox_event_registered(
+            guarded_outbox_claim.event_id(),
+            &granted_registration,
+            &granted_worker_id,
+            guarded_outbox_claim.claim_token(),
+        )
+        .await;
+    assert!(matches!(
+        rejected_outbox_ack,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
+    let rejected_outbox_retry = tasks
+        .retry_outbox_event_registered(
+            guarded_outbox_claim.event_id(),
+            &granted_registration,
+            &granted_worker_id,
+            guarded_outbox_claim.claim_token(),
+            std::time::Duration::from_secs(1),
+            "grant revoked",
+        )
+        .await;
+    assert!(matches!(
+        rejected_outbox_retry,
+        Err(StorageError::WorkerRegistrationLost(_))
+    ));
 
     let rejected_inbox_renew = inbox
         .renew(&inbox_claim_a, std::time::Duration::from_secs(30))
@@ -586,6 +684,18 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         )
         .await
         .expect("restore tenant A worker grant");
+
+    for claim in &tenant_a_outbox_claims {
+        tasks
+            .acknowledge_outbox_event_registered(
+                claim.event_id(),
+                &granted_registration,
+                &granted_worker_id,
+                claim.claim_token(),
+            )
+            .await
+            .expect("restored tenant A grant permits outbox acknowledgement");
+    }
 
     inbox
         .acknowledge(&inbox_claim_a)
