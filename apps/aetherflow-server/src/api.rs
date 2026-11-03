@@ -4,14 +4,19 @@
 //! routes, with tenant identity enforced by storage authorization and RLS.
 //! Payload bytes are accepted on submission but never included in inspection.
 
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
-use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::header::{
+    ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+    ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD,
+    AUTHORIZATION, ORIGIN, VARY, WWW_AUTHENTICATE,
+};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -41,6 +46,7 @@ use aetherflow_storage_postgres::{
 pub struct AppState {
     database: Option<Arc<AppDatabase>>,
     api_token_hash: Option<[u8; 32]>,
+    cors_allowed_origins: Arc<HashSet<String>>,
 }
 
 struct AppDatabase {
@@ -51,6 +57,29 @@ struct AppDatabase {
 }
 
 impl AppState {
+    /// Configures exact browser origins allowed to call the control-plane API.
+    ///
+    /// The value is a comma-separated list of bare HTTP(S) origins. Wildcards,
+    /// paths, query strings, credentials, and non-HTTP schemes are rejected.
+    /// An empty value disables cross-origin browser access.
+    pub fn with_cors_allowed_origins(
+        mut self,
+        comma_separated_origins: &str,
+    ) -> Result<Self, std::io::Error> {
+        let mut allowed = HashSet::new();
+        for origin in comma_separated_origins.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+            if !valid_cors_origin(origin) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "AETHERFLOW_CORS_ALLOWED_ORIGINS must contain only exact HTTP(S) origins without paths or wildcards",
+                ));
+            }
+            allowed.insert(origin.to_owned());
+        }
+        self.cors_allowed_origins = Arc::new(allowed);
+        Ok(self)
+    }
+
     /// Creates application state without a database connection.
     #[must_use]
     pub fn without_database() -> Self {
@@ -145,7 +174,119 @@ pub fn router(state: AppState) -> Router {
         .merge(operator_control_plane)
         .merge(tenant_control_plane)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            apply_browser_cors,
+        ))
         .with_state(state)
+}
+
+fn valid_cors_origin(value: &str) -> bool {
+    if value.is_empty() || value == "*" || value.contains(['?', '#', ',']) {
+        return false;
+    }
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(scheme) = uri.scheme_str() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https")
+        || authority.as_str().contains('@')
+        || authority.host().is_empty()
+        || uri.query().is_some()
+    {
+        return false;
+    }
+    let canonical = format!("{scheme}://{authority}");
+    value == canonical
+}
+
+fn requested_cors_headers_are_allowed(value: &HeaderValue) -> bool {
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    value.split(',').all(|header| {
+        matches!(
+            header.trim().to_ascii_lowercase().as_str(),
+            "authorization" | "content-type"
+        )
+    })
+}
+
+fn attach_cors_origin(response: &mut Response, origin: &str) {
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
+        response
+            .headers_mut()
+            .insert(VARY, HeaderValue::from_static("Origin"));
+    }
+}
+
+async fn apply_browser_cors(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let origin = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
+    if request.method() == Method::OPTIONS
+        && request.headers().contains_key(ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        let Some(origin) = origin.as_deref() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        if !state.cors_allowed_origins.contains(origin) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let requested_method = request
+            .headers()
+            .get(ACCESS_CONTROL_REQUEST_METHOD)
+            .and_then(|value| value.to_str().ok());
+        if !matches!(requested_method, Some("GET" | "POST")) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if request
+            .headers()
+            .get(ACCESS_CONTROL_REQUEST_HEADERS)
+            .is_some_and(|value| !requested_cors_headers_are_allowed(value))
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        attach_cors_origin(&mut response, origin);
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, OPTIONS"),
+        );
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("authorization, content-type"),
+        );
+        response.headers_mut().insert(
+            ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("600"),
+        );
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if let Some(origin) = origin.as_deref()
+        && state.cors_allowed_origins.contains(origin)
+    {
+        attach_cors_origin(&mut response, origin);
+    }
+    response
 }
 
 fn hash_api_token(api_token: &str) -> Result<[u8; 32], std::io::Error> {
@@ -1261,6 +1402,84 @@ mod tests {
 
         headers.remove(AUTHORIZATION);
         assert!(!authorization_matches(&expected, &headers));
+    }
+
+    #[tokio::test]
+    async fn cors_requires_an_exact_allowlisted_origin_and_bounded_preflight() {
+        let state = AppState::without_database()
+            .with_cors_allowed_origins("https://pooya16pg-spec.github.io")
+            .expect("valid exact Pages origin");
+        let preflight = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/workflow-runs")
+                    .header(ORIGIN, "https://pooya16pg-spec.github.io")
+                    .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization")
+                    .body(Body::empty())
+                    .expect("valid Pages preflight request"),
+            )
+            .await
+            .expect("preflight response");
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://pooya16pg-spec.github.io"))
+        );
+        assert_eq!(
+            preflight.headers().get(ACCESS_CONTROL_ALLOW_METHODS),
+            Some(&HeaderValue::from_static("GET, POST, OPTIONS"))
+        );
+        assert!(preflight.headers().get("access-control-allow-credentials").is_none());
+
+        let blocked_origin = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/workflow-runs")
+                    .header(ORIGIN, "https://attacker.example")
+                    .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .expect("valid foreign-origin preflight"),
+            )
+            .await
+            .expect("blocked preflight response");
+        assert_eq!(blocked_origin.status(), StatusCode::FORBIDDEN);
+        assert!(blocked_origin.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+
+        let blocked_header = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/workflow-runs")
+                    .header(ORIGIN, "https://pooya16pg-spec.github.io")
+                    .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization, x-private-header")
+                    .body(Body::empty())
+                    .expect("valid disallowed-header preflight"),
+            )
+            .await
+            .expect("blocked preflight response");
+        assert_eq!(blocked_header.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn cors_origin_configuration_rejects_wildcards_paths_and_non_http_schemes() {
+        for invalid in [
+            "*",
+            "https://example.com/path",
+            "https://example.com?query=1",
+            "file://example.com",
+            "https://user@example.com",
+        ] {
+            assert!(
+                AppState::without_database()
+                    .with_cors_allowed_origins(invalid)
+                    .is_err(),
+                "origin {invalid} must be rejected"
+            );
+        }
     }
 
     #[tokio::test]
