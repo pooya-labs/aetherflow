@@ -17,6 +17,10 @@ use serde_json::json;
 use tokio_postgres::{Row, Transaction};
 
 use crate::membership::lock_worker_registration;
+use crate::tenant::{
+    apply_legacy_worker_context_to_transaction, apply_tenant_id_to_transaction,
+    apply_worker_identity_to_transaction,
+};
 use crate::{StorageError, TenantContext, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
@@ -532,6 +536,8 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(context) = context {
             context.apply_to_transaction(&transaction).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
         let tenant_id = context
             .map(|context| context.tenant_id().as_str())
@@ -1585,9 +1591,11 @@ impl PgTaskRepository {
 
         if let Some(context) = context {
             context.apply_to_transaction(&transaction).await?;
-        }
-        if let Some(registration) = registration {
+        } else if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, false).await?;
+            apply_worker_identity_to_transaction(&transaction, registration.worker_id()).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         let tenant_filter = context.map(|value| value.tenant_id().as_str()).or_else(|| {
@@ -1612,6 +1620,7 @@ impl PgTaskRepository {
         if let Some(registration) = registration {
             lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
         }
+        apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
         let current_status: String = row.get(1);
         let attempts_started: i32 = row.get(2);
         let actual_version: i64 = row.get(3);
@@ -2362,9 +2371,11 @@ impl PgTaskRepository {
 
         if let Some(context) = context {
             context.apply_to_transaction(&transaction).await?;
-        }
-        if let Some(registration) = registration {
+        } else if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, false).await?;
+            apply_worker_identity_to_transaction(&transaction, registration.worker_id()).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         let tenant_filter = context.map(|value| value.tenant_id().as_str()).or_else(|| {
@@ -2389,6 +2400,7 @@ impl PgTaskRepository {
         if let Some(registration) = registration {
             lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
         }
+        apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
         let current_status_text: String = workflow_row.get(1);
         let current_status = parse_workflow_status(&current_status_text)?;
         if workflow_status_is_terminal(current_status) {
@@ -2884,6 +2896,17 @@ async fn lock_task_tenant_for_worker(
     worker_id: &WorkerId,
     registration: Option<&WorkerRegistration>,
 ) -> Result<String, StorageError> {
+    if let Some(registration) = registration {
+        if registration.worker_id() != worker_id {
+            return Err(StorageError::WorkerRegistrationLost(
+                worker_id.as_str().to_owned(),
+            ));
+        }
+        apply_worker_identity_to_transaction(transaction, worker_id).await?;
+    } else {
+        apply_legacy_worker_context_to_transaction(transaction).await?;
+    }
+
     let row = transaction
         .query_opt(
             "SELECT tenant_id FROM task_runs WHERE task_run_id = $1 FOR UPDATE",
@@ -2895,15 +2918,11 @@ async fn lock_task_tenant_for_worker(
     let tenant_id: String = row.get(0);
 
     if let Some(registration) = registration {
-        if registration.worker_id() != worker_id {
-            return Err(StorageError::WorkerRegistrationLost(
-                worker_id.as_str().to_owned(),
-            ));
-        }
         lock_worker_tenant_grant(transaction, registration, &tenant_id).await?;
     } else if tenant_id != "legacy-default" {
         return Err(StorageError::ClaimLost(task_run_id.as_str().to_owned()));
     }
+    apply_tenant_id_to_transaction(transaction, &tenant_id).await?;
 
     Ok(tenant_id)
 }
