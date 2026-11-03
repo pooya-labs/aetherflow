@@ -254,10 +254,7 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
         .get(0);
     assert_eq!(worker_visible, 1);
     let own_worker_tenant: String = transaction
-        .query_one(
-            "SELECT tenant_id FROM workflow_runs",
-            &[],
-        )
+        .query_one("SELECT tenant_id FROM workflow_runs", &[])
         .await
         .expect("read the one granted tenant")
         .get(0);

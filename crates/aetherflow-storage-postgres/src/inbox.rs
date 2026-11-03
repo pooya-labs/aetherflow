@@ -473,7 +473,6 @@ impl PgInboxRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(())
     }
-
 }
 
 async fn lock_claim_registration(
@@ -495,7 +494,7 @@ async fn lock_claim_registration(
         }
         None if claim.tenant_id == "legacy-default" => {
             apply_legacy_worker_context_to_transaction(transaction).await
-        },
+        }
         None => Err(StorageError::InvalidTenantCredential),
     }
 }

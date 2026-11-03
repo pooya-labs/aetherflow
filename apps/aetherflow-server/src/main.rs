@@ -251,11 +251,15 @@ mod tests {
     #[tokio::test]
     async fn runtime_role_verifier_rejects_owner_and_accepts_restricted_login() {
         let Ok(admin_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
-            eprintln!("AETHERFLOW_TEST_DATABASE_URL is not set; skipping runtime-role verifier test");
+            eprintln!(
+                "AETHERFLOW_TEST_DATABASE_URL is not set; skipping runtime-role verifier test"
+            );
             return;
         };
         let Ok(runtime_url) = std::env::var("AETHERFLOW_RUNTIME_ROLE_TEST_DATABASE_URL") else {
-            eprintln!("AETHERFLOW_RUNTIME_ROLE_TEST_DATABASE_URL is not set; skipping runtime-role verifier test");
+            eprintln!(
+                "AETHERFLOW_RUNTIME_ROLE_TEST_DATABASE_URL is not set; skipping runtime-role verifier test"
+            );
             return;
         };
 
@@ -288,8 +292,11 @@ mod tests {
             .await
             .expect("the non-owner, non-BYPASSRLS runtime login is accepted");
 
-        let Ok(member_url) = std::env::var("AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL") else {
-            eprintln!("AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL is not set; skipping role-membership negative case");
+        let Ok(member_url) = std::env::var("AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL")
+        else {
+            eprintln!(
+                "AETHERFLOW_RUNTIME_ROLE_MEMBER_TEST_DATABASE_URL is not set; skipping role-membership negative case"
+            );
             return;
         };
         let member_pool = pool_from_test_url(&member_url).await;

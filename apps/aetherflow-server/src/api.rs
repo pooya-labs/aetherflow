@@ -508,8 +508,7 @@ async fn submit_workflow(
 ) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
     let Json(request) = payload
         .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
-    let (workflow_id, workflow_run_id, definition, retry_policy) =
-        parse_workflow_request(request)?;
+    let (workflow_id, workflow_run_id, definition, retry_policy) = parse_workflow_request(request)?;
 
     let database = state.database()?;
     let submission = database
@@ -547,19 +546,12 @@ async fn submit_tenant_workflow(
     require_tenant_permission(&context, TenantPermission::Submit)?;
     let Json(request) = payload
         .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
-    let (workflow_id, workflow_run_id, definition, retry_policy) =
-        parse_workflow_request(request)?;
+    let (workflow_id, workflow_run_id, definition, retry_policy) = parse_workflow_request(request)?;
 
     let database = state.database()?;
     let submission = database
         .coordinator
-        .submit_workflow_for_tenant(
-            &context,
-            &workflow_run_id,
-            &definition,
-            retry_policy,
-            None,
-        )
+        .submit_workflow_for_tenant(&context, &workflow_run_id, &definition, retry_policy, None)
         .await
         .map_err(ApiError::from_storage)?;
     let task_runs = submission
@@ -1350,7 +1342,11 @@ mod tests {
                 "INSERT INTO workflow_runs
                    (workflow_run_id, workflow_id, tenant_id, status)
                  VALUES ($1, $2, $3, 'pending')",
-                &[&foreign_workflow_run_id, &foreign_workflow_id, &foreign_tenant_id],
+                &[
+                    &foreign_workflow_run_id,
+                    &foreign_workflow_id,
+                    &foreign_tenant_id,
+                ],
             )
             .await
             .expect("seed foreign tenant workflow");
@@ -1400,9 +1396,14 @@ mod tests {
             )
             .await
             .expect("tenant route operator-token response");
-        assert_eq!(operator_token_on_tenant_route.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
-            operator_token_on_tenant_route.headers().get(WWW_AUTHENTICATE),
+            operator_token_on_tenant_route.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            operator_token_on_tenant_route
+                .headers()
+                .get(WWW_AUTHENTICATE),
             Some(&HeaderValue::from_static("Bearer"))
         );
 
@@ -1522,10 +1523,7 @@ mod tests {
             )
             .await
             .expect("missing-tenant workflow read response");
-        assert_eq!(
-            missing_tenant_workflow_read.status(),
-            StatusCode::NOT_FOUND
-        );
+        assert_eq!(missing_tenant_workflow_read.status(), StatusCode::NOT_FOUND);
 
         let reader_read = router(state.clone())
             .oneshot(

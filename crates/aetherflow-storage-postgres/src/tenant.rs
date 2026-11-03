@@ -357,8 +357,8 @@ mod tests {
             .transaction()
             .await
             .expect("begin worker-scoped transaction");
-        let worker_id = aetherflow_core::domain::WorkerId::parse("worker_guc_test")
-            .expect("valid worker ID");
+        let worker_id =
+            aetherflow_core::domain::WorkerId::parse("worker_guc_test").expect("valid worker ID");
         super::apply_worker_identity_to_transaction(&worker_transaction, &worker_id)
             .await
             .expect("apply worker identity");

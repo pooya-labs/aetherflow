@@ -44,12 +44,15 @@ const NODE_MEMBERSHIP_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0003_node_membership.sql");
 const TENANT_OWNERSHIP_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0004_tenant_ownership.sql");
-const TENANT_SCOPED_INBOX_MIGRATION_SQL: &str =
-    include_str!("../../aetherflow-runtime/migrations/postgres/0005_tenant_scoped_inbox_identity.sql");
-const FORCE_TENANT_RLS_MIGRATION_SQL: &str =
-    include_str!("../../aetherflow-runtime/migrations/postgres/0006_force_tenant_row_level_security.sql");
-const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str =
-    include_str!("../../aetherflow-runtime/migrations/postgres/0007_worker_tenant_grant_lock_rls.sql");
+const TENANT_SCOPED_INBOX_MIGRATION_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0005_tenant_scoped_inbox_identity.sql"
+);
+const FORCE_TENANT_RLS_MIGRATION_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0006_force_tenant_row_level_security.sql"
+);
+const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0007_worker_tenant_grant_lock_rls.sql"
+);
 const MIGRATION_VERSION: i64 = 7;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
@@ -455,20 +458,14 @@ mod tests {
         assert_eq!(MIGRATIONS[3].version, 4);
         assert_eq!(MIGRATIONS[3].name, "0004_tenant_ownership.sql");
         assert_eq!(MIGRATIONS[4].version, 5);
-        assert_eq!(
-            MIGRATIONS[4].name,
-            "0005_tenant_scoped_inbox_identity.sql"
-        );
+        assert_eq!(MIGRATIONS[4].name, "0005_tenant_scoped_inbox_identity.sql");
         assert_eq!(MIGRATIONS[5].version, 6);
         assert_eq!(
             MIGRATIONS[5].name,
             "0006_force_tenant_row_level_security.sql"
         );
         assert_eq!(MIGRATIONS[6].version, 7);
-        assert_eq!(
-            MIGRATIONS[6].name,
-            "0007_worker_tenant_grant_lock_rls.sql"
-        );
+        assert_eq!(MIGRATIONS[6].name, "0007_worker_tenant_grant_lock_rls.sql");
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);

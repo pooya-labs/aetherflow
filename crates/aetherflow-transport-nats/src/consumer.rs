@@ -164,9 +164,8 @@ impl std::fmt::Display for NatsConsumerError {
             Self::InvalidLeaseDuration => {
                 formatter.write_str("consumer inbox lease duration is not representable")
             }
-            Self::TenantRegistrationRequired => {
-                formatter.write_str("tenant-owned events require a registered worker with a tenant grant")
-            }
+            Self::TenantRegistrationRequired => formatter
+                .write_str("tenant-owned events require a registered worker with a tenant grant"),
         }
     }
 }
@@ -452,7 +451,6 @@ fn bounded_error(message: &str) -> String {
     }
     message[..end].to_owned()
 }
-
 
 #[cfg(test)]
 mod tests {

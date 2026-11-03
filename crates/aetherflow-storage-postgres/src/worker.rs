@@ -363,8 +363,9 @@ impl PostgresTaskWorker {
 
                     let task_run = claim.task_run();
                     let task_run_id = task_run.task_run_id().clone();
-                    let dependency_outputs =
-                        self.load_dependency_outputs(task_run, &registration).await?;
+                    let dependency_outputs = self
+                        .load_dependency_outputs(task_run, &registration)
+                        .await?;
                     let execution_claim = execution_claim_from_pg(&claim);
                     let (context, cancellation_trigger) =
                         TaskContext::new(execution_claim, dependency_outputs);

@@ -1,14 +1,13 @@
 use aetherflow_core::domain::{
-    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus,
-    TenantId, WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
+    AttemptId, NodeId, NodeIncarnationId, RetryPolicy, TaskId, TaskRunId, TaskStatus, TenantId,
+    WorkerId, WorkflowId, WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    InboxClaimResult, MigrationOutcome, NewTaskRun, PgInboxRepository,
-    PgMembershipRepository, PgStore, PgTaskRepository, PgTenantCredentialRepository,
-    PgWorkflowCoordinator, StorageError, TaskFailure,
-    TenantPermission, TenantRole, initial_migration_checksum,
+    InboxClaimResult, MigrationOutcome, NewTaskRun, PgInboxRepository, PgMembershipRepository,
+    PgStore, PgTaskRepository, PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError,
+    TaskFailure, TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -416,8 +415,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     };
     assert_eq!(inbox_claim_a.tenant_id(), "tenant-a");
 
-    let worker_b_id =
-        WorkerId::parse("worker-tenant-b-inbox").expect("valid tenant B worker ID");
+    let worker_b_id = WorkerId::parse("worker-tenant-b-inbox").expect("valid tenant B worker ID");
     let registration_b = membership
         .register_worker(
             &node,
@@ -617,9 +615,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         rejected_inbox_ack,
         Err(StorageError::WorkerRegistrationLost(_))
     ));
-    let rejected_inbox_release = inbox
-        .release(&inbox_claim_a, Some("grant revoked"))
-        .await;
+    let rejected_inbox_release = inbox.release(&inbox_claim_a, Some("grant revoked")).await;
     assert!(matches!(
         rejected_inbox_release,
         Err(StorageError::WorkerRegistrationLost(_))
@@ -1319,10 +1315,9 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
         .expect("seed rows using the exact pre-v4 table shape");
 
     let store = PgStore::from_pool(pool.clone());
-    let outcome = store
-        .migrate()
-        .await
-        .expect("apply tenant ownership and tenant inbox identity migrations to existing v3 schema");
+    let outcome = store.migrate().await.expect(
+        "apply tenant ownership and tenant inbox identity migrations to existing v3 schema",
+    );
     assert!(matches!(
         outcome,
         MigrationOutcome::Applied { version: 7, .. }
