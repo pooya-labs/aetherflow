@@ -100,7 +100,7 @@ async fn postgres_task_claim_heartbeat_completion_and_lease_recovery_are_fenced(
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("schema is current"),
-        MigrationOutcome::AlreadyCurrent { version: 4, .. }
+        MigrationOutcome::AlreadyCurrent { version: 5, .. }
     ));
     let repository = PgTaskRepository::from_pool(pool.clone());
 
@@ -1482,7 +1482,7 @@ async fn postgres_restart_child_process_recovers_expired_task() {
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("verify schema after restart"),
-        MigrationOutcome::AlreadyCurrent { version: 4, .. }
+        MigrationOutcome::AlreadyCurrent { version: 5, .. }
     ));
     let repository = PgTaskRepository::from_pool(pool);
 
