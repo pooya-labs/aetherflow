@@ -66,7 +66,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .get(0);
     assert!(legacy_tenant);
 
-    let client = pool.get().await.expect("get ownership verification connection");
+    let client = pool
+        .get()
+        .await
+        .expect("get ownership verification connection");
     let tenant_columns = client
         .query_one(
             "SELECT count(*) FROM information_schema.columns
@@ -118,7 +121,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
             &[],
         )
         .await;
-    assert!(cross_tenant_task.is_err(), "a task cannot join another tenant's workflow");
+    assert!(
+        cross_tenant_task.is_err(),
+        "a task cannot join another tenant's workflow"
+    );
 
     let cross_tenant_dependency = client
         .execute(
@@ -176,7 +182,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
                 clock_timestamp() + INTERVAL '1 minute');
              INSERT INTO worker_tenant_grants
                (tenant_id, worker_id, status, granted_by_principal_id)
-             VALUES ('tenant-a', 'worker-tenant-test', 'active', 'principal-a');"
+             VALUES ('tenant-a', 'worker-tenant-test', 'active', 'principal-a');",
         )
         .await
         .expect("tenant-scoped worker grant is accepted");

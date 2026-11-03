@@ -364,8 +364,8 @@ impl RetryPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId, TenantId,
-        TaskStatus, TransitionError, Versioned, WorkerId, WorkflowId, WorkflowRunId,
+        AttemptId, IdempotencyKey, Lifecycle, RetryPolicy, RetryPolicyError, TaskId, TaskRunId,
+        TaskStatus, TenantId, TransitionError, Versioned, WorkerId, WorkflowId, WorkflowRunId,
         WorkflowStatus,
     };
     use std::num::NonZeroU32;
