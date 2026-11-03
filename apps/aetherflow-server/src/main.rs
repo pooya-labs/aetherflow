@@ -64,8 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let cors_origins =
-        std::env::var("AETHERFLOW_CORS_ALLOWED_ORIGINS").unwrap_or_default();
+    let cors_origins = std::env::var("AETHERFLOW_CORS_ALLOWED_ORIGINS").unwrap_or_default();
     let state = state.with_cors_allowed_origins(&cors_origins)?;
     let router = api::router(state);
     if let Some(tls_config) = tls_config {

@@ -67,7 +67,11 @@ impl AppState {
         comma_separated_origins: &str,
     ) -> Result<Self, std::io::Error> {
         let mut allowed = HashSet::new();
-        for origin in comma_separated_origins.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+        for origin in comma_separated_origins
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             if !valid_cors_origin(origin) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -240,7 +244,9 @@ async fn apply_browser_cors(
         .map(str::to_owned);
 
     if request.method() == Method::OPTIONS
-        && request.headers().contains_key(ACCESS_CONTROL_REQUEST_METHOD)
+        && request
+            .headers()
+            .contains_key(ACCESS_CONTROL_REQUEST_METHOD)
     {
         let Some(origin) = origin.as_deref() else {
             return StatusCode::BAD_REQUEST.into_response();
@@ -273,10 +279,9 @@ async fn apply_browser_cors(
             ACCESS_CONTROL_ALLOW_HEADERS,
             HeaderValue::from_static("authorization, content-type"),
         );
-        response.headers_mut().insert(
-            ACCESS_CONTROL_MAX_AGE,
-            HeaderValue::from_static("600"),
-        );
+        response
+            .headers_mut()
+            .insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
         return response;
     }
 
@@ -1425,13 +1430,20 @@ mod tests {
         assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static("https://pooya16pg-spec.github.io"))
+            Some(&HeaderValue::from_static(
+                "https://pooya16pg-spec.github.io"
+            ))
         );
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_METHODS),
             Some(&HeaderValue::from_static("GET, POST, OPTIONS"))
         );
-        assert!(preflight.headers().get("access-control-allow-credentials").is_none());
+        assert!(
+            preflight
+                .headers()
+                .get("access-control-allow-credentials")
+                .is_none()
+        );
 
         let blocked_origin = router(state.clone())
             .oneshot(
@@ -1446,7 +1458,12 @@ mod tests {
             .await
             .expect("blocked preflight response");
         assert_eq!(blocked_origin.status(), StatusCode::FORBIDDEN);
-        assert!(blocked_origin.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+        assert!(
+            blocked_origin
+                .headers()
+                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
 
         let blocked_header = router(state)
             .oneshot(
@@ -1455,7 +1472,10 @@ mod tests {
                     .uri("/api/v1/workflow-runs")
                     .header(ORIGIN, "https://pooya16pg-spec.github.io")
                     .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
-                    .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization, x-private-header")
+                    .header(
+                        ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization, x-private-header",
+                    )
                     .body(Body::empty())
                     .expect("valid disallowed-header preflight"),
             )
