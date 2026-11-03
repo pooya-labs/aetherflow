@@ -85,7 +85,7 @@ impl HttpMetrics {
         }
 
         let elapsed_micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
-        let _ = self.request_duration_sum_micros.fetch_update(
+        let _ = self.request_duration_sum_micros.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |current| Some(current.saturating_add(elapsed_micros)),
