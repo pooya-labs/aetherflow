@@ -160,12 +160,15 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
         .expect("create registered worker fixture");
     transaction
         .execute(
-            "INSERT INTO worker_tenant_grants (tenant_id, worker_id, status, granted_by_principal_id)
-             VALUES ($1, $2, 'active', $3)",
-            &[&tenant_a, &worker_id, &principal_a],
+            "INSERT INTO worker_tenant_grants
+               (tenant_id, worker_id, status, granted_by_principal_id, revoked_at)
+             VALUES
+               ($1, $2, 'active', $3, NULL),
+               ($4, $2, 'revoked', $5, clock_timestamp())",
+            &[&tenant_a, &worker_id, &principal_a, &tenant_b, &principal_b],
         )
         .await
-        .expect("grant worker access to tenant A only");
+        .expect("grant worker access to tenant A and add a revoked tenant B grant");
 
     transaction
         .batch_execute(&format!("SET LOCAL ROLE {runtime_role}"))
@@ -258,6 +261,27 @@ async fn forced_rls_isolates_tenants_workers_and_credential_authentication() {
         .expect("read the one granted tenant")
         .get(0);
     assert_eq!(own_worker_tenant, tenant_a);
+    let locked_grant_status: String = transaction
+        .query_one(
+            "SELECT status FROM worker_tenant_grants
+             WHERE tenant_id = $1 AND worker_id = $2
+             FOR SHARE",
+            &[&tenant_a, &worker_id],
+        )
+        .await
+        .expect("worker can lock its own grant row for a registered operation")
+        .get(0);
+    assert_eq!(locked_grant_status, "active");
+    let revoked_grant_rows: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM worker_tenant_grants
+             WHERE tenant_id = $1 AND worker_id = $2 AND status = 'revoked'",
+            &[&tenant_b, &worker_id],
+        )
+        .await
+        .expect("worker may inspect its own revoked grant")
+        .get(0);
+    assert_eq!(revoked_grant_rows, 1);
     let worker_grant_update = transaction
         .execute(
             "UPDATE worker_tenant_grants SET status = 'revoked'
