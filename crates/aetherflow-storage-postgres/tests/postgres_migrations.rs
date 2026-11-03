@@ -1,7 +1,10 @@
-use aetherflow_core::domain::{TaskRunId, WorkflowRunId};
+use aetherflow_core::domain::{
+    RetryPolicy, TaskId, TaskRunId, WorkflowId, WorkflowRunId,
+};
+use aetherflow_runtime::repository::TaskInput;
 use aetherflow_storage_postgres::{
-    MigrationOutcome, PgStore, PgTaskRepository, PgTenantCredentialRepository, StorageError,
-    TenantPermission, TenantRole, initial_migration_checksum,
+    MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgTenantCredentialRepository,
+    StorageError, TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -199,6 +202,102 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         missing_task,
         Err(StorageError::TaskRunNotFound(_))
     ));
+
+    let now = std::time::SystemTime::now();
+    let policy = RetryPolicy::new(
+        std::num::NonZeroU32::new(1).expect("non-zero attempts"),
+        0,
+        0,
+    )
+    .expect("valid retry policy");
+    let parent_run_id =
+        TaskRunId::parse("tenant-created-parent-run").expect("valid parent task-run ID");
+    let child_run_id =
+        TaskRunId::parse("tenant-created-child-run").expect("valid child task-run ID");
+    let new_tasks = vec![
+        NewTaskRun::new(
+            parent_run_id.clone(),
+            TaskId::parse("tenant-created-parent").expect("valid parent task ID"),
+            TaskInput::new(Vec::new()).expect("valid empty input"),
+            Vec::new(),
+            policy,
+            now,
+        ),
+        NewTaskRun::new(
+            child_run_id,
+            TaskId::parse("tenant-created-child").expect("valid child task ID"),
+            TaskInput::new(Vec::new()).expect("valid empty input"),
+            vec![parent_run_id],
+            policy,
+            now,
+        ),
+    ];
+    let created_workflow_run_id = WorkflowRunId::parse("tenant-a-created-workflow")
+        .expect("valid created workflow-run ID");
+    let created_workflow_id = WorkflowId::parse("tenant-a-created-definition")
+        .expect("valid created workflow ID");
+    tasks
+        .create_workflow_for_tenant(
+            &context,
+            &created_workflow_run_id,
+            &created_workflow_id,
+            None,
+            &new_tasks,
+        )
+        .await
+        .expect("tenant A workflow creation is atomic");
+
+    let created_tenant_id: String = client
+        .query_one(
+            "SELECT tenant_id FROM workflow_runs WHERE workflow_run_id = $1",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read created workflow tenant")
+        .get(0);
+    assert_eq!(created_tenant_id, "tenant-a");
+
+    let created_task_tenants = client
+        .query(
+            "SELECT tenant_id FROM task_runs WHERE workflow_run_id = $1 ORDER BY task_run_id",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read created task ownership");
+    assert_eq!(created_task_tenants.len(), 2);
+    assert!(
+        created_task_tenants
+            .iter()
+            .all(|row| row.get::<_, String>(0) == "tenant-a")
+    );
+
+    let created_dependency_tenant: String = client
+        .query_one(
+            "SELECT tenant_id FROM task_run_dependencies WHERE workflow_run_id = $1",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read created dependency ownership")
+        .get(0);
+    assert_eq!(created_dependency_tenant, "tenant-a");
+
+    let created_outbox_tenant: String = client
+        .query_one(
+            "SELECT tenant_id FROM outbox_events
+             WHERE aggregate_type = 'workflow_run' AND aggregate_id = $1
+               AND event_type = 'workflow.started'",
+            &[&created_workflow_run_id.as_str()],
+        )
+        .await
+        .expect("read created workflow event ownership")
+        .get(0);
+    assert_eq!(created_outbox_tenant, "tenant-a");
+
+    let own_created_workflow = tasks
+        .get_workflow_run_for_tenant(&context, &created_workflow_run_id)
+        .await
+        .expect("tenant A can read its newly created workflow");
+    assert_eq!(own_created_workflow.task_runs().len(), 2);
 
     let last_used: Option<std::time::SystemTime> = client
         .query_one(
