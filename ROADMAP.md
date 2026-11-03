@@ -7,12 +7,207 @@ Current branch: `main`
 Current milestone: **M07 — Control plane and developer experience**  
 Overall status: **M00–M06 complete; M07 is in progress.** Tenant authentication, tenant-scoped storage, grant-gated worker/event paths, migrations v4–v7, forced RLS, separate migration-owner/runtime pools, the HTTPS listener boundary, and live PostgreSQL Rustls verification are hosted-verified. The CLI and the combined-chaos timing correction passed all three hosted workflows on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57`: Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774), PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644), and Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557). The typed Rust SDK is the active task; dashboard and M08 operational hardening remain open. M08–M09 are not started. Owner license selection and deferred property-based transition tests remain open.
 
+## Current checkpoint
+- exact `main` HEAD SHA and the last fully verified source SHA (these can differ);
+- latest Rust CI, PostgreSQL/NATS CI, and Pages run IDs, URLs, head SHAs, and conclusions;
+- completed milestone slice, first unchecked task, next concrete action, and known limitations;
+- any failing/cancelled run, root cause, corrective commit, and the run that verified the fix;
+- manual decisions or owner-only actions that block release.
+
+A commit is not a verified checkpoint merely because it is on `main`. A cancelled, queued, pending, or in-progress run is never a pass. Only mark a verification task complete when the required workflow has concluded successfully for that exact source tree. A Pages deployment proves publishing succeeded; it does not replace Rust or PostgreSQL integration tests.
+
+### Resume procedure
+
+1. Read this file first, then read the current checkpoint and the latest session/incident log entry.
+2. Fetch `refs/heads/main`; compare its SHA with the documented source and verified SHAs. Inspect the intervening commit list and changed files before editing.
+3. Inspect the newest Actions runs and their `head_sha`. Ignore stale runs from older commits; do not treat cancelled runs as failures or successes.
+4. If a newer commit appeared during recovery, fetch the latest file/blob SHAs and reconcile against it. Never write using a stale file SHA.
+5. Continue from the first unchecked task. Do not redo a completed task unless a regression or missing verification is demonstrated.
+6. Commit the implementation and its tests in small units; once the final source snapshot is ready, let its required CI matrix finish before adding more commits.
+7. Update this roadmap and the incident log before closing the session.
+
+### Safe rollback and database recovery
+
+- Default to **fix forward**. Preserve commit history; never force-push, reset the shared branch, or delete later commits to hide a regression.
+- For a bad code commit, identify the exact culprit and dependent commits. Prefer a corrective commit; use `git revert <sha>` only when reverting that change is semantically safe, then run the full required CI matrix again.
+- Applied PostgreSQL migrations are immutable. Never edit or delete an applied migration or its checksum-ledger row. Correct schema mistakes with a new additive migration and explicit forward data repair.
+- Before any destructive or production data operation, require a verified backup and a restore rehearsal in an isolated database. Do not infer that a backup is usable merely because a backup command returned success.
+- Keep test databases isolated per workflow. Never run destructive test cleanup against a non-test database.
+- If PostgreSQL or NATS is unavailable, fail closed: do not bypass membership/fencing checks or acknowledge an event without its durable inbox outcome. Recover from persisted leases/outbox/inbox state after connectivity returns.
+- Do not commit credentials, tokens, private endpoints, or environment files. Record required variable names and setup instructions, never secret values.
+
+### Incident record format
+
+For every material regression, record: detection time; affected commit and Actions run URL; exact failing job/test and useful log excerpt; user-visible/data-integrity impact; root cause; corrective commit; successful verification run; and any remaining follow-up. Keep the failed run linked rather than rewriting history so a later session can understand why a correction exists.
+
+## Milestones
+
+### M00 — Project charter and architecture baseline
+- [x] Confirm public repository and write access.
+- [x] Define project purpose, non-goals, and initial technology direction.
+- [x] Establish persistent roadmap and recovery protocol.
+- [x] Add architecture overview.
+- [x] Record ADR-0001: Rust-first modular core.
+- [x] Add contribution and security guidance.
+- [ ] Select and add an explicit open-source license.
+- [x] Review scope and first implementation boundary.
+
+### M01 — Rust workspace foundation
+- [x] Pin Rust toolchain (1.99.1) and create workspace manifest.
+- [x] Establish initial crate boundaries: infrastructure-independent core and server application.
+- [x] Add formatting, Clippy, and test conventions.
+- [x] Add CI for formatting, Clippy, unit tests, build, and documentation.
+- [x] Add minimal executable and bootstrap HTTP health endpoint.
+- [x] Verify clean build and all checks from a fresh checkout via hosted CI (run `41353166515`, commit `832e3fc`).
+
+### M02 — Execution domain and state machine
+- [x] Define distinct workflow, workflow-run, task, task-run, attempt, and worker identities.
+- [x] Specify workflow/task lifecycle states and legal transitions.
+- [x] Define the initial bounded retry contract and attempt-count semantics.
+- [x] Specify first-committed terminal outcome for timeout/cancellation races and a stable idempotency-key contract.
+- [x] Implement deterministic transition tests, including exhaustive workflow/task transition matrices and competing terminal outcomes.
+- [ ] Add property-based transition tests (deferred until the dependency and lockfile workflow is established).
+- [x] Document failure semantics, versioning invariants, and delivery limitations.
+
+### M03 — Single-node execution runtime
+- [x] Implement in-memory repository for deterministic tests and verify it with hosted CI (run `41353963000`).
+- [x] Implement bounded async scheduler and worker loop (run `41354805491`).
+- [x] Add typed task-handler registration API with duplicate-registration protection.
+- [x] Add bounded concurrency, per-attempt timeout, version-guarded cancellation, and retryable/permanent failure policy.
+- [x] Add async scheduler/repository tests for success, retry, timeout, cancellation race, and concurrency limits.
+- [x] Add validated workflow DAG definitions with deterministic topological ordering, duplicate/missing/self dependency checks, and cycle detection (run `41355173212`).
+- [x] Implement workflow-run orchestration and dependency-aware task activation (run `41356396516`).
+- [x] Add cooperative handler cancellation and verify direct/workflow cancellation propagation (run `41357065422`).
+- [x] Add configurable bounded shutdown: graceful drain, cancellation grace, then force-abort with version-guarded terminal state (run `41357506821`).
+- [x] Add 1 MiB bounded TaskInput/TaskOutput, static workflow input delivery, and output retention (run `41358509174`).
+- [x] Expose successful direct-dependency outputs in TaskContext; verify dataflow integration (run `41359053561`).
+
+### M04 — Durable persistence
+- [x] Design PostgreSQL v1 schema and immutable migration/checksum strategy for workflow/task runs, ordered dependencies, attempts, leases/fencing, and outbox (ADR-0007).
+- [x] Select and pin deadpool-postgres 0.14.2, tokio-postgres 0.7.18, serde_json 1.0.154, and sha2 0.10.9 while retaining Rust 1.85 MSRV.
+- [x] Add PostgreSQL 18 service to CI and execute DDL against a real server (run `41365026199`).
+- [x] Implement advisory-locked transactional migration runner with version/name/SHA-256 checks and idempotent repeat (runs `41362986570` and `41365026199`).
+- [x] Add PostgreSQL checks for concurrent first start, checksum drift, untracked history, newer schema, payload/lease/dependency constraints.
+- [x] Implement atomic workflow creation with task records and ordered dependency edges (PostgreSQL integration run `41365026199`).
+- [x] Implement dependency-aware promotion and atomic `FOR UPDATE SKIP LOCKED` claims with attempt/outbox creation.
+- [x] Implement fenced heartbeat and successful completion with output persistence and same-transaction outbox records.
+- [x] Implement expired-lease recovery to retry-waiting/failed state; verify stale worker heartbeat/completion is rejected and fencing token increases on reclaim.
+- [x] Implement transactional retryable/permanent worker-failure recording with typed `TaskFailure`, attempt history, and outbox events (PostgreSQL 18 run `41367694624`; Rust CI run `41367694577`).
+- [x] Implement version-guarded durable task cancellation and timeout transitions; close active attempts, clear leases, append task outbox events, and reject stale worker writes (PostgreSQL 18 run `41367694624`).
+- [x] Aggregate task outcomes into durable workflow-run terminal status; require all tasks to succeed for workflow success, and cancel remaining queued/running tasks plus active attempts on failure, cancellation, or timeout (PostgreSQL 18 run `41367694624`).
+- [x] Implement durable outbox claim/retry/ack APIs with leased claims, monotonically increasing claim tokens, and stale-publisher rejection (PostgreSQL 18 runs `41366887867` and `41367694624`).
+- [x] Add a transport-neutral PostgreSQL outbox dispatcher: publish outside transactions, ack only after publisher success, retry failures with capped exponential backoff, and preserve claim-token fencing (PostgreSQL 18 run `41370357722`; Rust CI `41370357767`).
+- [x] Add durable PostgreSQL consumer inbox keyed by `(consumer_name, event_id)`, with atomic claims, duplicate suppression, release/reclaim, lease expiry, and fencing-token acknowledgement (Rust CI `41376350940`; PostgreSQL 18 `41376350890`).
+- [x] Integrate a real NATS JetStream outbox publisher using stable `Nats-Msg-Id`; wait for JetStream storage acknowledgement and verify retry when broker acceptance precedes PostgreSQL outbox acknowledgement (PostgreSQL 18 + NATS run `41378596284`).
+- [x] Integrate an inbox-backed NATS JetStream pull consumer; acknowledge only after inbox completion, renew PostgreSQL leases and JetStream progress acknowledgements, suppress logical duplicates, and retry failed handlers (PostgreSQL 18 + NATS run `41378596284`).
+- [x] Add a process-restart integration test that drops the original pool/repository and starts a separate OS test process to recover an expired lease, reclaim with a higher fencing token, and finish the task (PostgreSQL 18 run `41368104662`).
+- [x] Inject an outbox insert failure in PostgreSQL 18 and prove task state, attempt outcome, and event insertion roll back atomically; after removing the failing constraint, the same valid claim completes successfully (PostgreSQL 18 run `41368359268`; Rust CI run `41368358899`).
+- [x] Connect `PgWorkflowCoordinator` and `PostgresTaskWorker` to the shared runtime `TaskRegistry`/`TaskContext`: materialize deterministic task-run IDs from validated DAGs, execute with bounded concurrency, PostgreSQL leases/heartbeats/fencing, durable retries/timeouts, dependency outputs, and automatic workflow aggregation (Rust CI `41369526772`; PostgreSQL 18 `41369526661`).
+- [x] Test process termination across database commit and broker publish/ack crash windows: a publisher subprocess exits after JetStream storage acknowledgement but before PostgreSQL outbox acknowledgement; a consumer subprocess exits after inbox commit but before JetStream acknowledgement. Fresh processes recover/redeliver without duplicate logical effects (PostgreSQL 18 + NATS run `41380067612`; Rust CI `41380067843`).
+
+### M05 — Distributed coordination and event delivery
+- [x] Define node membership and worker ownership model in ADR-0008: PostgreSQL-backed node incarnations/epochs, worker registrations, draining, fail-closed partitions, and task-lease fencing.
+- [x] Implement additive PostgreSQL v3 `cluster_nodes` and `worker_registrations` schema plus `PgMembershipRepository` for join/takeover, heartbeats, worker registration, drain, active-worker discovery and stale-epoch fencing (PostgreSQL 18 `41382505310`; Rust CI `41382505507`).
+- [x] Gate durable task claims and worker heartbeat/completion/failure/cancellation/timeout/recovery/promotion/aggregation writes on a live worker registration and matching node epoch in the same PostgreSQL transaction; filter claims by the worker's registered `TaskRegistry` capabilities (PostgreSQL 18 + NATS run `41386154586`; Rust CI `41386154607`).
+- [x] Add transactional outbox/inbox where required (implemented and PostgreSQL 18 verified in M04).
+- [x] Integrate NATS JetStream after transport-independent contracts stabilize (isolated publisher/consumer crate and real PostgreSQL 18 + NATS integration in M04).
+- [x] Extend redelivery and lease-expiry coverage to separate OS processes, local TCP fallback, UID-scoped packet-level PostgreSQL egress partition/takeover and stale-process rejoin, active worker-process loss, and NATS three-member JetStream member-loss recovery. Hosted verification: PostgreSQL 18 + NATS `41397940218`, Rust CI `41397940143`; exact boundaries and combined-chaos gap are below.
+
+**M05 chaos-test exit criteria (all component and combined cross-layer faults hosted-verified):**
+1. [x] Run an old worker in a child OS process with its own PostgreSQL login and durable task claim. The child connects only through a local TCP relay; the parent closes the relay, which aborts established proxy streams and rejects new connections. The parent and replacement continue using a direct PostgreSQL connection, take over the same logical node ID at a higher epoch, and let the old process confirm a failed heartbeat while the TCP path is cut. This is a real process-separated TCP-path partition; it is not yet a packet-drop firewall/network-namespace test.
+2. [x] Restore the TCP relay while the replacement owns attempt 2. The old process reconnects through the relay and its stale heartbeat and completion are rejected with `NodeMembershipLost`; only then does the replacement complete the recovered task.
+3. [x] Kill a separate `PostgresTaskWorker` process without graceful shutdown while its handler is running. After membership/task leases expire, the replacement recovers attempt 2, receives a higher fencing token, completes the task, and aggregates the workflow to `Succeeded`.
+4. [x] Run three NATS 2.12 JetStream members with two routes each and a stream configured with three replicas. Stop member 1 while PostgreSQL remains healthy; the outbox dispatcher must obtain the publish acknowledgement while that member is still down (first attempt or lease-expiry retry through the surviving quorum). Restart member 1, verify cluster connectivity returns, and assert the consumer receives the stable event ID exactly once with no duplicate message.
+5. [x] Add packet-level PostgreSQL network isolation between the old process and PostgreSQL. In CI the child runs under dedicated UID `nobody`; an `iptables OUTPUT` owner rule scoped to that UID and PostgreSQL TCP destination port rejects its egress packets while controller/replacement traffic remains direct. The child fails closed while partitioned; a higher-epoch replacement recovers attempt 2 with a larger fencing token; after removing the rule, stale heartbeat/completion from the rejoined old process are rejected. Full PostgreSQL 18 + NATS workflow `41397940218` and Rust CI `41397940143` passed on implementation source `3c4ecf4`. Boundary: host-firewall/UID-scoped egress isolation, not a separate network namespace or full bidirectional blackhole.
+6. [x] Run a two-round combined end-to-end chaos campaign overlapping PostgreSQL packet partition, abrupt active-worker process loss, and one NATS JetStream member outage. Hosted-verified by PostgreSQL 18 + NATS [run 41402000557](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000557) and Rust CI [run 41402000570](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41402000570). Each round stops one NATS member, applies the UID-scoped PostgreSQL egress rule, then kills the isolated worker process group while its handler is live. The test waits for PostgreSQL's authoritative node-lease expiry, takes over at a higher membership epoch, recovers attempt 2 with a higher fencing token, completes the workflow, verifies every outbox row is published, processes every unique event once, and replays a logical duplicate under a new NATS message ID to prove inbox suppression.
+- [x] Document current at-least-once delivery guarantees and operational limits in the PostgreSQL transaction contract; extend with membership/partition behavior as M05 implementation lands.
+
+### M06 — WASM extension runtime
+- [x] Define versioned plugin ABI and capability model. ADR-0009, WIT package `aetherflow:plugin@1.0.0`, and `aetherflow-wasm` define same-major/minor compatibility, typed task context and guest errors, default-deny capabilities, and bounded input/output/resource policies.
+- [x] Implement and hosted-verify the Wasmtime 48.0.8 runtime. The runtime uses safe component compilation, a fresh bounded Store per invocation, a shared Engine, capability-gated `log.write`, log size/rate limits, component-handle ceilings, instruction and host-call fuel, and active epoch deadlines. Rust CI [41462166954](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41462166954) passed formatting, Clippy, all workspace tests, Release build, and docs on exact implementation source `0933b2d`.
+- [x] Verify host authorization and deterministic error mapping through real guest execution. The checked-in WIT-derived Component compiles, instantiates, and executes through the Wasmtime linker; default-deny logging creates no host log, the explicit `log.write` grant succeeds, and an oversized log is rejected. Guest-returned error codes/messages are preserved; guest traps, fuel exhaustion, and epoch interruption map to their typed runtime errors.
+- [x] Verify guest output and core resource limits. The integration fixture proves the output cap is applied after execution; memory growth is denied at the configured 64 KiB cap and succeeds under the default budget. A real `table.grow` probe verifies StoreLimits rejects growth at the initial-size ceiling and permits it when one extra element is within budget. The default component fixture also succeeds with the default core-instance budget while a one-instance budget is rejected.
+- [x] Verify the v1 import boundary. A component fixture injecting `wasi_snapshot_preview1::fd_write` is rejected during componentization because the checked-in v1 WIT world does not declare it; no ambient WASI interface is added.
+- [x] Stress the Store-wide component-handle limit using a test-only Component Model resource fixture. Two component instances with separate resource tables allocate through `resource.new`; their combined live handles hit the configured Store cap. A churn test performs 1,000 create/drop cycles under a cap of 10, then successfully allocates 10 live handles, proving `resource.drop` returns capacity. Rust CI [41465170507](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41465170507) passed format, Clippy, all workspace tests, Release build, and docs; Pages [41465229920](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41465229920) passed on the formatting-only main tip. This fixture exercises Component Model resources directly and leaves public WIT ABI v1 unchanged.
+- [x] Publish a minimal plugin example and document reproducible guest build, componentization, validation, and ABI-v1 constraints. `examples/minimal-plugin/` pins `wit-bindgen` 0.60.0 and `wit-component` 0.254.2, builds for `wasm32-unknown-unknown`, and deliberately adds no WASI imports; Rust CI runs the guest/host example.
+- [x] Add the narrow integration seam from `aetherflow-wasm` into `aetherflow-runtime`. `WasmTaskHandler` implements the shared `TaskHandler` contract, moves synchronous Wasmtime work to Tokio's blocking pool, forwards explicitly granted plugin logs, and returns bounded task output. The host example registers it in `TaskRegistry` and executes a real workflow through `TaskScheduler`; hosted Rust CI [41563269188](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563269188) passed the example and full workspace matrix.
+
+### M07 — Control plane and developer experience
+- [x] Define the v1 control-plane resource model, compatibility/versioning rules, payload visibility defaults, request validation, and stable error envelope (ADR-0010).
+- [x] Publish the OpenAPI 3.1 contract for health, workflow-run submission/read, task-run read/cancel, and active worker discovery at docs/api/openapi.yaml.
+- [x] Implement the Axum v1 routes while preserving GET /health.
+- [x] Add durable workflow-run summary queries with repeatable-read snapshot consistency and stable public response DTOs.
+- [x] Wire workflow submission to PgWorkflowCoordinator and active worker discovery to PgMembershipRepository.
+- [x] Wire task cancellation with required expected-version checks and parent workflow aggregation.
+- [x] Add hosted PostgreSQL-backed HTTP integration coverage for submission/read, duplicate IDs, missing workflow/task records, stale cancellation, payload redaction, live active-worker results, and safe storage-error mapping.
+- [x] Enforce the deployment boundary: default loopback bind, reject non-loopback addresses, and retain health-only mode when DATABASE_URL is absent.
+- [x] Add a high-entropy single-operator Bearer credential for all durable API routes; keep /health public, store only a SHA-256 digest and compare in constant time (ADR-0011).
+- [x] Replace NoTls in the server pool with Rustls/native CA roots; default to required TLS and validate the PostgreSQL certificate/hostname. Keep an explicit disable mode only for disposable local databases (ADR-0011).
+- [x] Define tenant identity, principal/credential roles, tenant-owned persistence, forced row-level security, worker tenant grants, and tenant-scoped outbox/inbox invariants (ADR-0012).
+- [x] Implement additive PostgreSQL migration v4: create tenants/principals/credentials and worker grants; backfill v1-v3 workflow/task/dependency/attempt/outbox/inbox rows into `legacy-default`; add tenant-consistent composite foreign keys, uniqueness constraints, and tenant-leading indexes. Preserve the existing globally unique identifiers and old migrations v1-v3.
+- [x] Hosted-verify v4 migration upgrade on PostgreSQL 18: actual v1-v3 schema backfill across all six tenant-owned tables, reserved legacy-default backfill/defaults, tenant/principal/credential and worker-grant constraints, cross-tenant task/dependency/attempt/credential FK rejection, migration checksum drift fail-closed behavior, and exact migration/table/index ledger counts. Verified by PostgreSQL/NATS run [41575288110](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41575288110) on source 3a7d704.
+- [x] Add typed `PrincipalId`, least-privilege `TenantRole`/`TenantPermission`, opaque `TenantContext`, and PostgreSQL-backed tenant credential authentication with digest-only token storage, active-state/expiry checks, and last-used tracking (commit `2cf8dc8`).
+- [x] Add transaction-local PostgreSQL tenant/principal/role context via `set_config(..., true)`, plus a regression test for cleanup after commit on a single-connection pool (commit `b93abae`; hosted verification pending).
+- [x] Add tenant-scoped workflow and task snapshot readers; include explicit tenant predicates for workflow/task/dependency rows and preserve foreign-tenant versus missing-resource 404 equivalence (implementation commit `ca1e942`, integration test commit `ccce8f5`).
+- [x] Add atomic tenant-owned workflow creation: persist tenant identity on workflow, tasks, dependency edges, and `workflow.started` outbox event; expose it through `PgWorkflowCoordinator::submit_workflow_for_tenant` (implementation commits `6c57c6e` and `02d5c57`; integration test commits `88bbc13` and `768dc77`).
+- [x] Add tenant-scoped task cancellation and workflow aggregation. Keep version checks and task fencing; scope task/attempt/workflow/outbox mutations by tenant and hide foreign resources as not found (implementation commit `3af09b3`; PostgreSQL integration coverage commit `f619c5c`).
+- [x] Gate registered task claims on an active, unexpired `worker_tenant_grants` row; lock the grant in the claim transaction, persist tenant ownership to the attempt/outbox, and keep unregistered low-level claims restricted to `legacy-default` (implementation commit `27a8fdb`; PostgreSQL integration test commit `8180c8b`).
+- [x] Revalidate worker grants for registered heartbeat, completion, failure/retry, timeout/cancellation, promotion, lease recovery, and workflow aggregation; preserve task fencing, membership epochs, and optimistic version checks (implementation commits `b17984a`, `d15da70`, `3e54d69`, `c200097`, and `14c3b7e`; revoke/restore integration coverage commit `bbc37a1`).
+- [x] Add grant-gated tenant outbox claims and registered acknowledgement/retry operations; preserve tenant identity in `OutboxClaim`, JetStream event envelope, and `Aetherflow-Tenant-Id` message header (storage commits `b6eb266` and `f727b71`; transport commit `7c94d12`).
+- [x] Add PostgreSQL migration v5 to change inbox identity to `(tenant_id, consumer_name, event_id)`, preserving all existing inbox rows under `legacy-default` (migration commit `a975c35`).
+- [x] Add registered tenant inbox claims and grant checks for claim, renew, acknowledge, and release; retain a legacy-only compatibility consumer and support old envelopes without tenant ID as `legacy-default` (storage commit `d0e8723`; NATS consumer commit `2446810`).
+- [x] Add a separate tenant-authenticated Axum route group for workflow submit/read and task read/cancel. Resolve `TenantContext` from the stored credential only; enforce Read/Submit/Cancel permissions, keep operator routes and worker inventory on the platform token, and preserve cross-tenant 404 equivalence (implementation `29384d7`, HTTP tests `2d97e53`/`f766f80`, OpenAPI `a5556ba`).
+- [x] Install transaction-local tenant, worker, legacy and credential-digest context in registered task lifecycle, worker dependency reads, promotion, lease recovery, aggregation, outbox and inbox transactions. Multi-tenant batch scans set worker identity first and switch tenant state after grant validation; legacy reads are restricted to `legacy-default` (commits `b50c23ec0a`, `76ddabc3b1`, `3ea1147905`, `261280f047`, `ebbda10bb5`, `cb6b27b968`, `ba1648c846`, `63ac94127b`, `18e5918954`, `51d8c21f63`, `8554e5f97c`).
+- [x] Extend single-connection pool-reuse tests to verify tenant, worker, legacy and credential-digest GUC cleanup after commit.
+- [x] Install transaction-local tenant, worker, and legacy context in task lifecycle, registered dependency reads, batch promotion/lease recovery, outbox claim/ack/retry, and inbox claim/renew/ack/release; set worker identity before multi-tenant candidate scans and switch tenant state only after grant validation. Restrict legacy operator reads and compatibility APIs to `legacy-default` (commits: `261280f047`, `88c2634718`, `ebbda10bb5`, `ba1648c846`, `63ac94127b`, `18e5918954`, `51d8c21f63`, `d3c8d7822e`, `8554e5f97c`).
+- [x] Extend pooled-connection cleanup coverage to authenticated tenant, registered worker, and legacy worker GUC settings.
+- [x] Verify same consumer/event identity is independent across tenants, foreign-tenant outbox claims are excluded, and grant revocation blocks settlement and event/inbox completion or retry (integration commits `49e5df9` and `6174a96`; envelope compatibility tests `71263b3`).
+- [x] Hosted-verify tenant credential lifecycle/role checks, transaction-local context cleanup, tenant-scoped reads/writes, worker grant/settlement/promotion/recovery, migrations v5–v7, forced-RLS and worker grant-lock policies under a real non-owner role, outbox/inbox/NATS paths, and tenant HTTP role/isolation coverage on exact SHA `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (Rust CI [41602415273](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415273), PostgreSQL/NATS [41602415207](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415207), Pages [41602415169](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415169); all successful).
+- [x] Require typed TenantContext for tenant-facing API repository paths; keep older operator compatibility methods explicitly confined to `legacy-default`.
+- [x] Add tenant-bound credential authentication and explicit Read/Submit/Cancel route role checks; keep AETHERFLOW_API_TOKEN separate for platform/operator compatibility routes.
+- [x] Separate migration-owner and restricted runtime DB pools; validate runtime-role attributes, ownership/membership, and ENABLE + FORCE RLS on all ten protected tables before server startup.
+- [x] Add migration v6 ENABLE/FORCE RLS policies for six core tenant tables plus tenants, principals, credentials, and worker grants; retain cluster-wide node/worker membership tables outside tenant RLS.
+- [x] Add migration v7 UPDATE USING policy so registered workers can lock their own grant with SELECT FOR SHARE while a false WITH CHECK blocks grant mutation; preserve tenant-side grant administration.
+- [x] Add and hosted-verify a restricted-role PostgreSQL regression suite for cross-tenant filtering, cross-tenant write denial, active/revoked worker grants, SELECT FOR SHARE locking, denied worker grant mutation, digest-scoped credential lookup, and runtime-role verifier positive/negative cases (PostgreSQL/NATS run [41602415207](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415207)).
+- [x] Enforce worker-to-tenant grants across task execution, outbox dispatch, and inbox deduplication without weakening membership epochs or task fencing (detailed implementation slices and integration coverage are recorded above).
+- [x] Hosted-verify cross-tenant HTTP/storage isolation, pooled-connection tenant-state cleanup, legacy backfill, worker grants, and event/inbox isolation on the same source SHA (`74c4e368d6ce43c6b9abd98cf1132120b1bbd199`; PostgreSQL/NATS run [41602415207](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415207)).
+- [x] Define and verify the HTTPS boundary for the HTTP listener before permitting non-loopback access. Non-loopback binds require a complete, parseable Rustls certificate/key pair; loopback may remain HTTP or opt into HTTPS. Positive handshake, malformed PEM, untrusted CA, hostname mismatch, and raw-HTTP rejection tests passed Rust CI run [41605476304](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41605476304) on exact source `54b17742aee822f37a4a3b034968bbcd3e851c13`.
+- [x] Verify the production Rustls client against a live PostgreSQL 18 TLS fixture: trusted CA + matching host connects with TLS; an empty trust store rejects the server chain; a trusted certificate with a hostname mismatch is rejected. PostgreSQL/NATS CI [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469) passed the API/TLS test, migrations, RLS/storage, schema invariants, and real JetStream transport on source `369065c85b2126f97fb55f107b5d34518829cc80`.
+- [x] Add CLI for inspect, submit, cancel, and worker status. Hosted-verified on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57` (Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774), PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644), Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557); all successful).
+  - [x] Keep operator and tenant credentials separate and environment-only; tokens are never accepted as command-line arguments.
+  - [x] Use safe HTTPS defaults, prevent Bearer-token redirect forwarding, and enforce the API request-size limit. Remote HTTP is rejected; file/stdin input uses a bounded reader.
+  - [x] Validate identifiers, base URLs, JSON input, and optimistic-concurrency versions before sending requests.
+  - [x] Add command routing and input-validation tests; pass workspace Clippy, tests, build, WASM, ABI v1, and docs CI.
+- [ ] Add typed Rust SDK; add TypeScript SDK only after the API stabilizes.
+  - [x] Model the v1 workflow, task, worker, and error contracts.
+  - [x] Add anonymous health, operator, and tenant client scopes.
+  - [x] Add HTTPS-only remote transport, redirect protection, bounded request/response bodies, and token redaction.
+  - [x] Validate workflow IDs, DAG dependencies, base64 payload limits, and the 2 MiB request bound locally.
+  - [ ] Pass workspace Clippy, tests, build, WASM, ABI v1, and docs CI for the SDK source.
+- [ ] Build dashboard for workflows, runs, tasks, and event history.
+
+### M08 — Production engineering
+- [ ] Add structured logs, metrics, and distributed tracing.
+- [ ] Add Docker Compose development environment.
+- [ ] Add backup/restore and schema upgrade runbooks.
+- [ ] Add reproducible load and benchmark suites.
+- [ ] Add chaos/failure-injection scenarios.
+- [ ] Add dependency, license, secret, and supply-chain checks.
+- [ ] Publish threat model, SLO proposal, and operational guide.
+
+### M09 — Release candidate
+- [ ] Complete end-to-end acceptance suite.
+- [ ] Verify clean install and documented quickstart.
+- [ ] Review API stability and compatibility policy.
+- [ ] Publish limitations and known issues.
+- [ ] Tag a version only after release criteria pass.
+
 
 ## Current checkpoint
 
-**Current `main` HEAD SHA:** `0c19b9b7d8124472c81ce53056612344f0ebab57` (last fully verified source; SDK implementation is the next source update).
+**Current `main` HEAD SHA:** `ff4bb66ab64b9134e790199c03c9674a3bdcb5a9`.
 
-**Exact hosted verification for that source:**
+**Last fully verified source before SDK addition:** `0c19b9b7d8124472c81ce53056612344f0ebab57).
 - Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774) — success: format, Clippy, workspace tests, release build, WASM target/lint, ABI v1 guest/host example, documentation build, and lockfile artifact.
 - PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644) — success: migration/schema invariants, storage/RLS, restricted runtime role, live PostgreSQL TLS, API integration, real JetStream, and combined chaos.
 - GitHub Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557) — success.
@@ -20,9 +215,9 @@ Overall status: **M00–M06 complete; M07 is in progress.** Tenant authenticatio
 
 **Completed this session:** CLI for health, workflow submit/inspect, task inspect/cancel, and operator-only worker inventory. Operator and tenant credentials are separate and environment-only; remote plain HTTP is rejected, redirects are disabled, and stdin/file input is bounded. The combined-chaos test baseline was moved to after NATS shutdown and immediately before packet filtering. The corrected real JetStream/chaos test passes on the exact verified source; no production worker lease logic was changed.
 
-**Active milestone slice:** first typed Rust SDK crate `aetherflow-sdk` is now being added with OpenAPI v1 models, anonymous/operator/tenant scopes, ID/DAG/payload validation, bounded request and streamed response bodies, redirect blocking, remote HTTPS enforcement, and token redaction. Hosted verification is pending for the next commit.
+**SDK implementation currently on main:** commit `ff4bb66ab64b9134e790199c03c9674a3bdcb5a9` adds `aetherflow-sdk` with OpenAPI v1 models, anonymous/operator/tenant scopes, ID/DAG/payload validation, bounded request and streamed response bodies, redirect blocking, remote HTTPS enforcement, and token redaction. Rust, PostgreSQL/NATS, and Pages verification for this exact source is pending/in progress and must not be treated as passed.
 
-**First unchecked task:** pass the full Rust CI matrix for the SDK source. Then build the dashboard. M08 operational controls and M09 release gates remain open.
+**First unchecked task:** pass the full Rust CI matrix for the SDK source and confirm PostgreSQL/NATS and Pages on the same SHA. Then build the dashboard. M08 operational controls and M09 release gates remain open.
 
 **Known engineering debt and owner decisions:** an explicit open-source license remains an owner-only public-release blocker. M02 property-based lifecycle tests are deferred. WASM `spawn_blocking` cancellation remains bounded by Wasmtime fuel and wall-clock limits rather than force-abort. No production-readiness claim is made.
 
@@ -30,7 +225,7 @@ Overall status: **M00–M06 complete; M07 is in progress.** Tenant authenticatio
 
 ## Session log
 
-| 2026-11-03 | M07 typed Rust SDK implementation | Added the initial `aetherflow-sdk` crate with typed v1 models, anonymous/operator/tenant client scopes, local ID/DAG/retry/base64 validation, 1 MiB task-input and 2 MiB request/streamed-response bounds, remote HTTPS enforcement, redirect blocking, and token redaction. Hosted verification for this SDK source is pending. |
+| 2026-11-03 | M07 typed Rust SDK initial implementation | Added `aetherflow-sdk` with OpenAPI v1 models, anonymous/operator/tenant client scopes, ID/DAG/retry/base64 validation, 1 MiB task-input and 2 MiB request/streamed-response bounds, remote HTTPS enforcement, redirect blocking, and token redaction. Commit `ff4bb66`; hosted verification pending. |
 | 2026-11-03 | M07 CLI and combined-chaos verification | CLI implementation and the corrected combined-chaos test passed on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57`: Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774), PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644), and Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557) all successful with identical `head_sha`. Initial PostgreSQL/NATS attempt [41611525835](https://github.com/pooya-labs/aetherflow/actions/runs/41611525835) failed only the combined-chaos lease assertion because the baseline was captured before the slow Docker NATS-stop step. Moving the baseline to immediately after NATS stop and before packet filtering fixed the timing race; run [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644) passed the corrected real JetStream/chaos suite. Production worker lease logic was not changed. |
 
 

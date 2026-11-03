@@ -71,8 +71,9 @@ impl fmt::Display for ClientError {
             Self::AuthenticationRequired => {
                 formatter.write_str("this operation requires an operator or tenant credential")
             }
-            Self::InvalidIdentifier => formatter
-                .write_str("IDs must contain 1–128 ASCII letters, digits, underscores, or hyphens"),
+            Self::InvalidIdentifier => formatter.write_str(
+                "IDs must contain 1–128 ASCII letters, digits, underscores, or hyphens",
+            ),
             Self::InvalidWorkflow(message) => write!(formatter, "invalid workflow: {message}"),
             Self::TaskPayloadTooLarge => write!(
                 formatter,
@@ -204,7 +205,9 @@ impl RetryPolicy {
                 "max_attempts must be between 1 and 2147483647",
             ));
         }
-        if self.initial_backoff_ms > self.max_backoff_ms || self.max_backoff_ms > i64::MAX as u64 {
+        if self.initial_backoff_ms > self.max_backoff_ms
+            || self.max_backoff_ms > i64::MAX as u64
+        {
             return Err(ClientError::InvalidWorkflow(
                 "backoff values must fit signed 64-bit milliseconds and max_backoff_ms must be at least initial_backoff_ms",
             ));
@@ -313,11 +316,8 @@ impl WorkflowRunSubmission {
             }
         }
 
-        let mut indegree: HashMap<&str, usize> = self
-            .tasks
-            .iter()
-            .map(|task| (task.task_id.as_str(), 0))
-            .collect();
+        let mut indegree: HashMap<&str, usize> =
+            self.tasks.iter().map(|task| (task.task_id.as_str(), 0)).collect();
         let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
         for task in &self.tasks {
             let mut unique_dependencies = HashSet::with_capacity(task.depends_on.len());
@@ -570,20 +570,23 @@ impl ControlPlaneClient {
     }
 
     /// Create a client for platform/operator routes.
-    pub fn operator(base_url: &str, token: impl Into<String>) -> Result<Self, ClientError> {
+    pub fn operator(
+        base_url: &str,
+        token: impl Into<String>,
+    ) -> Result<Self, ClientError> {
         Self::new(base_url, Credential::Operator(token.into()))
     }
 
     /// Create a client for tenant-authenticated workflow/task routes.
-    pub fn tenant(base_url: &str, token: impl Into<String>) -> Result<Self, ClientError> {
+    pub fn tenant(
+        base_url: &str,
+        token: impl Into<String>,
+    ) -> Result<Self, ClientError> {
         Self::new(base_url, Credential::Tenant(token.into()))
     }
 
     fn new(base_url: &str, credential: Credential) -> Result<Self, ClientError> {
-        if credential
-            .token()
-            .is_some_and(|token| token.trim().is_empty())
-        {
+        if credential.token().is_some_and(|token| token.trim().is_empty()) {
             return Err(ClientError::EmptyCredential);
         }
         let base_url = normalize_base_url(base_url)?;
@@ -714,10 +717,18 @@ impl ControlPlaneClient {
     }
 
     /// Read a task run from the selected operator or tenant scope.
-    pub async fn get_task_run(&self, task_run_id: &str) -> Result<TaskRunSnapshot, ClientError> {
+    pub async fn get_task_run(
+        &self,
+        task_run_id: &str,
+    ) -> Result<TaskRunSnapshot, ClientError> {
         validate_entity_id(task_run_id)?;
-        self.request_json(Method::GET, &format!("task-runs/{task_run_id}"), None, true)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("task-runs/{task_run_id}"),
+            None,
+            true,
+        )
+        .await
     }
 
     /// Cancel a task run using its latest TaskRunSnapshot version.
@@ -858,7 +869,8 @@ mod tests {
         let missing = WorkflowRunSubmission::new(
             "workflow",
             "run-2",
-            vec![WorkflowTaskInput::new("task-a").with_dependencies(vec!["unknown".to_owned()])],
+            vec![WorkflowTaskInput::new("task-a")
+                .with_dependencies(vec!["unknown".to_owned()])],
             retry,
         );
         assert!(missing.validate().is_err());
@@ -894,11 +906,9 @@ mod tests {
             RetryPolicy::new(1, 0, 0).unwrap(),
         );
         assert!(invalid.validate().is_err());
-        assert!(
-            WorkflowTaskInput::new("task-a")
-                .with_input_bytes(&vec![b'x'; super::MAX_TASK_PAYLOAD_BYTES + 1])
-                .is_err()
-        );
+        assert!(WorkflowTaskInput::new("task-a")
+            .with_input_bytes(&vec![b'x'; super::MAX_TASK_PAYLOAD_BYTES + 1])
+            .is_err());
     }
 
     #[test]
@@ -908,15 +918,9 @@ mod tests {
             "workflow",
             "run-1",
             vec![
-                WorkflowTaskInput::new("task-a")
-                    .with_input_bytes(&payload)
-                    .unwrap(),
-                WorkflowTaskInput::new("task-b")
-                    .with_input_bytes(&payload)
-                    .unwrap(),
-                WorkflowTaskInput::new("task-c")
-                    .with_input_bytes(&payload)
-                    .unwrap(),
+                WorkflowTaskInput::new("task-a").with_input_bytes(&payload).unwrap(),
+                WorkflowTaskInput::new("task-b").with_input_bytes(&payload).unwrap(),
+                WorkflowTaskInput::new("task-c").with_input_bytes(&payload).unwrap(),
             ],
             RetryPolicy::new(1, 0, 0).unwrap(),
         );
