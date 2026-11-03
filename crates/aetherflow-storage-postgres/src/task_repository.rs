@@ -2781,6 +2781,42 @@ impl PgTaskRepository {
         Ok(snapshot)
     }
 
+    /// Loads a task snapshot for a registered worker with a live tenant grant.
+    ///
+    /// The operation resolves task ownership inside the transaction, validates
+    /// the registration/grant, installs transaction-local identity, and only then
+    /// reads the task and dependency rows.
+    pub async fn get_task_run_for_worker(
+        &self,
+        registration: &WorkerRegistration,
+        task_run_id: &TaskRunId,
+    ) -> Result<DurableTaskRun, StorageError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        lock_worker_registration(&transaction, registration, false).await?;
+        let tenant_id = lock_task_tenant_for_worker(
+            &transaction,
+            task_run_id,
+            registration.worker_id(),
+            Some(registration),
+        )
+        .await?;
+        let snapshot =
+            load_snapshot_for_tenant(&transaction, &tenant_id, task_run_id.as_str()).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(snapshot)
+    }
+
     /// Loads a durable workflow-run summary and its task snapshots.
     ///
     /// The workflow row and task rows are read from the same PostgreSQL snapshot
@@ -2806,7 +2842,7 @@ impl PgTaskRepository {
             .query_opt(
                 "SELECT workflow_id, status, version, created_at, updated_at
                  FROM workflow_runs
-                 WHERE workflow_run_id = $1",
+                 WHERE tenant_id = 'legacy-default' AND workflow_run_id = $1",
                 &[&workflow_run_id.as_str()],
             )
             .await
@@ -2824,7 +2860,7 @@ impl PgTaskRepository {
             .query(
                 "SELECT task_run_id
                  FROM task_runs
-                 WHERE workflow_run_id = $1
+                 WHERE tenant_id = 'legacy-default' AND workflow_run_id = $1
                  ORDER BY created_at, task_run_id",
                 &[&workflow_run_id.as_str()],
             )
@@ -3072,7 +3108,7 @@ async fn load_snapshot_from_client(
             "SELECT task_run_id, workflow_run_id, task_id, status, version, \
                 attempts_started, available_at, input_payload, output_payload, \
                 claimed_by, fencing_token, lease_expires_at, created_at, updated_at \
-         FROM task_runs WHERE task_run_id = $1",
+         FROM task_runs WHERE tenant_id = 'legacy-default' AND task_run_id = $1",
             &[&task_run_id],
         )
         .await
@@ -3081,7 +3117,8 @@ async fn load_snapshot_from_client(
     let dependencies = client
         .query(
             "SELECT parent_task_run_id FROM task_run_dependencies \
-         WHERE child_task_run_id = $1 ORDER BY dependency_position",
+         WHERE tenant_id = 'legacy-default' AND child_task_run_id = $1
+         ORDER BY dependency_position",
             &[&task_run_id],
         )
         .await
@@ -3098,7 +3135,7 @@ async fn load_snapshot(
             "SELECT task_run_id, workflow_run_id, task_id, status, version, \
                 attempts_started, available_at, input_payload, output_payload, \
                 claimed_by, fencing_token, lease_expires_at, created_at, updated_at \
-         FROM task_runs WHERE task_run_id = $1",
+         FROM task_runs WHERE tenant_id = 'legacy-default' AND task_run_id = $1",
             &[&task_run_id],
         )
         .await
@@ -3107,7 +3144,8 @@ async fn load_snapshot(
     let dependencies = transaction
         .query(
             "SELECT parent_task_run_id FROM task_run_dependencies \
-         WHERE child_task_run_id = $1 ORDER BY dependency_position",
+         WHERE tenant_id = 'legacy-default' AND child_task_run_id = $1
+         ORDER BY dependency_position",
             &[&task_run_id],
         )
         .await
