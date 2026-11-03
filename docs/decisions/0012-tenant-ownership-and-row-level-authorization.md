@@ -1,6 +1,6 @@
 # ADR-0012: Tenant ownership and row-level authorization
 
-- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant inbox migration v5, grant-gated execution/event plane, transaction-local tenant/worker/legacy context, and tenant-authenticated HTTP routes are implemented but await hosted verification; forced RLS and separate runtime DB role remain pending
+- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant inbox migration v5, forced-RLS migration v6, tenant/worker authorization paths, tenant-authenticated HTTP routes, and migration-owner/runtime-role separation are implemented but await hosted verification
 - **Date:** 2026-11-03
 - **Scope:** Tenant identity, API principals and credentials, durable workflow ownership, worker grants, and PostgreSQL row-level isolation
 
@@ -26,7 +26,7 @@ The new migration, runtime-role check, and real `SET ROLE` RLS integration test 
 
 ADR-0011 adds one high-entropy operator Bearer token to protect the local v1 control plane. That credential authenticates one trusted operator; it does not establish a tenant identity, grant distinct roles, or isolate durable data.
 
-The current PostgreSQL schema has tenant ownership columns and tenant-consistent constraints on workflow runs, task runs, dependency edges, task attempts, outbox events, and consumer inbox records. Workflow and task run IDs remain globally unique during this compatibility phase; `consumer_inbox` uses the v5 primary key `(tenant_id, consumer_name, event_id)`. Node membership and worker registrations remain cluster-scoped, with customer access mediated by `worker_tenant_grants`. Legacy compatibility repository methods still exist but are restricted to the reserved `legacy-default` tenant. The HTTP control plane still exposes the older global-operator route contract and has not yet adopted tenant credential authentication.
+The current PostgreSQL schema has tenant ownership columns and tenant-consistent constraints on workflow runs, task runs, dependency edges, task attempts, outbox events, and consumer inbox records. Workflow and task run IDs remain globally unique during this compatibility phase; `consumer_inbox` uses the v5 primary key `(tenant_id, consumer_name, event_id)`. Migration v6 enables and forces RLS on those six core tables plus `tenants`, `tenant_principals`, `tenant_credentials`, and `worker_tenant_grants`. Node membership and worker registrations remain cluster-scoped, with worker access mediated by `worker_tenant_grants`. Legacy compatibility methods remain restricted to `legacy-default`. The HTTP control plane now has a separate `/api/v1/tenant/*` route group authenticated by tenant credentials; platform/operator routes and worker inventory remain a separate compatibility surface.
 
 Adding a tenant field only to the HTTP request, or checking it only in Axum middleware, would not provide isolation. A missed predicate in one SQL statement could disclose or mutate another tenant's records. Similarly, allowing a worker to claim every task after adding tenant-aware API credentials would bypass tenant ownership in the execution plane.
 
@@ -43,7 +43,7 @@ Adding a tenant field only to the HTTP request, or checking it only in Axum midd
 
 ### Tenant ownership in durable records
 
-The next additive PostgreSQL migration must introduce tenant ownership for:
+Migration v4 introduced tenant ownership for:
 - workflow runs;
 - task runs;
 - dependency edges;
@@ -55,7 +55,7 @@ Each dependent row must carry or be constrained by the same tenant identity as i
 
 The existing global primary keys may be retained during the first migration only if all external identifiers remain globally unique and every access path is still tenant-scoped. If identifiers become tenant-local, convert the relevant keys and foreign keys together and include `tenant_id` in deterministic task-run ID derivation. Do not mix the two key models within one migration.
 
-Existing rows are backfilled to a reserved, explicitly named legacy tenant. The migration must fail closed if any row cannot be assigned to that tenant. Applied migrations v1–v3 are immutable; tenant ownership is an additive migration with a new checksum-ledger entry.
+Existing rows were backfilled to the reserved `legacy-default` tenant by migration v4; the migration fails closed when ownership cannot be assigned. Applied migrations v1–v6 are immutable; any later correction must be a new additive migration with a new checksum-ledger entry.
 
 ### Database enforcement and repository contracts
 
