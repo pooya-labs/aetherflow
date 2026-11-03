@@ -12,7 +12,7 @@ use std::time::Duration;
 use aetherflow_core::domain::WorkerId;
 use tokio::sync::watch;
 
-use crate::{OutboxClaim, PgTaskRepository, StorageError};
+use crate::{OutboxClaim, PgTaskRepository, StorageError, WorkerRegistration};
 
 /// Boxed asynchronous publication future.
 pub type OutboxPublishFuture<'a> =
@@ -234,6 +234,7 @@ impl From<StorageError> for OutboxDispatcherError {
 pub struct PostgresOutboxDispatcher<P: OutboxPublisher> {
     repository: Arc<PgTaskRepository>,
     publisher_id: WorkerId,
+    registration: Option<WorkerRegistration>,
     publisher: Arc<P>,
     config: OutboxDispatcherConfig,
 }
@@ -243,6 +244,7 @@ impl<P: OutboxPublisher> Clone for PostgresOutboxDispatcher<P> {
         Self {
             repository: Arc::clone(&self.repository),
             publisher_id: self.publisher_id.clone(),
+            registration: self.registration.clone(),
             publisher: Arc::clone(&self.publisher),
             config: self.config.clone(),
         }
@@ -250,7 +252,7 @@ impl<P: OutboxPublisher> Clone for PostgresOutboxDispatcher<P> {
 }
 
 impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
-    /// Creates a dispatcher over the durable repository and caller-supplied transport.
+    /// Creates a dispatcher over the legacy-default outbox compatibility path.
     #[must_use]
     pub fn new(
         repository: Arc<PgTaskRepository>,
@@ -261,6 +263,25 @@ impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
         Self {
             repository,
             publisher_id,
+            registration: None,
+            publisher,
+            config,
+        }
+    }
+
+    /// Creates a dispatcher whose worker registration gates tenant event delivery.
+    #[must_use]
+    pub fn new_registered(
+        repository: Arc<PgTaskRepository>,
+        registration: WorkerRegistration,
+        publisher: Arc<P>,
+        config: OutboxDispatcherConfig,
+    ) -> Self {
+        let publisher_id = registration.worker_id().clone();
+        Self {
+            repository,
+            publisher_id,
+            registration: Some(registration),
             publisher,
             config,
         }
@@ -272,14 +293,27 @@ impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
     /// another dispatcher owns the newer token, or the event will be reclaimed
     /// after lease expiry.
     pub async fn dispatch_once(&self) -> Result<OutboxDispatchReport, OutboxDispatcherError> {
-        let claims = self
-            .repository
-            .claim_outbox_events(
-                &self.publisher_id,
-                self.config.batch_size,
-                self.config.claim_lease,
-            )
-            .await?;
+        let claims = match self.registration.as_ref() {
+            Some(registration) => {
+                self.repository
+                    .claim_outbox_events_registered(
+                        registration,
+                        &self.publisher_id,
+                        self.config.batch_size,
+                        self.config.claim_lease,
+                    )
+                    .await?
+            }
+            None => {
+                self.repository
+                    .claim_outbox_events(
+                        &self.publisher_id,
+                        self.config.batch_size,
+                        self.config.claim_lease,
+                    )
+                    .await?
+            }
+        };
         let mut report = OutboxDispatchReport {
             claimed: claims.len(),
             ..OutboxDispatchReport::default()
@@ -288,15 +322,28 @@ impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
         for claim in claims {
             match self.publisher.publish(&claim).await {
                 Ok(()) => {
-                    match self
-                        .repository
-                        .acknowledge_outbox_event(
-                            claim.event_id(),
-                            &self.publisher_id,
-                            claim.claim_token(),
-                        )
-                        .await
-                    {
+                    let acknowledgement = match self.registration.as_ref() {
+                        Some(registration) => {
+                            self.repository
+                                .acknowledge_outbox_event_registered(
+                                    claim.event_id(),
+                                    registration,
+                                    &self.publisher_id,
+                                    claim.claim_token(),
+                                )
+                                .await
+                        }
+                        None => {
+                            self.repository
+                                .acknowledge_outbox_event(
+                                    claim.event_id(),
+                                    &self.publisher_id,
+                                    claim.claim_token(),
+                                )
+                                .await
+                        }
+                    };
+                    match acknowledgement {
                         Ok(()) => report.acknowledged += 1,
                         Err(StorageError::ClaimLost(_)) => report.ownership_lost += 1,
                         Err(error) => return Err(error.into()),
@@ -304,17 +351,32 @@ impl<P: OutboxPublisher> PostgresOutboxDispatcher<P> {
                 }
                 Err(error) => {
                     let delay = self.config.retry_delay(claim.publish_attempts());
-                    match self
-                        .repository
-                        .retry_outbox_event(
-                            claim.event_id(),
-                            &self.publisher_id,
-                            claim.claim_token(),
-                            delay,
-                            error.message(),
-                        )
-                        .await
-                    {
+                    let retry = match self.registration.as_ref() {
+                        Some(registration) => {
+                            self.repository
+                                .retry_outbox_event_registered(
+                                    claim.event_id(),
+                                    registration,
+                                    &self.publisher_id,
+                                    claim.claim_token(),
+                                    delay,
+                                    error.message(),
+                                )
+                                .await
+                        }
+                        None => {
+                            self.repository
+                                .retry_outbox_event(
+                                    claim.event_id(),
+                                    &self.publisher_id,
+                                    claim.claim_token(),
+                                    delay,
+                                    error.message(),
+                                )
+                                .await
+                        }
+                    };
+                    match retry {
                         Ok(()) => report.rescheduled += 1,
                         Err(StorageError::ClaimLost(_)) => report.ownership_lost += 1,
                         Err(storage_error) => return Err(storage_error.into()),
