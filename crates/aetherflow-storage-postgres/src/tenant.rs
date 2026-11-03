@@ -231,7 +231,10 @@ mod tests {
         assert_eq!(active.get::<_, String>(0), "tenant_context_test");
         assert_eq!(active.get::<_, String>(1), "principal_context_test");
         assert_eq!(active.get::<_, String>(2), "tenant_operator");
-        transaction.commit().await.expect("commit tenant transaction");
+        transaction
+            .commit()
+            .await
+            .expect("commit tenant transaction");
 
         let after_commit = client
             .query_one(
