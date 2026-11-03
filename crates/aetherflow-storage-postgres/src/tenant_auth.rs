@@ -50,6 +50,21 @@ impl PgTenantCredentialRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
+        // RLS can expose only the credential whose digest was presented.
+        // This setting is transaction-local and is cleared at commit/rollback.
+        transaction
+            .query_one(
+                "SELECT
+                    set_config('aetherflow.credential_sha256', $1, true),
+                    set_config('aetherflow.tenant_id', '', true),
+                    set_config('aetherflow.principal_id', '', true),
+                    set_config('aetherflow.tenant_role', 'credential_auth', true),
+                    set_config('aetherflow.worker_id', '', true)",
+                &[&digest_hex],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+
         let row = transaction
             .query_opt(
                 "SELECT c.credential_id, c.tenant_id, c.principal_id,
