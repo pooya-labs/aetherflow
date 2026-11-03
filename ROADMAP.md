@@ -184,11 +184,12 @@ For every material regression, record: detection time; affected commit and Actio
   - [x] Add HTTPS-only remote transport, redirect protection, bounded streamed responses, and token redaction.
   - [x] Reject oversized base64 before decoding and serialize JSON through a 2 MiB bounded writer; verify both paths with unit tests.
   - [x] Pass workspace Clippy, tests, release build, WASM lint, ABI v1 guest/host execution, docs, and lockfile artifact.
-- [ ] Build dashboard for workflows, runs, tasks, and event history.
-  - [ ] Add paginated operator and tenant workflow-run list endpoints using deterministic cursors and server-side tenant scoping.
-  - [ ] Add redacted event-history reads for workflow/task aggregates; never expose task input/output bytes or raw credentials.
-  - [ ] Add explicit browser-origin allowlisting and authenticated CORS preflight handling before the Pages dashboard calls a remote API.
-  - [ ] Build a read-only responsive dashboard for runs, task status/attempt summaries, active workers, and event timelines.
+- [x] Add PostgreSQL migration v8 with tenant-leading workflow-history and outbox-timeline indexes. The immutable migration chain now ends at v8; PostgreSQL/NATS CI [41630546133](https://github.com/pooya-labs/aetherflow/actions/runs/41630546133) passed migration ledger, 28-index verification, runtime-role checks, storage/API integration, and three-node JetStream on backend source `efb7b15d8a0974b19853bff4cf9d20c65665fc71`.
+- [x] Add deterministic keyset-paginated operator and tenant workflow-run list APIs. Operator compatibility reads remain limited to `legacy-default`; tenant lists derive identity from the authenticated `TenantContext`.
+- [x] Add redacted workflow/task event-history APIs with event-ID cursors. Responses expose only aggregate metadata, timestamps, publish state, and safe lifecycle status; they never include raw outbox JSON or task input/output.
+- [x] Add exact browser-origin allowlisting and authenticated CORS preflight handling. Browser access is off by default; only configured HTTP(S) origins, GET/POST, and Authorization/Content-Type are permitted. Wildcards and credentialed CORS are rejected.
+- [x] Publish a responsive, read-only Pages dashboard for runs, task snapshots, active workers, and paginated event timelines. Bearer tokens stay in page memory and are never persisted.
+- [ ] Complete exact-HEAD Rust CI (including CORS unit tests and dashboard JavaScript syntax check) and final Pages deployment for the current docs/asset snapshot.
 
 ### M08 — Production engineering
 - [ ] Add structured logs, metrics, and distributed tracing.
