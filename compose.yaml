@@ -1,0 +1,126 @@
+name: aetherflow
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: aetherflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aetherflow_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-aetherflow_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
+      AETHERFLOW_MIGRATION_PASSWORD: ${AETHERFLOW_MIGRATION_PASSWORD:?Set AETHERFLOW_MIGRATION_PASSWORD in .env}
+      AETHERFLOW_RUNTIME_PASSWORD: ${AETHERFLOW_RUNTIME_PASSWORD:?Set AETHERFLOW_RUNTIME_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./docker/postgres/00-bootstrap-roles.sh:/docker-entrypoint-initdb.d/10-bootstrap-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  nats-1:
+    image: nats:2.12-alpine
+    container_name: aetherflow-nats-1
+    restart: unless-stopped
+    command:
+      - -js
+      - -sd
+      - /data
+      - -m
+      - "8222"
+      - -name
+      - aetherflow-nats-1
+      - -client_advertise
+      - 127.0.0.1:4222
+      - -cluster
+      - nats://0.0.0.0:6222
+      - -routes
+      - nats://nats-2:6222,nats://nats-3:6222
+      - -cluster_name
+      - aetherflow
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - nats-1-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/varz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  nats-2:
+    image: nats:2.12-alpine
+    container_name: aetherflow-nats-2
+    restart: unless-stopped
+    command:
+      - -js
+      - -sd
+      - /data
+      - -m
+      - "8222"
+      - -name
+      - aetherflow-nats-2
+      - -client_advertise
+      - 127.0.0.1:4223
+      - -cluster
+      - nats://0.0.0.0:6222
+      - -routes
+      - nats://nats-1:6222,nats://nats-3:6222
+      - -cluster_name
+      - aetherflow
+    ports:
+      - "127.0.0.1:4223:4222"
+      - "127.0.0.1:8223:8222"
+    volumes:
+      - nats-2-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/varz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  nats-3:
+    image: nats:2.12-alpine
+    container_name: aetherflow-nats-3
+    restart: unless-stopped
+    command:
+      - -js
+      - -sd
+      - /data
+      - -m
+      - "8222"
+      - -name
+      - aetherflow-nats-3
+      - -client_advertise
+      - 127.0.0.1:4224
+      - -cluster
+      - nats://0.0.0.0:6222
+      - -routes
+      - nats://nats-1:6222,nats://nats-2:6222
+      - -cluster_name
+      - aetherflow
+    ports:
+      - "127.0.0.1:4224:4222"
+      - "127.0.0.1:8224:8222"
+    volumes:
+      - nats-3-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/varz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  postgres-data:
+  nats-1-data:
+  nats-2-data:
+  nats-3-data:

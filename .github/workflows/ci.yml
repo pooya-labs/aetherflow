@@ -17,6 +17,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  compose-smoke:
+    name: Validate local Docker Compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Validate Compose interpolation and model
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Start PostgreSQL and three-node JetStream cluster
+        run: docker compose --env-file .env.example up --detach --wait
+
+      - name: Verify restricted database role and NATS cluster routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_guard="$(docker compose --env-file .env.example exec -T postgres \
+            psql --username aetherflow_admin --dbname aetherflow_dev \
+            --no-align --tuples-only --command "
+              SELECT NOT rolsuper
+                 AND NOT rolbypassrls
+                 AND NOT rolcreaterole
+                 AND NOT rolcreatedb
+                 AND NOT rolreplication
+                 AND NOT has_schema_privilege(oid, 'public', 'CREATE')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM pg_auth_members WHERE member = oid
+                 )
+              FROM pg_roles
+              WHERE rolname = 'aetherflow_runtime';
+            ")"
+          test "$runtime_guard" = "t"
+
+          for attempt in $(seq 1 60); do
+            ready=true
+            for port in 8222 8223 8224; do
+              routes="$(curl --silent --show-error --fail \
+                "http://127.0.0.1:${port}/routez" | jq -r '.num_routes // 0')"
+              if [[ "$routes" -lt 2 ]]; then
+                ready=false
+              fi
+            done
+            if [[ "$ready" == "true" ]]; then
+              echo "PostgreSQL roles and all three NATS cluster routes are ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          for service in nats-1 nats-2 nats-3; do
+            docker compose --env-file .env.example logs "$service"
+          done
+          exit 1
+
+      - name: Stop Compose stack and remove temporary volumes
+        if: always()
+        run: docker compose --env-file .env.example down --volumes --remove-orphans
+
   quality:
     name: Format, lint, test, and build
     runs-on: ubuntu-latest

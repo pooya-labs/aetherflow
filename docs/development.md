@@ -2,9 +2,38 @@
 
 ## Prerequisites
 
-Install Rust with [rustup](https://rustup.rs/). The repository pins Rust 1.99.1 in rust-toolchain.toml; the toolchain includes rustfmt and clippy.
+Install Rust with [rustup](https://rustup.rs/). The repository pins Rust 1.99.1 in rust-toolchain.toml; the toolchain includes rustfmt and clippy. Docker Engine with Docker Compose v2 is used for the local PostgreSQL/NATS dependency stack.
 
-For the HTTP control plane, use a local PostgreSQL instance. The server uses Rustls and the operating system's native CA trust store; TLS is required by default. Install any private database CA in the operating system trust store before launching the server. NATS integration tests additionally require a three-node JetStream fixture and Docker. The full chaos test also requires the CI packet-filter prerequisites documented below.
+For the HTTP control plane, use the included Docker Compose PostgreSQL instance or another local PostgreSQL instance. The server uses Rustls and the operating system's native CA trust store; TLS is required by default. Compose is deliberately local-only and uses `DATABASE_SSL_MODE=disable`; never copy that setting to a network database. NATS integration tests use a three-node JetStream cluster. The full chaos test additionally requires the CI packet-filter prerequisites documented below.
+
+## Docker Compose development environment
+
+The Compose stack runs PostgreSQL 18 and a three-node NATS 2.12 JetStream cluster. All published ports bind to loopback only: PostgreSQL `127.0.0.1:5432`, NATS clients `127.0.0.1:4222-4224`, and monitoring `127.0.0.1:8222-8224`. It does not expose the API server; run the Rust server on the host so its default loopback-only HTTP policy remains intact.
+
+~~~bash
+cp .env.example .env
+# Replace all three local database passwords in .env with random values.
+openssl rand -hex 32
+docker compose up --detach --wait
+docker compose ps
+~~~
+
+On the first PostgreSQL volume initialization, `docker/postgres/00-bootstrap-roles.sh` creates two independent logins: `aetherflow_migrator` can apply schema DDL, while `aetherflow_runtime` has only DML and sequence privileges and has no role memberships or public-schema CREATE permission. Default privileges ensure tables and sequences created by future migrations are usable by the runtime role. The script runs only when the database volume is empty; changing credentials in `.env` does not rotate roles in an existing volume.
+
+To run the HTTP server from the host, load the local environment and explicitly select plaintext PostgreSQL for this disposable loopback-only database:
+
+~~~bash
+set -a
+. ./.env
+set +a
+export DATABASE_SSL_MODE=disable
+export AETHERFLOW_MIGRATION_DATABASE_URL="postgres://aetherflow_migrator:${AETHERFLOW_MIGRATION_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
+export DATABASE_URL="postgres://aetherflow_runtime:${AETHERFLOW_RUNTIME_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
+export AETHERFLOW_API_TOKEN="$(openssl rand -hex 32)"
+cargo run -p aetherflow-server
+~~~
+
+The server remains on `127.0.0.1:8080`. Compose secrets and sample passwords are for local development only; do not use them outside a disposable workstation. For a clean stop while preserving data, run `docker compose down`. To erase the local database and NATS streams and re-run first-boot role provisioning, use `docker compose down --volumes`; that command is destructive.
 
 ## Standard Rust checks
 
@@ -93,7 +122,7 @@ curl --fail -H "Authorization: Bearer $AETHERFLOW_API_TOKEN" \
 
 GET /health is public process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
 
-AETHERFLOW_BIND defaults to 127.0.0.1:8080. Plain HTTP is accepted only for loopback addresses. A non-loopback bind requires both AETHERFLOW_TLS_CERT_PATH and AETHERFLOW_TLS_KEY_PATH with a valid PEM certificate chain and private key; both paths also enable HTTPS on loopback. A partial or invalid pair fails startup. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Browser preflight accepts only GET/POST and the Authorization/Content-Type headers from an explicitly listed origin; it never enables cookies or wildcard origins. The Pages dashboard is read-only, holds its Bearer token in memory only, and does not persist credentials. Forced RLS and tenant-scoped storage passed the exact-source Rust/PostgreSQL/NATS/Pages matrix on `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (run IDs 41602415273, 41602415207, 41602415169). For non-loopback HTTPS, provision a certificate whose subject alternative names match the address clients use, then set AETHERFLOW_BIND, AETHERFLOW_TLS_CERT_PATH, and AETHERFLOW_TLS_KEY_PATH. Live PostgreSQL 18 TLS verification passed hosted integration tests: trusted CA + correct host connected, while untrusted CA and hostname mismatch were rejected (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). This does not yet make AetherFlow production-ready.
+AETHERFLOW_BIND defaults to 127.0.0.1:8080. Plain HTTP is accepted only for loopback addresses. A non-loopback bind requires both AETHERFLOW_TLS_CERT_PATH and AETHERFLOW_TLS_KEY_PATH with a valid PEM certificate chain and private key; both paths also enable HTTPS on loopback. A partial or invalid pair fails startup. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Browser preflight accepts only GET/POST and the Authorization, Content-Type, Traceparent, and Tracestate headers from an explicitly listed origin; responses expose only Traceparent and Tracestate. It never enables cookies or wildcard origins. The Pages dashboard is read-only, holds its Bearer token in memory only, and does not persist credentials. Forced RLS and tenant-scoped storage passed the exact-source Rust/PostgreSQL/NATS/Pages matrix on `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (run IDs 41602415273, 41602415207, 41602415169). For non-loopback HTTPS, provision a certificate whose subject alternative names match the address clients use, then set AETHERFLOW_BIND, AETHERFLOW_TLS_CERT_PATH, and AETHERFLOW_TLS_KEY_PATH. Live PostgreSQL 18 TLS verification passed hosted integration tests: trusted CA + correct host connected, while untrusted CA and hostname mismatch were rejected (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). This does not yet make AetherFlow production-ready.
 
 ## HTTP v1 resources
 
@@ -135,18 +164,29 @@ The HTTP process does not launch a worker. Run durable workers separately throug
 
 ## PostgreSQL-backed tests
 
+Create a fresh disposable database inside the Compose PostgreSQL service for each integration suite. The privileged local bootstrap login is available as `POSTGRES_USER`/`POSTGRES_PASSWORD` after loading `.env`:
+
+~~~bash
+set -a
+. ./.env
+set +a
+docker compose exec -T postgres createdb -U "$POSTGRES_USER" aetherflow_api_test
+docker compose exec -T postgres createdb -U "$POSTGRES_USER" aetherflow_storage_test
+docker compose exec -T postgres createdb -U "$POSTGRES_USER" aetherflow_nats_test
+~~~
+
 The HTTP API integration test uses AETHERFLOW_TEST_DATABASE_URL. It migrates the disposable database and exercises platform and tenant route authentication, tenant role checks, workflow submission, duplicate conflict handling, own/foreign/missing workflow and task reads, payload redaction, stale cancellation, and active worker discovery.
 
 ~~~bash
-AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_api_test' \
-  cargo test -p aetherflow-server --locked -- --test-threads=1
+AETHERFLOW_TEST_DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/aetherflow_api_test" \
+  cargo +1.99.1 test -p aetherflow-server --locked -- --test-threads=1
 ~~~
 
 PostgreSQL storage integration tests use the same variable. The forced-RLS test creates a temporary restricted role with SET ROLE and verifies tenant filtering, worker-grant visibility, cross-tenant write denial, worker `SELECT ... FOR SHARE` grant locking, denied worker grant mutation, and digest-scoped credential lookup. These real-database suites require a disposable PostgreSQL test account with the privileges needed to create and grant a temporary role; the hosted CI service account provides this.
 
 ~~~bash
-AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_storage_test' \
-  cargo test -p aetherflow-storage-postgres --tests --locked
+AETHERFLOW_TEST_DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/aetherflow_storage_test" \
+  cargo +1.99.1 test -p aetherflow-storage-postgres --tests --locked
 ~~~
 
 Use a fresh, disposable database for each suite. Do not point integration tests at a development or production database.
@@ -162,12 +202,13 @@ The real JetStream outbox/inbox integration test uses:
 AETHERFLOW_TEST_NATS_DATABASE_URL must be isolated from every other database. The transport suite deliberately truncates its test outbox at the beginning of a serialized fixture to prevent earlier test cases from contaminating global outbox claims. Never use a non-test database for this variable.
 
 ~~~bash
-AETHERFLOW_TEST_NATS_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_nats_test' \
+AETHERFLOW_TEST_NATS_DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/aetherflow_nats_test" \
 AETHERFLOW_TEST_NATS_URL='nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224' \
-  cargo test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
+AETHERFLOW_TEST_NATS_CONTAINER='aetherflow-nats-1' \
+  cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
 ~~~
 
-The combined packet-partition/member-loss test is intended for the hosted CI fixture. It requires a three-node Docker cluster, the configured container name, passwordless sudo, the nobody user, and UID-scoped iptables OUTPUT rules. Do not enable packet-partition mode on a machine unless those prerequisites and cleanup behavior are understood.
+The Compose stack provides the three broker members and the configured container name for local JetStream tests. The combined packet-partition campaign remains intended for the hosted CI fixture: it additionally requires passwordless sudo, the nobody user, and UID-scoped iptables OUTPUT rules. Do not set `AETHERFLOW_TEST_PACKET_PARTITION=1` on a workstation unless those prerequisites and cleanup behavior are understood.
 
 ## WASM plugin example
 
