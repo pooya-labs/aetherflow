@@ -1547,7 +1547,8 @@ mod tests {
                 "initial_backoff_ms": 0,
                 "max_backoff_ms": 0
             }
-        }).to_string();
+        })
+        .to_string();
         let second_submit = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -1588,7 +1589,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
-                    .uri(format!("/api/v1/workflow-runs?limit=1&cursor={next_cursor}"))
+                    .uri(format!(
+                        "/api/v1/workflow-runs?limit=1&cursor={next_cursor}"
+                    ))
                     .body(Body::empty())
                     .expect("valid second workflow page request"),
             )
@@ -1691,7 +1694,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
-                    .uri(format!("/api/v1/workflow-runs/{workflow_run_id}/events?limit=1"))
+                    .uri(format!(
+                        "/api/v1/workflow-runs/{workflow_run_id}/events?limit=1"
+                    ))
                     .body(Body::empty())
                     .expect("valid operator event-history request"),
             )
@@ -1703,7 +1708,10 @@ mod tests {
             .expect("read operator event history");
         let event_history_json: serde_json::Value =
             serde_json::from_slice(&event_history_body).expect("valid event-history JSON");
-        assert_eq!(event_history_json["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            event_history_json["events"].as_array().map(Vec::len),
+            Some(1)
+        );
         assert!(
             event_history_json["events"][0].get("payload").is_none(),
             "event history must never return raw outbox payloads"
@@ -2073,9 +2081,14 @@ mod tests {
             .expect("read tenant event history");
         let tenant_event_history_json: serde_json::Value =
             serde_json::from_slice(&tenant_event_history_body).expect("valid tenant events JSON");
-        assert_eq!(tenant_event_history_json["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            tenant_event_history_json["events"].as_array().map(Vec::len),
+            Some(1)
+        );
         assert!(
-            tenant_event_history_json["events"][0].get("payload").is_none(),
+            tenant_event_history_json["events"][0]
+                .get("payload")
+                .is_none(),
             "tenant event history must never expose outbox JSON"
         );
 
