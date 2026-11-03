@@ -20,6 +20,7 @@ on:
       - "crates/aetherflow-transport-nats/**"
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - "apps/aetherflow-server/**"
+      - "scripts/verify-operations-restore.sh"
       - ".github/workflows/postgres-schema.yml"
   workflow_dispatch:
 

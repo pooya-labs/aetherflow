@@ -151,7 +151,7 @@ nats --server "$NATS_RESTORE_URL" stream restore \
 
 restored_stream_info="$(nats --server "$NATS_RESTORE_URL" stream info "$stream_name" --json)"
 restored_message_count="$(jq -er '.state.messages' <<<"$restored_stream_info")"
-restored_replica_count="$(jq -er '.config.replicas' <<<"$restored_stream_info")"
+restored_replica_count="$(jq -er '.config.num_replicas' <<<"$restored_stream_info")"
 if [[ "$restored_message_count" != "$source_message_count" ]]; then
   printf 'Restored JetStream message count mismatch: expected %s, got %s.\n' "$source_message_count" "$restored_message_count" >&2
   exit 1
