@@ -191,8 +191,14 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
             &TaskRunId::parse("task-missing").expect("valid missing task ID"),
         )
         .await;
-    assert!(matches!(foreign_task, Err(StorageError::TaskRunNotFound(_))));
-    assert!(matches!(missing_task, Err(StorageError::TaskRunNotFound(_))));
+    assert!(matches!(
+        foreign_task,
+        Err(StorageError::TaskRunNotFound(_))
+    ));
+    assert!(matches!(
+        missing_task,
+        Err(StorageError::TaskRunNotFound(_))
+    ));
 
     let last_used: Option<std::time::SystemTime> = client
         .query_one(

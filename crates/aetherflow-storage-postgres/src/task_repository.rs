@@ -2183,9 +2183,7 @@ impl PgTaskRepository {
         let mut task_runs = Vec::with_capacity(task_rows.len());
         for task_row in task_rows {
             let task_run_id: String = task_row.get(0);
-            task_runs.push(
-                load_snapshot_for_tenant(&transaction, tenant_id, &task_run_id).await?,
-            );
+            task_runs.push(load_snapshot_for_tenant(&transaction, tenant_id, &task_run_id).await?);
         }
 
         transaction
