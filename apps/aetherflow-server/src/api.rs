@@ -1535,6 +1535,78 @@ mod tests {
             Some(1)
         );
 
+        let second_workflow_id = format!("api-workflow-second-{suffix}");
+        let second_workflow_run_id = format!("api-run-second-{suffix}");
+        let second_task_id = format!("api-task-second-{suffix}");
+        let second_body = serde_json::json!({
+            "workflow_id": second_workflow_id,
+            "workflow_run_id": second_workflow_run_id,
+            "tasks": [{"task_id": second_task_id, "depends_on": []}],
+            "retry_policy": {
+                "max_attempts": 1,
+                "initial_backoff_ms": 0,
+                "max_backoff_ms": 0
+            }
+        }).to_string();
+        let second_submit = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .method("POST")
+                    .uri("/api/v1/workflow-runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(second_body))
+                    .expect("valid second workflow submission"),
+            )
+            .await
+            .expect("second workflow submission response");
+        assert_eq!(second_submit.status(), StatusCode::CREATED);
+
+        let first_page = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri("/api/v1/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid first workflow page request"),
+            )
+            .await
+            .expect("first workflow page response");
+        assert_eq!(first_page.status(), StatusCode::OK);
+        let first_page_body = to_bytes(first_page.into_body(), 16 * 1024)
+            .await
+            .expect("read first workflow page");
+        let first_page_json: serde_json::Value =
+            serde_json::from_slice(&first_page_body).expect("valid first workflow page JSON");
+        assert_eq!(first_page_json["items"].as_array().map(Vec::len), Some(1));
+        let next_cursor = first_page_json["next_cursor"]
+            .as_str()
+            .expect("a second workflow page exists")
+            .to_owned();
+
+        let second_page = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri(format!("/api/v1/workflow-runs?limit=1&cursor={next_cursor}"))
+                    .body(Body::empty())
+                    .expect("valid second workflow page request"),
+            )
+            .await
+            .expect("second workflow page response");
+        assert_eq!(second_page.status(), StatusCode::OK);
+        let second_page_body = to_bytes(second_page.into_body(), 16 * 1024)
+            .await
+            .expect("read second workflow page");
+        let second_page_json: serde_json::Value =
+            serde_json::from_slice(&second_page_body).expect("valid second workflow page JSON");
+        assert_eq!(second_page_json["items"].as_array().map(Vec::len), Some(1));
+        assert_ne!(
+            first_page_json["items"][0]["workflow_run_id"],
+            second_page_json["items"][0]["workflow_run_id"],
+            "keyset pagination must not repeat a workflow across adjacent pages"
+        );
+
         let missing_workflow = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -1614,6 +1686,28 @@ mod tests {
             serde_json::from_slice(&cancel_body).expect("valid cancellation response JSON");
         assert_eq!(cancelled["task_run"]["status"], "cancelled");
         assert_eq!(cancelled["workflow_status"], "cancelled");
+
+        let event_history = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri(format!("/api/v1/workflow-runs/{workflow_run_id}/events?limit=1"))
+                    .body(Body::empty())
+                    .expect("valid operator event-history request"),
+            )
+            .await
+            .expect("operator event-history response");
+        assert_eq!(event_history.status(), StatusCode::OK);
+        let event_history_body = to_bytes(event_history.into_body(), 16 * 1024)
+            .await
+            .expect("read operator event history");
+        let event_history_json: serde_json::Value =
+            serde_json::from_slice(&event_history_body).expect("valid event-history JSON");
+        assert_eq!(event_history_json["events"].as_array().map(Vec::len), Some(1));
+        assert!(
+            event_history_json["events"][0].get("payload").is_none(),
+            "event history must never return raw outbox payloads"
+        );
 
         let stale_cancel = router(state.clone())
             .oneshot(
@@ -1877,6 +1971,55 @@ mod tests {
             .expect("own-tenant workflow read response");
         assert_eq!(own_tenant_workflow.status(), StatusCode::OK);
 
+        let tenant_workflow_list = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri("/api/v1/tenant/workflow-runs?limit=100")
+                    .body(Body::empty())
+                    .expect("valid tenant workflow-list request"),
+            )
+            .await
+            .expect("tenant workflow-list response");
+        assert_eq!(tenant_workflow_list.status(), StatusCode::OK);
+        let tenant_workflow_list_body = to_bytes(tenant_workflow_list.into_body(), 16 * 1024)
+            .await
+            .expect("read tenant workflow list");
+        let tenant_workflow_list_json: serde_json::Value =
+            serde_json::from_slice(&tenant_workflow_list_body).expect("valid tenant list JSON");
+        let tenant_workflow_ids = tenant_workflow_list_json["items"]
+            .as_array()
+            .expect("tenant workflow list array")
+            .iter()
+            .filter_map(|item| item["workflow_run_id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(tenant_workflow_ids.contains(&tenant_workflow_run_id.as_str()));
+        assert!(!tenant_workflow_ids.contains(&foreign_workflow_run_id.as_str()));
+
+        let operator_legacy_list = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri("/api/v1/workflow-runs?limit=100")
+                    .body(Body::empty())
+                    .expect("valid legacy workflow-list request"),
+            )
+            .await
+            .expect("legacy workflow-list response");
+        assert_eq!(operator_legacy_list.status(), StatusCode::OK);
+        let operator_legacy_list_body = to_bytes(operator_legacy_list.into_body(), 16 * 1024)
+            .await
+            .expect("read legacy workflow list");
+        let operator_legacy_list_json: serde_json::Value =
+            serde_json::from_slice(&operator_legacy_list_body).expect("valid legacy list JSON");
+        let legacy_workflow_ids = operator_legacy_list_json["items"]
+            .as_array()
+            .expect("legacy workflow list array")
+            .iter()
+            .filter_map(|item| item["workflow_run_id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(!legacy_workflow_ids.contains(&foreign_workflow_run_id.as_str()));
+
         let own_tenant_task = router(state.clone())
             .oneshot(
                 Request::builder()
@@ -1911,6 +2054,30 @@ mod tests {
             serde_json::from_slice(&tenant_cancel_body).expect("valid tenant cancellation JSON");
         assert_eq!(tenant_cancelled["task_run"]["status"], "cancelled");
         assert_eq!(tenant_cancelled["workflow_status"], "cancelled");
+
+        let tenant_event_history = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri(format!(
+                        "/api/v1/tenant/workflow-runs/{tenant_workflow_run_id}/events?limit=1"
+                    ))
+                    .body(Body::empty())
+                    .expect("valid tenant event-history request"),
+            )
+            .await
+            .expect("tenant event-history response");
+        assert_eq!(tenant_event_history.status(), StatusCode::OK);
+        let tenant_event_history_body = to_bytes(tenant_event_history.into_body(), 16 * 1024)
+            .await
+            .expect("read tenant event history");
+        let tenant_event_history_json: serde_json::Value =
+            serde_json::from_slice(&tenant_event_history_body).expect("valid tenant events JSON");
+        assert_eq!(tenant_event_history_json["events"].as_array().map(Vec::len), Some(1));
+        assert!(
+            tenant_event_history_json["events"][0].get("payload").is_none(),
+            "tenant event history must never expose outbox JSON"
+        );
 
         let foreign_workflow_read = router(state.clone())
             .oneshot(
