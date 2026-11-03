@@ -4,6 +4,9 @@
 //! has been validated against active credential, principal, and tenant rows.
 
 use aetherflow_core::domain::{PrincipalId, TenantId};
+use tokio_postgres::Transaction;
+
+use crate::StorageError;
 
 /// A role assigned to one tenant principal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,6 +114,32 @@ impl TenantContext {
     pub const fn allows(&self, permission: TenantPermission) -> bool {
         self.role.allows(permission)
     }
+
+    /// Installs this authenticated identity as transaction-local PostgreSQL state.
+    ///
+    /// The third argument to set_config is true, so PostgreSQL restores the
+    /// previous settings when the transaction commits or rolls back. Never
+    /// replace this with session-level SET on a pooled connection.
+    pub(crate) async fn apply_to_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), StorageError> {
+        transaction
+            .query_one(
+                "SELECT
+                    set_config('aetherflow.tenant_id', $1, true),
+                    set_config('aetherflow.principal_id', $2, true),
+                    set_config('aetherflow.tenant_role', $3, true)",
+                &[
+                    &self.tenant_id.as_str(),
+                    &self.principal_id.as_str(),
+                    &self.role.as_database_value(),
+                ],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +177,74 @@ mod tests {
             );
         }
         assert_eq!(TenantRole::from_database("platform_admin"), None);
+    }
+
+    #[tokio::test]
+    async fn tenant_context_is_transaction_local_and_does_not_leak_on_pool_reuse() {
+        use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+        use tokio_postgres::{Config, NoTls};
+
+        let Ok(database_url) = std::env::var("AETHERFLOW_TEST_DATABASE_URL") else {
+            eprintln!(
+                "AETHERFLOW_TEST_DATABASE_URL is not set; skipping tenant context PostgreSQL test"
+            );
+            return;
+        };
+        let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+        let manager = Manager::from_config(
+            config,
+            NoTls,
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
+        );
+        let pool = Pool::builder(manager)
+            .max_size(1)
+            .build()
+            .expect("build single-connection test pool");
+        let mut client = pool.get().await.expect("acquire test connection");
+        let context = super::TenantContext::from_authenticated_credential(
+            aetherflow_core::domain::TenantId::parse("tenant_context_test")
+                .expect("valid tenant ID"),
+            aetherflow_core::domain::PrincipalId::parse("principal_context_test")
+                .expect("valid principal ID"),
+            TenantRole::Operator,
+        );
+
+        let transaction = client
+            .transaction()
+            .await
+            .expect("begin tenant-scoped transaction");
+        context
+            .apply_to_transaction(&transaction)
+            .await
+            .expect("apply tenant context");
+        let active = transaction
+            .query_one(
+                "SELECT current_setting('aetherflow.tenant_id', true),
+                        current_setting('aetherflow.principal_id', true),
+                        current_setting('aetherflow.tenant_role', true)",
+                &[],
+            )
+            .await
+            .expect("read active tenant context");
+        assert_eq!(active.get::<_, String>(0), "tenant_context_test");
+        assert_eq!(active.get::<_, String>(1), "principal_context_test");
+        assert_eq!(active.get::<_, String>(2), "tenant_operator");
+        transaction.commit().await.expect("commit tenant transaction");
+
+        let after_commit = client
+            .query_one(
+                "SELECT
+                    COALESCE(current_setting('aetherflow.tenant_id', true), ''),
+                    COALESCE(current_setting('aetherflow.principal_id', true), ''),
+                    COALESCE(current_setting('aetherflow.tenant_role', true), '')",
+                &[],
+            )
+            .await
+            .expect("inspect reused pooled connection");
+        assert_eq!(after_commit.get::<_, String>(0), "");
+        assert_eq!(after_commit.get::<_, String>(1), "");
+        assert_eq!(after_commit.get::<_, String>(2), "");
     }
 }
