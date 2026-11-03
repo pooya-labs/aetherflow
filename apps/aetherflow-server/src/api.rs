@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, Path, Request, State};
 use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -31,7 +31,8 @@ use aetherflow_runtime::repository::{MAX_TASK_PAYLOAD_BYTES, TaskInput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     DurableTaskRun, DurableWorkflowRun, PgMembershipRepository, PgTaskRepository,
-    PgWorkflowCoordinator, StorageError,
+    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantContext,
+    TenantPermission,
 };
 
 /// Cloneable HTTP application state. The health endpoint remains available
@@ -46,6 +47,7 @@ struct AppDatabase {
     coordinator: PgWorkflowCoordinator,
     tasks: Arc<PgTaskRepository>,
     membership: PgMembershipRepository,
+    tenant_credentials: PgTenantCredentialRepository,
 }
 
 impl AppState {
@@ -59,6 +61,7 @@ impl AppState {
     pub fn from_pool(pool: Pool, api_token: &str) -> Result<Self, std::io::Error> {
         let api_token_hash = hash_api_token(api_token)?;
         let tasks = Arc::new(PgTaskRepository::from_pool(pool.clone()));
+        let tenant_credentials = PgTenantCredentialRepository::from_pool(pool.clone());
         let membership = PgMembershipRepository::from_pool(pool);
         let coordinator = PgWorkflowCoordinator::new(Arc::clone(&tasks));
         Ok(Self {
@@ -66,6 +69,7 @@ impl AppState {
                 coordinator,
                 tasks,
                 membership,
+                tenant_credentials,
             })),
             api_token_hash: Some(api_token_hash),
         })
@@ -84,7 +88,7 @@ impl AppState {
 
 /// Builds the v1 router. Health is public; durable control-plane routes require Bearer auth.
 pub fn router(state: AppState) -> Router {
-    let control_plane = Router::new()
+    let operator_control_plane = Router::new()
         .route("/api/v1/workflow-runs", post(submit_workflow))
         .route(
             "/api/v1/workflow-runs/{workflow_run_id}",
@@ -101,9 +105,31 @@ pub fn router(state: AppState) -> Router {
             require_bearer_token,
         ));
 
+    // Tenant API keys are deliberately separate from the platform operator
+    // credential. No tenant ID is accepted from request data or headers.
+    let tenant_control_plane = Router::new()
+        .route("/api/v1/tenant/workflow-runs", post(submit_tenant_workflow))
+        .route(
+            "/api/v1/tenant/workflow-runs/{workflow_run_id}",
+            get(get_tenant_workflow_run),
+        )
+        .route(
+            "/api/v1/tenant/task-runs/{task_run_id}",
+            get(get_tenant_task_run),
+        )
+        .route(
+            "/api/v1/tenant/task-runs/{task_run_id}/cancel",
+            post(cancel_tenant_task_run),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_tenant_bearer,
+        ));
+
     Router::new()
         .route("/health", get(health))
-        .merge(control_plane)
+        .merge(operator_control_plane)
+        .merge(tenant_control_plane)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
 }
@@ -174,6 +200,60 @@ async fn require_bearer_token(
     next.run(request).await
 }
 
+async fn require_tenant_bearer(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let token = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty());
+    let Some(token) = token else {
+        return unauthorized_bearer().into_response();
+    };
+
+    let database = match state.database() {
+        Ok(database) => database,
+        Err(error) => return error.into_response(),
+    };
+    let context = match database.tenant_credentials.authenticate_token(token).await {
+        Ok(context) => context,
+        Err(StorageError::InvalidTenantCredential) => {
+            return unauthorized_bearer().into_response();
+        }
+        Err(error) => return ApiError::from_storage(error).into_response(),
+    };
+
+    request.extensions_mut().insert(context);
+    next.run(request).await
+}
+
+fn unauthorized_bearer() -> ApiError {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "a valid tenant Bearer credential is required for this resource",
+    )
+}
+
+fn require_tenant_permission(
+    context: &TenantContext,
+    permission: TenantPermission,
+) -> Result<(), ApiError> {
+    if context.allows(permission) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the authenticated tenant role does not permit this operation",
+        ))
+    }
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_owned(),
@@ -199,6 +279,14 @@ impl ApiError {
             code,
             message,
         }
+    }
+
+    fn forbidden() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the authenticated tenant role does not permit this operation",
+        )
     }
 
     fn invalid_identifier() -> Self {
@@ -243,6 +331,7 @@ impl ApiError {
 
     fn from_storage(error: StorageError) -> Self {
         match error {
+            StorageError::InvalidTenantCredential => unauthorized_bearer(),
             StorageError::WorkflowRunConflict(_) => Self::new(
                 StatusCode::CONFLICT,
                 "conflict",
@@ -351,13 +440,9 @@ struct TaskRunReceipt {
     status: &'static str,
 }
 
-async fn submit_workflow(
-    State(state): State<AppState>,
-    payload: Result<Json<SubmitWorkflowRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
-    let Json(request) = payload
-        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
-
+fn parse_workflow_request(
+    request: SubmitWorkflowRequest,
+) -> Result<(WorkflowId, WorkflowRunId, WorkflowDefinition, RetryPolicy), ApiError> {
     let workflow_id =
         WorkflowId::parse(request.workflow_id).map_err(|_| ApiError::invalid_identifier())?;
     let workflow_run_id = WorkflowRunId::parse(request.workflow_run_id)
@@ -410,6 +495,18 @@ async fn submit_workflow(
     )
     .map_err(|_| ApiError::invalid_workflow())?;
 
+    Ok((workflow_id, workflow_run_id, definition, retry_policy))
+}
+
+async fn submit_workflow(
+    State(state): State<AppState>,
+    payload: Result<Json<SubmitWorkflowRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
+    let Json(request) = payload
+        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
+    let (workflow_id, workflow_run_id, definition, retry_policy) =
+        parse_workflow_request(request)?;
+
     let database = state.database()?;
     let submission = database
         .coordinator
@@ -436,6 +533,113 @@ async fn submit_workflow(
             task_runs,
         }),
     ))
+}
+
+async fn submit_tenant_workflow(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    payload: Result<Json<SubmitWorkflowRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
+    require_tenant_permission(&context, TenantPermission::Submit)?;
+    let Json(request) = payload
+        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
+    let (workflow_id, workflow_run_id, definition, retry_policy) =
+        parse_workflow_request(request)?;
+
+    let database = state.database()?;
+    let submission = database
+        .coordinator
+        .submit_workflow_for_tenant(
+            &context,
+            &workflow_run_id,
+            &definition,
+            retry_policy,
+            None,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let task_runs = submission
+        .task_runs()
+        .map(|(task_id, task_run_id)| TaskRunReceipt {
+            task_id: task_id.to_owned(),
+            task_run_id: task_run_id.as_str().to_owned(),
+            status: "pending",
+        })
+        .collect();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(WorkflowRunReceipt {
+            workflow_id: workflow_id.as_str().to_owned(),
+            workflow_run_id: workflow_run_id.as_str().to_owned(),
+            status: "running",
+            version: 1,
+            task_runs,
+        }),
+    ))
+}
+
+async fn get_tenant_workflow_run(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    Path(raw_workflow_run_id): Path<String>,
+) -> Result<Json<WorkflowRunSnapshot>, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Read)?;
+    let workflow_run_id =
+        WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
+    let database = state.database()?;
+    let snapshot = database
+        .tasks
+        .get_workflow_run_for_tenant(&context, &workflow_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(Json(WorkflowRunSnapshot::from(snapshot)))
+}
+
+async fn get_tenant_task_run(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    Path(raw_task_run_id): Path<String>,
+) -> Result<Json<TaskRunSnapshot>, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Read)?;
+    let task_run_id = aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
+        .map_err(|_| ApiError::invalid_identifier())?;
+    let database = state.database()?;
+    let snapshot = database
+        .tasks
+        .get_task_run_for_tenant(&context, &task_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(Json(TaskRunSnapshot::from(&snapshot)))
+}
+
+async fn cancel_tenant_task_run(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+    Path(raw_task_run_id): Path<String>,
+    payload: Result<Json<CancelTaskRunRequest>, JsonRejection>,
+) -> Result<Json<CancelTaskRunResponse>, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Cancel)?;
+    let Json(request) = payload
+        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
+    let task_run_id = aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
+        .map_err(|_| ApiError::invalid_identifier())?;
+    let database = state.database()?;
+    let cancelled = database
+        .tasks
+        .cancel_task_run_for_tenant(&context, &task_run_id, request.expected_version)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let workflow_status = database
+        .tasks
+        .aggregate_workflow_run_for_tenant(&context, cancelled.workflow_run_id())
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(CancelTaskRunResponse {
+        task_run: TaskRunSnapshot::from(&cancelled),
+        workflow_status: workflow_status_name(workflow_status),
+    }))
 }
 
 async fn get_workflow_run(
