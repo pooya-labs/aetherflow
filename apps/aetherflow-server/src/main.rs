@@ -459,6 +459,14 @@ mod tests {
             .with_root_certificates(trusted_roots)
             .with_no_client_auth();
 
+        let invalid_server_config =
+            RustlsConfig::from_pem(b"not a certificate".to_vec(), b"not a private key".to_vec())
+                .await;
+        assert!(
+            invalid_server_config.is_err(),
+            "HTTPS startup must reject malformed certificate/key PEM"
+        );
+
         let server_config = RustlsConfig::from_pem(
             certified.cert.pem().into_bytes(),
             certified.signing_key.serialize_pem().into_bytes(),
@@ -499,6 +507,47 @@ mod tests {
             expected_certificate
         );
         drop(tls_stream);
+
+        // A client that does not trust the presented CA must reject the chain.
+        let untrusted_client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let untrusted_connector = TlsConnector::from(Arc::new(untrusted_client_config));
+        let untrusted_tcp = TcpStream::connect(address)
+            .await
+            .expect("connect an untrusted-certificate client");
+        let untrusted_name =
+            ServerName::try_from("localhost".to_owned()).expect("valid TLS server name");
+        assert!(
+            untrusted_connector
+                .connect(untrusted_name, untrusted_tcp)
+                .await
+                .is_err(),
+            "HTTPS clients must reject an untrusted certificate chain"
+        );
+
+        // Trusting the certificate is not enough when the requested hostname
+        // does not match its localhost subject alternative name.
+        let mut mismatch_roots = rustls::RootCertStore::empty();
+        mismatch_roots
+            .add(expected_certificate.clone())
+            .expect("trust test certificate for hostname mismatch case");
+        let mismatch_client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(mismatch_roots)
+            .with_no_client_auth();
+        let mismatch_connector = TlsConnector::from(Arc::new(mismatch_client_config));
+        let mismatch_tcp = TcpStream::connect(address)
+            .await
+            .expect("connect a hostname-mismatch client");
+        let mismatch_name = ServerName::try_from("wrong-host.invalid".to_owned())
+            .expect("valid mismatch TLS server name");
+        assert!(
+            mismatch_connector
+                .connect(mismatch_name, mismatch_tcp)
+                .await
+                .is_err(),
+            "HTTPS clients must reject a certificate with the wrong hostname"
+        );
 
         // A raw HTTP request sent to the TLS socket must never receive an HTTP
         // response; the TLS acceptor closes or emits a TLS alert instead.
