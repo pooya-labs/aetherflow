@@ -2,9 +2,11 @@ use aetherflow_core::domain::{
     RetryPolicy, TaskId, TaskRunId, WorkflowId, WorkflowRunId,
 };
 use aetherflow_runtime::repository::TaskInput;
+use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgTenantCredentialRepository,
-    StorageError, TenantPermission, TenantRole, initial_migration_checksum,
+    PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole,
+    initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -298,6 +300,42 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("tenant A can read its newly created workflow");
     assert_eq!(own_created_workflow.task_runs().len(), 2);
+
+    let coordinator = PgWorkflowCoordinator::new(std::sync::Arc::new(tasks.clone()));
+    let coordinated_run_id = WorkflowRunId::parse("tenant-a-coordinated-workflow")
+        .expect("valid coordinated workflow-run ID");
+    let coordinated_workflow_id = WorkflowId::parse("tenant-a-coordinated-definition")
+        .expect("valid coordinated workflow ID");
+    let coordinated_task_id =
+        TaskId::parse("tenant-a-coordinated-task").expect("valid coordinated task ID");
+    let definition = WorkflowDefinition::new(
+        coordinated_workflow_id,
+        vec![
+            WorkflowTask::new(coordinated_task_id, Vec::new())
+                .with_input(TaskInput::new(Vec::new()).expect("valid empty input")),
+        ],
+    )
+    .expect("valid coordinated workflow definition");
+    let coordinated_submission = coordinator
+        .submit_workflow_for_tenant(
+            &context,
+            &coordinated_run_id,
+            &definition,
+            policy,
+            None,
+        )
+        .await
+        .expect("coordinator persists tenant-owned workflow");
+    assert_eq!(coordinated_submission.task_runs().count(), 1);
+    let coordinated_tenant: String = client
+        .query_one(
+            "SELECT tenant_id FROM workflow_runs WHERE workflow_run_id = $1",
+            &[&coordinated_run_id.as_str()],
+        )
+        .await
+        .expect("read coordinator-owned workflow tenant")
+        .get(0);
+    assert_eq!(coordinated_tenant, "tenant-a");
 
     let last_used: Option<std::time::SystemTime> = client
         .query_one(
