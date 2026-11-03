@@ -5,16 +5,18 @@
 //! Payload bytes are accepted on submission but never included in inspection.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{
     ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
     ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD,
-    AUTHORIZATION, ORIGIN, VARY, WWW_AUTHENTICATE,
+    AUTHORIZATION, CONTENT_TYPE, ORIGIN, VARY, WWW_AUTHENTICATE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -28,6 +30,22 @@ use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use tracing::Instrument;
+
+const HTTP_LATENCY_BUCKETS: [(u64, &str); 10] = [
+    (5_000, "0.005"),
+    (10_000, "0.01"),
+    (25_000, "0.025"),
+    (50_000, "0.05"),
+    (100_000, "0.1"),
+    (250_000, "0.25"),
+    (500_000, "0.5"),
+    (1_000_000, "1"),
+    (2_500_000, "2.5"),
+    (5_000_000, "5"),
+];
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 use aetherflow_core::domain::{
     RetryPolicy, TaskId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
@@ -47,6 +65,76 @@ pub struct AppState {
     database: Option<Arc<AppDatabase>>,
     api_token_hash: Option<[u8; 32]>,
     cors_allowed_origins: Arc<HashSet<String>>,
+    metrics: Arc<HttpMetrics>,
+}
+
+#[derive(Default)]
+struct HttpMetrics {
+    requests_total: AtomicU64,
+    requests_failed_total: AtomicU64,
+    requests_in_flight: AtomicU64,
+    request_duration_sum_micros: AtomicU64,
+    request_duration_buckets: [AtomicU64; 10],
+}
+
+impl HttpMetrics {
+    fn observe(&self, status_code: u16, elapsed: Duration) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        if status_code >= 500 {
+            self.requests_failed_total.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let elapsed_micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+        let _ = self.request_duration_sum_micros.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_add(elapsed_micros)),
+        );
+        for ((upper_bound, _), bucket) in HTTP_LATENCY_BUCKETS
+            .iter()
+            .zip(self.request_duration_buckets.iter())
+        {
+            if elapsed_micros <= *upper_bound {
+                bucket.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn render_prometheus(&self) -> String {
+        let requests_total = self.requests_total.load(Ordering::Relaxed);
+        let duration_sum = Duration::from_micros(
+            self.request_duration_sum_micros.load(Ordering::Relaxed),
+        )
+        .as_secs_f64();
+        let mut output = String::new();
+
+        writeln!(output, "# HELP aetherflow_http_requests_total Completed HTTP requests.").expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_requests_total counter").expect("write metrics");
+        writeln!(output, "aetherflow_http_requests_total {requests_total}").expect("write metrics");
+        writeln!(output, "# HELP aetherflow_http_requests_failed_total HTTP requests completed with a 5xx response.").expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_requests_failed_total counter").expect("write metrics");
+        writeln!(output, "aetherflow_http_requests_failed_total {}", self.requests_failed_total.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(output, "# HELP aetherflow_http_requests_in_flight HTTP requests currently being handled.").expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_requests_in_flight gauge").expect("write metrics");
+        writeln!(output, "aetherflow_http_requests_in_flight {}", self.requests_in_flight.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(output, "# HELP aetherflow_http_request_duration_seconds HTTP request latency distribution.").expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_request_duration_seconds histogram").expect("write metrics");
+        for ((_, rendered_bound), bucket) in HTTP_LATENCY_BUCKETS
+            .iter()
+            .zip(self.request_duration_buckets.iter())
+        {
+            writeln!(
+                output,
+                "aetherflow_http_request_duration_seconds_bucket{{le=\"{rendered_bound}\"}} {}",
+                bucket.load(Ordering::Relaxed),
+            )
+            .expect("write metrics");
+        }
+        writeln!(output, "aetherflow_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {requests_total}").expect("write metrics");
+        writeln!(output, "aetherflow_http_request_duration_seconds_sum {duration_sum:.6}").expect("write metrics");
+        writeln!(output, "aetherflow_http_request_duration_seconds_count {requests_total}").expect("write metrics");
+        output
+    }
 }
 
 struct AppDatabase {
@@ -106,6 +194,7 @@ impl AppState {
             })),
             api_token_hash: Some(api_token_hash),
             cors_allowed_origins: Arc::default(),
+            metrics: Arc::default(),
         })
     }
 
@@ -141,6 +230,7 @@ pub fn router(state: AppState) -> Router {
             post(cancel_task_run),
         )
         .route("/api/v1/workers", get(list_active_workers))
+        .route("/api/v1/metrics", get(export_metrics))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer_token,
@@ -183,7 +273,69 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             apply_browser_cors,
         ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe_http_request,
+        ))
         .with_state(state)
+}
+
+async fn observe_http_request(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = match request.method().as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "PATCH" => "PATCH",
+        "DELETE" => "DELETE",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "OTHER",
+    };
+    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let started = Instant::now();
+    state.metrics.requests_in_flight.fetch_add(1, Ordering::Relaxed);
+
+    // Deliberately omit URI, query, headers, and body: these may contain
+    // resource identifiers, credentials, or customer payloads.
+    let span = tracing::info_span!("http.request", request_id, http_method = method);
+    let response = next.run(request).instrument(span.clone()).await;
+    let elapsed = started.elapsed();
+    let status_code = response.status().as_u16();
+
+    state.metrics.observe(status_code, elapsed);
+    state.metrics.requests_in_flight.fetch_sub(1, Ordering::Relaxed);
+    tracing::info!(
+        parent: &span,
+        status_code,
+        latency_ms = elapsed.as_secs_f64() * 1_000.0,
+        "request completed"
+    );
+    response
+}
+
+async fn export_metrics(State(state): State<AppState>) -> Response {
+    // In health-only mode the operator auth middleware intentionally permits
+    // requests to reach handlers; metrics remain unavailable without a DB and
+    // therefore cannot become an unauthenticated remote information endpoint.
+    if state.database.is_none() {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_unavailable",
+            "metrics are unavailable until PostgreSQL is configured",
+        )
+        .into_response();
+    }
+
+    let mut response = state.metrics.render_prometheus().into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    response
 }
 
 fn valid_cors_origin(value: &str) -> bool {
@@ -1373,7 +1525,9 @@ fn format_timestamp(value: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, authorization_matches, hash_api_token, router};
+    use super::{AppState, HttpMetrics, authorization_matches, hash_api_token, router};
+    use std::sync::Arc;
+    use std::time::Duration;
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS,
@@ -1383,6 +1537,57 @@ mod tests {
     use tower::ServiceExt;
 
     const TEST_API_TOKEN: &str = "test-only-aetherflow-api-token-32-bytes";
+
+    #[test]
+    fn prometheus_metrics_use_bounded_latency_buckets_and_aggregate_only() {
+        let metrics = HttpMetrics::default();
+        metrics.observe(200, Duration::from_millis(3));
+        metrics.observe(503, Duration::from_millis(300));
+
+        let output = metrics.render_prometheus();
+        assert!(output.contains("aetherflow_http_requests_total 2"));
+        assert!(output.contains("aetherflow_http_requests_failed_total 1"));
+        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.005"} 1"#));
+        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.5"} 2"#));
+        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 2"#));
+        assert!(!output.contains("workflow_run_id"));
+        assert!(!output.contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn request_middleware_tracks_health_without_recording_query_values() {
+        let state = AppState::without_database();
+        let metrics = Arc::clone(&state.metrics);
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/health?secret=must-not-be-recorded")
+                    .body(Body::empty())
+                    .expect("valid health request"),
+            )
+            .await
+            .expect("health response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let output = metrics.render_prometheus();
+        assert!(output.contains("aetherflow_http_requests_total 1"));
+        assert!(output.contains("aetherflow_http_requests_in_flight 0"));
+        assert!(!output.contains("must-not-be-recorded"));
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_is_unavailable_in_health_only_mode() {
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics")
+                    .body(Body::empty())
+                    .expect("valid metrics request"),
+            )
+            .await
+            .expect("metrics response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 
     #[test]
     fn operator_tokens_require_high_entropy_url_safe_material() {
