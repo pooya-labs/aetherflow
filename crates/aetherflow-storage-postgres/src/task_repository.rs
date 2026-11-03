@@ -2129,12 +2129,20 @@ impl PgTaskRepository {
         &self,
         workflow_run_id: &WorkflowRunId,
     ) -> Result<DurableWorkflowRun, StorageError> {
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        let row = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction
+            .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let row = transaction
             .query_opt(
                 "SELECT workflow_id, status, version, created_at, updated_at
                  FROM workflow_runs
@@ -2152,7 +2160,7 @@ impl PgTaskRepository {
         let version: i64 = row.get(2);
         let created_at: SystemTime = row.get(3);
         let updated_at: SystemTime = row.get(4);
-        let task_rows = client
+        let task_rows = transaction
             .query(
                 "SELECT task_run_id
                  FROM task_runs
@@ -2165,8 +2173,13 @@ impl PgTaskRepository {
         let mut task_runs = Vec::with_capacity(task_rows.len());
         for task_row in task_rows {
             let task_run_id: String = task_row.get(0);
-            task_runs.push(load_snapshot_from_client(&client, &task_run_id).await?);
+            task_runs.push(load_snapshot(&transaction, &task_run_id).await?);
         }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
 
         Ok(DurableWorkflowRun {
             workflow_run_id: workflow_run_id.clone(),
