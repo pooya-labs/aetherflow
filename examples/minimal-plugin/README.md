@@ -32,15 +32,19 @@ cargo +1.99.1 run --locked -p aetherflow-plugin-host --release -- \
 
 The host harness reads the guest core module, validates and componentizes its
 embedded WIT metadata with the pinned `wit-component` 0.254.2 toolchain, then
-loads it through the real `WasmPluginRuntime`. It invokes the same compiled
-plugin twice: once with an empty capability set (the host log is denied and no
-log is recorded), and once with `log.write` explicitly granted (one log is
-recorded). Both invocations must return the original input bytes unchanged.
+loads it through the real `WasmPluginRuntime`. It first invokes the compiled
+plugin with an empty capability set (the host log is denied and no log is
+recorded). It then registers a `WasmTaskHandler` in the runtime's
+`TaskRegistry` and runs a one-task workflow through `TaskScheduler`. This
+second path executes Wasmtime on Tokio's blocking pool, forwards the explicitly
+granted `log.write` message through the configured log sink, and commits the
+unchanged guest output to the in-memory task repository. Both paths use the
+same compiled component and must preserve the original input bytes.
 
 Expected output resembles:
 
 ```text
-ABI v1 plugin passed: output=25 bytes; default-deny logs=0; granted logs=1
+ABI v1 plugin passed: workflow=succeeded; output=25 bytes; default-deny logs=0; scheduler logs=1
 ```
 
 The exact output length is derived from the input string in the host harness.
