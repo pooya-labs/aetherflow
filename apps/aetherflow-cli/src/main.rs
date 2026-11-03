@@ -340,7 +340,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiClient, normalize_base_url, read_bounded, validate_identifier};
+    use super::{ApiClient, MAX_HTTP_BODY_BYTES, normalize_base_url, read_bounded, validate_identifier};
     use std::io::Cursor;
 
     #[test]
