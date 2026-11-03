@@ -1,6 +1,6 @@
 # Architecture Overview
 
-**Status:** Proposed baseline; validate through implementation.
+**Status:** M00–M06 are implemented and hosted-verified. M07's first Axum/PostgreSQL control-plane slice is implemented; production security and developer tooling remain in progress.
 
 ## Problem model
 AetherFlow coordinates user-defined work across unreliable processes and machines. Durable intent must be separated from transient execution. A process-local future is not a durable workflow, and a message acknowledgement does not prove an external side effect happened exactly once.
@@ -21,19 +21,18 @@ AetherFlow coordinates user-defined work across unreliable processes and machine
 - **Adapters:** persistence, transport, HTTP/RPC, telemetry, WASM host integration.
 - **Developer surfaces:** CLI, SDKs, examples, dashboard.
 
-Prove domain correctness and single-process execution before adding distributed infrastructure.
+The repository now includes the Rust core/runtime, durable PostgreSQL and NATS adapters, the WASM host boundary, and an Axum control plane. Keep application semantics explicit and do not mistake this implemented vertical slice for a production-ready service.
 
 ## Intended execution flow
-1. Client submits a workflow definition and idempotency key.
-2. Application validates and creates a run.
-3. Scheduler selects eligible tasks under configured limits.
-4. Worker claims a task with an expiring lease and records an attempt.
-5. Worker executes and reports a result.
-6. Application validates and persists the transition.
-7. Timeout or worker loss permits recovery according to retry policy.
-8. Events and telemetry expose the sequence to operators.
+1. A client submits a workflow definition snapshot and unique workflow-run ID to the v1 API.
+2. The server validates IDs, retry policy, payload bounds, dependencies, and DAG cycles, then materializes the run through PgWorkflowCoordinator.
+3. Separate PostgreSQL-backed workers promote eligible tasks, claim them with expiring fenced leases, and record attempts.
+4. Workers execute registered handlers and persist success/failure through versioned transactions.
+5. PostgreSQL owns retry timing, workflow aggregation, lease recovery, and the transactional outbox.
+6. The outbox dispatcher publishes through JetStream; inbox-backed consumers suppress duplicate logical deliveries.
+7. The API exposes workflow/task summaries and active worker metadata without exposing payload bytes.
 
-This is a target design, not an implemented guarantee.
+The workflow persistence/worker/event path is implemented and covered by PostgreSQL/NATS integration tests. The HTTP control plane is implemented as a local-only slice; authentication, tenant isolation, and production deployment hardening are not implemented.
 
 ## Initial crate boundaries
 Candidate crates: `aetherflow-domain`, `aetherflow-application`, `aetherflow-runtime`, `aetherflow-storage-postgres`, `aetherflow-api`, `aetherflow-wasm`, and `aetherflow-cli`. Create crates only when boundaries are useful and testable; avoid empty scaffolding.
@@ -58,9 +57,11 @@ The host owns input/output limits, instruction fuel, host-call transfer fuel, co
 
 ## Control-plane API (M07 v1)
 
-ADR-0010 defines the initial versioned HTTP surface and docs/api/openapi.yaml is its OpenAPI 3.1 contract. The public resource model is based on durable workflow runs, durable task runs, and active worker registrations. Workflow definitions are submitted with each run; the repository does not yet persist reusable workflow-definition versions. Payload-bearing request fields use base64 and retain the existing 1 MiB decoded limit. Status and worker-discovery responses report payload sizes and output presence, not payload bytes. Cancellation requires an expected task version. Reusing a workflow-run ID is a conflict; no idempotent replay guarantee is advertised.
+ADR-0010 defines the versioned HTTP contract in docs/api/openapi.yaml. Axum implements GET /health, workflow-run submission/read, task-run read/cancel, and active-worker discovery. Workflow submission materializes each validated definition snapshot through PgWorkflowCoordinator; reusable workflow-definition versions are not persisted. Workflow snapshots are read with a repeatable-read PostgreSQL transaction. Cancellation requires the caller's expected task version, and the parent workflow is aggregated after the task transition. Worker discovery uses live PgMembershipRepository registrations.
 
-The current document is a contract only. Axum routes, durable workflow summary queries, authentication, authorization, and tenant isolation remain M07 implementation work. Until those controls exist, the HTTP listener must be loopback-only and the service must not be exposed to an untrusted network.
+Task input is base64 encoded at the HTTP boundary and capped at 1 MiB after decoding; the whole HTTP request body is capped at 2 MiB. Workflow/task inspection responses expose payload sizes and output presence but never payload bytes. Reusing a workflow-run ID returns a conflict; no idempotent replay guarantee is advertised. The process does not start workers; durable workers run separately.
+
+The listener defaults to loopback and rejects non-loopback addresses. When DATABASE_URL is absent, only /health is available and durable routes fail closed. The current PostgreSQL client uses NoTls; the API has no authentication, authorization, or tenant isolation. Keep it on a trusted local development setup and do not expose it to an untrusted network. These security/deployment gaps, plus CLI/SDK/dashboard work, remain on the M07 roadmap.
 
 ## Initial non-goals
 - Universal exactly-once execution across external systems.

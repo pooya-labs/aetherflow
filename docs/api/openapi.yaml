@@ -4,10 +4,14 @@ info:
   version: 1.0.0
   summary: Versioned control-plane contract for durable workflow execution.
   description: |
-    This document defines the v1 HTTP contract. It is a design contract; routes
-    are not considered implemented until the server and integration tests land.
-    The service currently has no authentication or tenant isolation and must be
-    bound to loopback until those controls are implemented.
+    Implemented by the Axum server in apps/aetherflow-server. Durable routes
+    require DATABASE_URL; without it, only GET /health is available. The
+    listener defaults to 127.0.0.1:8080 and rejects non-loopback binds.
+    Authentication, authorization, tenant isolation, and TLS-aware PostgreSQL
+    configuration are not implemented. Do not expose this service to an
+    untrusted network. Each HTTP request body is limited to 2 MiB; decoded task
+    input is limited to 1 MiB per task. Workflow/task inspection omits payload
+    bytes, and duplicate workflow-run IDs return 409 rather than replaying.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development only; do not expose to an untrusted network.
