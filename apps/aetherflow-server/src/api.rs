@@ -21,7 +21,7 @@ use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 
 use aetherflow_core::domain::{
-    IdempotencyKey, RetryPolicy, TaskId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
+    RetryPolicy, TaskId, TaskStatus, WorkflowId, WorkflowRunId, WorkflowStatus,
 };
 use aetherflow_runtime::repository::{MAX_TASK_PAYLOAD_BYTES, TaskInput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
