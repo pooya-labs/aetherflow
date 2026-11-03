@@ -373,3 +373,121 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("remove future migration marker");
 }
+
+
+#[tokio::test]
+async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
+    let Ok(database_url) = std::env::var("AETHERFLOW_MIGRATION_BACKFILL_TEST_DATABASE_URL") else {
+        eprintln!(
+            "AETHERFLOW_MIGRATION_BACKFILL_TEST_DATABASE_URL is not set; skipping legacy tenant backfill integration test"
+        );
+        return;
+    };
+
+    let config: Config = database_url
+        .parse()
+        .expect("valid PostgreSQL backfill connection URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(2)
+        .build()
+        .expect("build PostgreSQL backfill pool");
+    let mut client = pool.get().await.expect("get pre-v4 schema connection");
+
+    // Build a genuine v3 database and record the immutable v1-v3 checksums.
+    let migrations = [
+        (
+            1_i64,
+            "0001_initial_schema.sql",
+            include_str!("../../aetherflow-runtime/migrations/postgres/0001_initial_schema.sql"),
+        ),
+        (
+            2_i64,
+            "0002_consumer_inbox.sql",
+            include_str!("../../aetherflow-runtime/migrations/postgres/0002_consumer_inbox.sql"),
+        ),
+        (
+            3_i64,
+            "0003_node_membership.sql",
+            include_str!("../../aetherflow-runtime/migrations/postgres/0003_node_membership.sql"),
+        ),
+    ];
+    for (version, name, sql) in migrations {
+        client
+            .batch_execute(sql)
+            .await
+            .unwrap_or_else(|error| panic!("apply pre-v4 migration {version}: {error}"));
+        let checksum = format!("{:x}", sha2::Sha256::digest(sql.as_bytes()));
+        client
+            .execute(
+                "INSERT INTO aetherflow_schema_migrations
+                   (version, migration_name, checksum_sha256)
+                 VALUES ($1, $2, $3)",
+                &[&version, &name, &checksum],
+            )
+            .await
+            .expect("record pre-v4 migration checksum");
+    }
+
+    client
+        .batch_execute(
+            "INSERT INTO workflow_runs (workflow_run_id, workflow_id, status)
+             VALUES ('legacy-workflow', 'legacy-definition', 'pending');
+             INSERT INTO task_runs
+               (task_run_id, workflow_run_id, task_id, status)
+             VALUES
+               ('legacy-parent', 'legacy-workflow', 'legacy-parent-task', 'pending'),
+               ('legacy-child', 'legacy-workflow', 'legacy-child-task', 'pending');
+             INSERT INTO task_run_dependencies
+               (workflow_run_id, child_task_run_id, parent_task_run_id, dependency_position)
+             VALUES ('legacy-workflow', 'legacy-child', 'legacy-parent', 0);
+             INSERT INTO task_attempts
+               (attempt_id, task_run_id, attempt_number, worker_id, fencing_token, outcome)
+             VALUES
+               ('legacy-attempt', 'legacy-parent', 1, 'legacy-worker', 1, 'running');
+             INSERT INTO outbox_events
+               (aggregate_type, aggregate_id, aggregate_version, event_type, payload)
+             VALUES
+               ('workflow_run', 'legacy-workflow', 1, 'workflow.created', '{}'::jsonb);
+             INSERT INTO consumer_inbox
+               (consumer_name, event_id, status, attempts)
+             VALUES ('legacy-consumer', 'legacy-event', 'pending', 0);"
+        )
+        .await
+        .expect("seed rows using the exact pre-v4 table shape");
+
+    let store = PgStore::from_pool(pool.clone());
+    let outcome = store
+        .migrate()
+        .await
+        .expect("apply tenant ownership migration to existing v3 schema");
+    assert!(matches!(
+        outcome,
+        MigrationOutcome::Applied { version: 4, .. }
+    ));
+
+    for (table, expected) in [
+        ("workflow_runs", 1_i64),
+        ("task_runs", 2_i64),
+        ("task_run_dependencies", 1_i64),
+        ("task_attempts", 1_i64),
+        ("outbox_events", 1_i64),
+        ("consumer_inbox", 1_i64),
+    ] {
+        let query = format!(
+            "SELECT count(*) FROM {table} WHERE tenant_id = 'legacy-default'"
+        );
+        let actual: i64 = client
+            .query_one(&query, &[])
+            .await
+            .unwrap_or_else(|error| panic!("verify {table} legacy backfill: {error}"))
+            .get(0);
+        assert_eq!(actual, expected, "all old {table} rows must be backfilled");
+    }
+}
