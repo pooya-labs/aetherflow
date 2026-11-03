@@ -363,7 +363,8 @@ impl PostgresTaskWorker {
 
                     let task_run = claim.task_run();
                     let task_run_id = task_run.task_run_id().clone();
-                    let dependency_outputs = self.load_dependency_outputs(task_run).await?;
+                    let dependency_outputs =
+                        self.load_dependency_outputs(task_run, &registration).await?;
                     let execution_claim = execution_claim_from_pg(&claim);
                     let (context, cancellation_trigger) =
                         TaskContext::new(execution_claim, dependency_outputs);
@@ -523,10 +524,14 @@ impl PostgresTaskWorker {
     async fn load_dependency_outputs(
         &self,
         task_run: &crate::DurableTaskRun,
+        registration: &WorkerRegistration,
     ) -> Result<Vec<TaskDependencyOutput>, PostgresWorkerError> {
         let mut outputs = Vec::with_capacity(task_run.dependencies().len());
         for dependency_run_id in task_run.dependencies() {
-            let dependency = self.repository.get_task_run(dependency_run_id).await?;
+            let dependency = self
+                .repository
+                .get_task_run_for_worker(registration, dependency_run_id)
+                .await?;
             if dependency.status() != TaskStatus::Succeeded {
                 return Err(PostgresWorkerError::DependencyNotSucceeded(
                     dependency_run_id.as_str().to_owned(),
