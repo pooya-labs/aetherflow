@@ -1,6 +1,7 @@
+use aetherflow_core::domain::{TaskRunId, WorkflowRunId};
 use aetherflow_storage_postgres::{
-    MigrationOutcome, PgStore, PgTenantCredentialRepository, StorageError, TenantPermission,
-    TenantRole, initial_migration_checksum,
+    MigrationOutcome, PgStore, PgTaskRepository, PgTenantCredentialRepository, StorageError,
+    TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -138,6 +139,60 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     assert!(context.allows(TenantPermission::Submit));
     assert!(context.allows(TenantPermission::Cancel));
     assert!(!context.allows(TenantPermission::ManageCredentials));
+
+    // Tenant-scoped reads must hide another tenant's resources exactly as
+    // they hide nonexistent identifiers, even before forced RLS is enabled.
+    let tasks = PgTaskRepository::from_pool(pool.clone());
+    let workflow_a = WorkflowRunId::parse("workflow-a").expect("valid workflow A ID");
+    let workflow_b = WorkflowRunId::parse("workflow-b").expect("valid workflow B ID");
+    let own_workflow = tasks
+        .get_workflow_run_for_tenant(&context, &workflow_a)
+        .await
+        .expect("tenant A can read its workflow");
+    assert_eq!(own_workflow.workflow_run_id().as_str(), "workflow-a");
+    assert_eq!(own_workflow.task_runs().len(), 3);
+
+    let foreign_workflow = tasks
+        .get_workflow_run_for_tenant(&context, &workflow_b)
+        .await;
+    let missing_workflow = tasks
+        .get_workflow_run_for_tenant(
+            &context,
+            &WorkflowRunId::parse("workflow-missing").expect("valid missing workflow ID"),
+        )
+        .await;
+    assert!(matches!(
+        foreign_workflow,
+        Err(StorageError::WorkflowRunNotFound(_))
+    ));
+    assert!(matches!(
+        missing_workflow,
+        Err(StorageError::WorkflowRunNotFound(_))
+    ));
+
+    let own_task = tasks
+        .get_task_run_for_tenant(
+            &context,
+            &TaskRunId::parse("task-a-child").expect("valid tenant A task ID"),
+        )
+        .await
+        .expect("tenant A can read its task");
+    assert_eq!(own_task.dependencies().len(), 1);
+
+    let foreign_task = tasks
+        .get_task_run_for_tenant(
+            &context,
+            &TaskRunId::parse("task-b-child").expect("valid tenant B task ID"),
+        )
+        .await;
+    let missing_task = tasks
+        .get_task_run_for_tenant(
+            &context,
+            &TaskRunId::parse("task-missing").expect("valid missing task ID"),
+        )
+        .await;
+    assert!(matches!(foreign_task, Err(StorageError::TaskRunNotFound(_))));
+    assert!(matches!(missing_task, Err(StorageError::TaskRunNotFound(_))));
 
     let last_used: Option<std::time::SystemTime> = client
         .query_one(
