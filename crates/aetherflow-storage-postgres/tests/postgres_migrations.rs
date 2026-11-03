@@ -1,12 +1,9 @@
-use aetherflow_core::domain::{
-    RetryPolicy, TaskId, TaskRunId, WorkflowId, WorkflowRunId,
-};
+use aetherflow_core::domain::{RetryPolicy, TaskId, TaskRunId, WorkflowId, WorkflowRunId};
 use aetherflow_runtime::repository::TaskInput;
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     MigrationOutcome, NewTaskRun, PgStore, PgTaskRepository, PgTenantCredentialRepository,
-    PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole,
-    initial_migration_checksum,
+    PgWorkflowCoordinator, StorageError, TenantPermission, TenantRole, initial_migration_checksum,
 };
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use sha2::Digest;
@@ -234,10 +231,10 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
             now,
         ),
     ];
-    let created_workflow_run_id = WorkflowRunId::parse("tenant-a-created-workflow")
-        .expect("valid created workflow-run ID");
-    let created_workflow_id = WorkflowId::parse("tenant-a-created-definition")
-        .expect("valid created workflow ID");
+    let created_workflow_run_id =
+        WorkflowRunId::parse("tenant-a-created-workflow").expect("valid created workflow-run ID");
+    let created_workflow_id =
+        WorkflowId::parse("tenant-a-created-definition").expect("valid created workflow ID");
     tasks
         .create_workflow_for_tenant(
             &context,
@@ -317,13 +314,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     )
     .expect("valid coordinated workflow definition");
     let coordinated_submission = coordinator
-        .submit_workflow_for_tenant(
-            &context,
-            &coordinated_run_id,
-            &definition,
-            policy,
-            None,
-        )
+        .submit_workflow_for_tenant(&context, &coordinated_run_id, &definition, policy, None)
         .await
         .expect("coordinator persists tenant-owned workflow");
     assert_eq!(coordinated_submission.task_runs().count(), 1);
