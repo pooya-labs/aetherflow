@@ -205,25 +205,27 @@ For every material regression, record: detection time; affected commit and Actio
 
 ## Current checkpoint
 
-**Current `main` HEAD SHA:** `ff4bb66ab64b9134e790199c03c9674a3bdcb5a9`.
+**Current `main` HEAD SHA:** `0e34deed22114d73d38dbb6b6ec708881e85f453` (format-only follow-up to the SDK source).
 
-**Last fully verified source before SDK addition:** `0c19b9b7d8124472c81ce53056612344f0ebab57).
-- Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774) — success: format, Clippy, workspace tests, release build, WASM target/lint, ABI v1 guest/host example, documentation build, and lockfile artifact.
-- PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644) — success: migration/schema invariants, storage/RLS, restricted runtime role, live PostgreSQL TLS, API integration, real JetStream, and combined chaos.
-- GitHub Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557) — success.
-- All three runs share exact `head_sha` `0c19b9b7d8124472c81ce53056612344f0ebab57`.
+**SDK verification on its source parent:** Rust CI [41618398315](https://github.com/pooya-labs/aetherflow/actions/runs/41618398315) — success on `c1e7cebe02747c57a65a1240518ddec7e0a104e4`; Clippy, tests, workspace release build, WASM lint, ABI v1 guest/host execution, docs, and lockfile artifact all passed. CI applied rustfmt and created formatting-only commit `0e34deed22114d73d38dbb6b6ec708881e85f453`.
+- PostgreSQL/NATS [41618398345](https://github.com/pooya-labs/aetherflow/actions/runs/41618398345) — success on the same source parent `c1e7cebe02747c57a65a1240518ddec7e0a104e4`, including storage/RLS, runtime role, live PostgreSQL TLS, API, JetStream, and chaos/schema tests.
+- Pages [41618447785](https://github.com/pooya-labs/aetherflow/actions/runs/41618447785) — success on formatting-only HEAD `0e34deed22114d73d38dbb6b6ec708881e85f453`.
 
-**Completed this session:** CLI for health, workflow submit/inspect, task inspect/cancel, and operator-only worker inventory. Operator and tenant credentials are separate and environment-only; remote plain HTTP is rejected, redirects are disabled, and stdin/file input is bounded. The combined-chaos test baseline was moved to after NATS shutdown and immediately before packet filtering. The corrected real JetStream/chaos test passes on the exact verified source; no production worker lease logic was changed.
+**SDK hardening follow-up now on main:** enforce the base64 length ceiling before decode and serialize JSON through a 2 MiB bounded writer, so request serialization itself cannot grow an unbounded buffer. Add direct tests for both conditions. The prior CI proves the SDK baseline; this hardening commit must pass a fresh full matrix before the SDK checklist is closed.
 
-**SDK implementation currently on main:** commit `ff4bb66ab64b9134e790199c03c9674a3bdcb5a9` adds `aetherflow-sdk` with OpenAPI v1 models, anonymous/operator/tenant scopes, ID/DAG/payload validation, bounded request and streamed response bodies, redirect blocking, remote HTTPS enforcement, and token redaction. Rust, PostgreSQL/NATS, and Pages verification for this exact source is pending/in progress and must not be treated as passed.
+**Completed this session:** CLI is hosted-verified on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57`. The combined-chaos baseline correction also passed the exact same PostgreSQL/NATS run. SDK initial models and operator/tenant/anonymous client scopes are implemented; memory-bound serialization is being hardened.
 
-**First unchecked task:** pass the full Rust CI matrix for the SDK source and confirm PostgreSQL/NATS and Pages on the same SHA. Then build the dashboard. M08 operational controls and M09 release gates remain open.
+**First unchecked task:** pass full Rust CI, PostgreSQL/NATS, and Pages on the exact current SDK hardening source. Then move to the dashboard. M08 operational controls and M09 release gates remain open.
 
 **Known engineering debt and owner decisions:** an explicit open-source license remains an owner-only public-release blocker. M02 property-based lifecycle tests are deferred. WASM `spawn_blocking` cancellation remains bounded by Wasmtime fuel and wall-clock limits rather than force-abort. No production-readiness claim is made.
 
-**Recovery:** fetch `main`, inspect the exact head and Actions `head_sha`, continue from the first unchecked task, and never treat pending/cancelled runs as verification. Preserve commit history and use additive/fix-forward changes.
+**Recovery:** fetch `main`, inspect exact head and Actions `head_sha`, continue from the first unchecked task, and never treat pending/cancelled runs as verification. Preserve commit history and use additive/fix-forward changes.
 
 ## Session log
+
+| 2026-11-03 | M07 SDK input memory bounds | Hardened SDK request encoding: reject impossible oversized base64 length before decode, and stream JSON serialization into a 2 MiB bounded writer. Added direct unit coverage for early base64 rejection and bounded writer growth. Full hosted matrix on this hardening source is pending. |
+| 2026-11-03 | M07 initial SDK hosted verification | Rust CI [41618398315](https://github.com/pooya-labs/aetherflow/actions/runs/41618398315) passed on source parent `c1e7cebe02747c57a65a1240518ddec7e0a104e4`, including Clippy/tests/build/WASM/ABI/docs; PostgreSQL/NATS [41618398345](https://github.com/pooya-labs/aetherflow/actions/runs/41618398345) passed on the same parent. Pages [41618447785](https://github.com/pooya-labs/aetherflow/actions/runs/41618447785) passed on format-only follow-up `0e34deed22114d73d38dbb6b6ec708881e85f453`. The first SDK Clippy attempt [41617855219](https://github.com/pooya-labs/aetherflow/actions/runs/41617855219) caught a constant-only assertion; commit `8cd5e865` removed it. |
+
 
 | 2026-11-03 | M07 typed Rust SDK initial implementation | Added `aetherflow-sdk` with OpenAPI v1 models, anonymous/operator/tenant client scopes, ID/DAG/retry/base64 validation, 1 MiB task-input and 2 MiB request/streamed-response bounds, remote HTTPS enforcement, redirect blocking, and token redaction. Commit `ff4bb66`; hosted verification pending. |
 | 2026-11-03 | M07 CLI and combined-chaos verification | CLI implementation and the corrected combined-chaos test passed on exact source `0c19b9b7d8124472c81ce53056612344f0ebab57`: Rust CI [41614021774](https://github.com/pooya-labs/aetherflow/actions/runs/41614021774), PostgreSQL/NATS [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644), and Pages [41614915557](https://github.com/pooya-labs/aetherflow/actions/runs/41614915557) all successful with identical `head_sha`. Initial PostgreSQL/NATS attempt [41611525835](https://github.com/pooya-labs/aetherflow/actions/runs/41611525835) failed only the combined-chaos lease assertion because the baseline was captured before the slow Docker NATS-stop step. Moving the baseline to immediately after NATS stop and before packet filtering fixed the timing race; run [41614021644](https://github.com/pooya-labs/aetherflow/actions/runs/41614021644) passed the corrected real JetStream/chaos suite. Production worker lease logic was not changed. |

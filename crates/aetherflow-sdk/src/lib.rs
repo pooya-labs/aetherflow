@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::io::{self, Write};
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum decoded input bytes accepted for one task.
 pub const MAX_TASK_PAYLOAD_BYTES: usize = 1024 * 1024;
+const MAX_BASE64_TASK_PAYLOAD_BYTES: usize = MAX_TASK_PAYLOAD_BYTES.div_ceil(3) * 4;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Errors returned by local validation, HTTP transport, or the control plane.
@@ -304,6 +306,11 @@ impl WorkflowRunSubmission {
                 return Err(ClientError::InvalidWorkflow("task IDs must be unique"));
             }
             if let Some(encoded) = &task.input_base64 {
+                // A valid standard-base64 string for a 1 MiB payload cannot
+                // exceed this length. Reject before allocating decoded bytes.
+                if encoded.len() > MAX_BASE64_TASK_PAYLOAD_BYTES {
+                    return Err(ClientError::TaskPayloadTooLarge);
+                }
                 let decoded = BASE64.decode(encoded).map_err(|_| {
                     ClientError::InvalidWorkflow("input_base64 must use standard base64")
                 })?;
@@ -510,6 +517,7 @@ pub struct ErrorResponse {
     pub error: ApiErrorDetails,
 }
 
+#[derive(Clone)]
 enum Credential {
     Anonymous,
     Operator(String),
@@ -546,6 +554,7 @@ impl Credential {
 /// Use an anonymous client for public health checks, an operator client for
 /// platform routes, or a tenant client for tenant-owned workflow/task routes.
 /// Credentials are excluded from Debug output.
+#[derive(Clone)]
 pub struct ControlPlaneClient {
     http: Client,
     base_url: Url,
@@ -748,12 +757,37 @@ struct CancelTaskRunRequest {
     expected_version: u64,
 }
 
-fn encode_request_body<T: Serialize>(value: &T) -> Result<Vec<u8>, ClientError> {
-    let body = serde_json::to_vec(value).map_err(ClientError::Json)?;
-    if body.len() > MAX_HTTP_BODY_BYTES {
-        return Err(ClientError::RequestTooLarge);
+#[derive(Default)]
+struct BoundedRequestWriter {
+    bytes: Vec<u8>,
+    exceeded: bool,
+}
+
+impl Write for BoundedRequestWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let remaining = MAX_HTTP_BODY_BYTES.saturating_sub(self.bytes.len());
+        if buffer.len() > remaining {
+            self.exceeded = true;
+            return Err(io::Error::other("HTTP request body limit exceeded"));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
     }
-    Ok(body)
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encode_request_body<T: Serialize>(value: &T) -> Result<Vec<u8>, ClientError> {
+    let mut writer = BoundedRequestWriter::default();
+    if let Err(error) = serde_json::to_writer(&mut writer, value) {
+        if writer.exceeded {
+            return Err(ClientError::RequestTooLarge);
+        }
+        return Err(ClientError::Json(error));
+    }
+    Ok(writer.bytes)
 }
 
 fn normalize_base_url(raw: &str) -> Result<Url, ClientError> {
@@ -793,8 +827,9 @@ fn normalize_base_url(raw: &str) -> Result<Url, ClientError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientError, ControlPlaneClient, RetryPolicy, WorkflowRunSubmission, WorkflowTaskInput,
-        encode_request_body, normalize_base_url, validate_entity_id,
+        BoundedRequestWriter, ClientError, ControlPlaneClient, MAX_BASE64_TASK_PAYLOAD_BYTES,
+        RetryPolicy, WorkflowRunSubmission, WorkflowTaskInput, encode_request_body,
+        normalize_base_url, validate_entity_id,
     };
 
     #[test]
@@ -899,6 +934,36 @@ mod tests {
                 .with_input_bytes(&vec![b'x'; super::MAX_TASK_PAYLOAD_BYTES + 1])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn oversized_base64_is_rejected_before_decode() {
+        let encoded = "A".repeat(MAX_BASE64_TASK_PAYLOAD_BYTES + 1);
+        let submission = WorkflowRunSubmission::new(
+            "workflow",
+            "run-1",
+            vec![WorkflowTaskInput {
+                task_id: "task-a".to_owned(),
+                depends_on: Vec::new(),
+                input_base64: Some(encoded),
+            }],
+            RetryPolicy::new(1, 0, 0).unwrap(),
+        );
+        assert!(matches!(
+            submission.validate(),
+            Err(ClientError::TaskPayloadTooLarge)
+        ));
+    }
+
+    #[test]
+    fn bounded_request_writer_never_exceeds_the_body_limit() {
+        let mut writer = BoundedRequestWriter::default();
+        let prefix = vec![b'x'; super::MAX_HTTP_BODY_BYTES - 5];
+        std::io::Write::write_all(&mut writer, &prefix).unwrap();
+        let overflow = [b'y'; 10];
+        assert!(std::io::Write::write_all(&mut writer, &overflow).is_err());
+        assert!(writer.exceeded);
+        assert_eq!(writer.bytes.len(), super::MAX_HTTP_BODY_BYTES - 5);
     }
 
     #[test]

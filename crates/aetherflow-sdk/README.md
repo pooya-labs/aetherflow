@@ -8,7 +8,7 @@ The SDK is a typed asynchronous HTTP client for the v1 control-plane contract. I
 - Operator clients use the platform Bearer token and can list active workers.
 - Tenant clients use a tenant-bound Bearer credential and can submit/read workflows and read/cancel their own tasks.
 
-Tokens are supplied at construction, stored only in the client, excluded from Debug output, and never placed in URLs. Redirects are disabled. Remote plain HTTP is rejected; HTTPS uses the platform trust configuration. Local HTTP is permitted only for loopback development.
+Tokens are supplied at construction, stored only in the client, excluded from Debug output, and never placed in URLs. Redirects are disabled. Remote plain HTTP is rejected; HTTPS uses the platform trust configuration. Local HTTP is permitted only for loopback development. JSON requests are serialized directly into a 2 MiB bounded writer, and oversized base64 input is rejected before decoding.
 
 ## Example
 
