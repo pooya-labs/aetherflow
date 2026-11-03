@@ -375,7 +375,6 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("remove future migration marker");
 }
 
-
 #[tokio::test]
 async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
     let Ok(database_url) = std::env::var("AETHERFLOW_MIGRATION_BACKFILL_TEST_DATABASE_URL") else {
@@ -458,7 +457,7 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
                ('workflow_run', 'legacy-workflow', 1, 'workflow.created', '{}'::jsonb);
              INSERT INTO consumer_inbox
                (consumer_name, event_id, status, attempts)
-             VALUES ('legacy-consumer', 'legacy-event', 'pending', 0);"
+             VALUES ('legacy-consumer', 'legacy-event', 'pending', 0);",
         )
         .await
         .expect("seed rows using the exact pre-v4 table shape");
@@ -481,9 +480,7 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
         ("outbox_events", 1_i64),
         ("consumer_inbox", 1_i64),
     ] {
-        let query = format!(
-            "SELECT count(*) FROM {table} WHERE tenant_id = 'legacy-default'"
-        );
+        let query = format!("SELECT count(*) FROM {table} WHERE tenant_id = 'legacy-default'");
         let actual: i64 = client
             .query_one(&query, &[])
             .await
