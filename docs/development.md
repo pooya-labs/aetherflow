@@ -12,8 +12,10 @@ The Compose stack runs PostgreSQL 18 and a three-node NATS 2.12 JetStream cluste
 
 ~~~bash
 cp .env.example .env
-# Replace all three local database passwords in .env with random values.
-openssl rand -hex 32
+# Generate three local-only values, then paste each into the matching .env entry.
+for name in POSTGRES_PASSWORD AETHERFLOW_MIGRATION_PASSWORD AETHERFLOW_RUNTIME_PASSWORD; do
+  printf '%s=%s\n' "$name" "$(openssl rand -hex 32)"
+done
 docker compose up --detach --wait
 docker compose ps
 ~~~
