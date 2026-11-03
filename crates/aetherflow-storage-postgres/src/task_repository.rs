@@ -1358,6 +1358,26 @@ impl PgTaskRepository {
             .await
     }
 
+    /// Cancels a task only when it belongs to the authenticated tenant.
+    ///
+    /// Foreign-tenant and missing task identifiers share TaskRunNotFound.
+    pub async fn cancel_task_run_for_tenant(
+        &self,
+        context: &TenantContext,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+    ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run_inner(
+            Some(context),
+            task_run_id,
+            expected_version,
+            "cancelled",
+            None,
+            None,
+        )
+        .await
+    }
+
     /// Cancels a running task only while the registered worker still owns
     /// its task fencing token and its parent node epoch remains live.
     /// Draining workers may cancel work already assigned to them.
@@ -1418,6 +1438,26 @@ impl PgTaskRepository {
         registration: Option<&WorkerRegistration>,
         expected_fencing_token: Option<u64>,
     ) -> Result<DurableTaskRun, StorageError> {
+        self.terminate_task_run_inner(
+            None,
+            task_run_id,
+            expected_version,
+            next_status,
+            registration,
+            expected_fencing_token,
+        )
+        .await
+    }
+
+    async fn terminate_task_run_inner(
+        &self,
+        context: Option<&TenantContext>,
+        task_run_id: &TaskRunId,
+        expected_version: u64,
+        next_status: &str,
+        registration: Option<&WorkerRegistration>,
+        expected_fencing_token: Option<u64>,
+    ) -> Result<DurableTaskRun, StorageError> {
         let expected_version = sql_i64(expected_version)?;
         let (attempt_outcome, event_type, error_kind, error_message) = match next_status {
             "cancelled" => (
@@ -1449,25 +1489,31 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
+        if let Some(context) = context {
+            context.apply_to_transaction(&transaction).await?;
+        }
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, false).await?;
         }
 
+        let tenant_filter = context.map(|value| value.tenant_id().as_str());
         let row = transaction
             .query_opt(
-                "SELECT status, attempts_started, version, claimed_by, fencing_token \
-                 FROM task_runs WHERE task_run_id = $1 FOR UPDATE",
-                &[&task_run_id.as_str()],
+                "SELECT tenant_id, status, attempts_started, version, claimed_by, fencing_token \
+                 FROM task_runs \
+                 WHERE ($1::TEXT IS NULL OR tenant_id = $1) AND task_run_id = $2 FOR UPDATE",
+                &[&tenant_filter, &task_run_id.as_str()],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?
             .ok_or_else(|| StorageError::TaskRunNotFound(task_run_id.as_str().to_owned()))?;
 
-        let current_status: String = row.get(0);
-        let attempts_started: i32 = row.get(1);
-        let actual_version: i64 = row.get(2);
-        let claimed_by: Option<String> = row.get(3);
-        let fencing_token: i64 = row.get(4);
+        let tenant_id: String = row.get(0);
+        let current_status: String = row.get(1);
+        let attempts_started: i32 = row.get(2);
+        let actual_version: i64 = row.get(3);
+        let claimed_by: Option<String> = row.get(4);
+        let fencing_token: i64 = row.get(5);
 
         if let Some(registration) = registration {
             let expected_fencing_token = expected_fencing_token.ok_or_else(|| {
@@ -1525,11 +1571,12 @@ impl PgTaskRepository {
             let attempt_updated = transaction
                 .execute(
                     "UPDATE task_attempts \
-                     SET outcome = $4, finished_at = clock_timestamp(), \
-                         error_kind = $5, error_message = $6 \
-                     WHERE task_run_id = $1 AND attempt_number = $2 \
-                       AND worker_id = $3 AND fencing_token = $7 AND outcome = 'running'",
+                     SET outcome = $5, finished_at = clock_timestamp(), \
+                         error_kind = $6, error_message = $7 \
+                     WHERE tenant_id = $1 AND task_run_id = $2 AND attempt_number = $3 \
+                       AND worker_id = $4 AND fencing_token = $8 AND outcome = 'running'",
                     &[
+                        &tenant_id,
                         &task_run_id.as_str(),
                         &attempt_number,
                         &worker_id,
@@ -1552,14 +1599,15 @@ impl PgTaskRepository {
         let updated = transaction
             .query_one(
                 "UPDATE task_runs \
-                 SET status = $3, claimed_by = NULL, lease_expires_at = NULL, \
+                 SET status = $4, claimed_by = NULL, lease_expires_at = NULL, \
                      version = version + 1, updated_at = clock_timestamp(), \
                      finished_at = clock_timestamp(), \
-                     last_error_kind = CASE WHEN $3 = 'timed_out' THEN $4 ELSE last_error_kind END, \
-                     last_error_message = CASE WHEN $3 = 'timed_out' THEN $5 ELSE last_error_message END \
-                 WHERE task_run_id = $1 AND version = $2 AND status = $6 \
+                     last_error_kind = CASE WHEN $4 = 'timed_out' THEN $5 ELSE last_error_kind END, \
+                     last_error_message = CASE WHEN $4 = 'timed_out' THEN $6 ELSE last_error_message END \
+                 WHERE tenant_id = $1 AND task_run_id = $2 AND version = $3 AND status = $7 \
                  RETURNING version",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &expected_version,
                     &next_status,
@@ -1572,8 +1620,9 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         let version: i64 = updated.get(0);
 
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            &tenant_id,
             "task_run",
             task_run_id.as_str(),
             version,
@@ -1586,7 +1635,8 @@ impl PgTaskRepository {
         )
         .await?;
 
-        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        let snapshot =
+            load_snapshot_for_tenant(&transaction, &tenant_id, task_run_id.as_str()).await?;
         transaction
             .commit()
             .await
@@ -1908,7 +1958,19 @@ impl PgTaskRepository {
         &self,
         workflow_run_id: &WorkflowRunId,
     ) -> Result<WorkflowStatus, StorageError> {
-        self.aggregate_workflow_run_inner(workflow_run_id, None)
+        self.aggregate_workflow_run_inner(None, workflow_run_id, None)
+            .await
+    }
+
+    /// Aggregates a workflow only when it belongs to the authenticated tenant.
+    ///
+    /// Foreign-tenant and missing workflow identifiers share WorkflowRunNotFound.
+    pub async fn aggregate_workflow_run_for_tenant(
+        &self,
+        context: &TenantContext,
+        workflow_run_id: &WorkflowRunId,
+    ) -> Result<WorkflowStatus, StorageError> {
+        self.aggregate_workflow_run_inner(Some(context), workflow_run_id, None)
             .await
     }
 
@@ -1919,12 +1981,13 @@ impl PgTaskRepository {
         workflow_run_id: &WorkflowRunId,
         registration: &WorkerRegistration,
     ) -> Result<WorkflowStatus, StorageError> {
-        self.aggregate_workflow_run_inner(workflow_run_id, Some(registration))
+        self.aggregate_workflow_run_inner(None, workflow_run_id, Some(registration))
             .await
     }
 
     async fn aggregate_workflow_run_inner(
         &self,
+        context: Option<&TenantContext>,
         workflow_run_id: &WorkflowRunId,
         registration: Option<&WorkerRegistration>,
     ) -> Result<WorkflowStatus, StorageError> {
@@ -1938,21 +2001,27 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
 
+        if let Some(context) = context {
+            context.apply_to_transaction(&transaction).await?;
+        }
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, false).await?;
         }
 
+        let tenant_filter = context.map(|value| value.tenant_id().as_str());
         let workflow_row = transaction
             .query_opt(
-                "SELECT status FROM workflow_runs WHERE workflow_run_id = $1 FOR UPDATE",
-                &[&workflow_run_id.as_str()],
+                "SELECT tenant_id, status FROM workflow_runs \
+                 WHERE ($1::TEXT IS NULL OR tenant_id = $1) AND workflow_run_id = $2 FOR UPDATE",
+                &[&tenant_filter, &workflow_run_id.as_str()],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?
             .ok_or_else(|| {
                 StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned())
             })?;
-        let current_status_text: String = workflow_row.get(0);
+        let tenant_id: String = workflow_row.get(0);
+        let current_status_text: String = workflow_row.get(1);
         let current_status = parse_workflow_status(&current_status_text)?;
         if workflow_status_is_terminal(current_status) {
             transaction
@@ -1968,8 +2037,9 @@ impl PgTaskRepository {
         let rows = transaction
             .query(
                 "SELECT task_run_id, status, version, attempts_started, claimed_by, fencing_token, updated_at \
-                 FROM task_runs WHERE workflow_run_id = $1 ORDER BY task_run_id FOR UPDATE",
-                &[&workflow_run_id.as_str()],
+                 FROM task_runs WHERE tenant_id = $1 AND workflow_run_id = $2 \
+                 ORDER BY task_run_id FOR UPDATE",
+                &[&tenant_id, &workflow_run_id.as_str()],
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
@@ -2072,10 +2142,11 @@ impl PgTaskRepository {
                         .execute(
                             "UPDATE task_attempts \
                              SET outcome = 'cancelled', finished_at = clock_timestamp(), \
-                                 error_kind = 'workflow_terminal', error_message = $5 \
-                             WHERE task_run_id = $1 AND attempt_number = $2 \
-                               AND worker_id = $3 AND fencing_token = $4 AND outcome = 'running'",
+                                 error_kind = 'workflow_terminal', error_message = $6 \
+                             WHERE tenant_id = $1 AND task_run_id = $2 AND attempt_number = $3 \
+                               AND worker_id = $4 AND fencing_token = $5 AND outcome = 'running'",
                             &[
+                                &tenant_id,
                                 task_run_id,
                                 attempts_started,
                                 &worker_id,
@@ -2098,9 +2169,9 @@ impl PgTaskRepository {
                          SET status = 'cancelled', claimed_by = NULL, lease_expires_at = NULL, \
                              version = version + 1, updated_at = clock_timestamp(), \
                              finished_at = clock_timestamp() \
-                         WHERE task_run_id = $1 AND version = $2 AND status = $3 \
+                         WHERE tenant_id = $1 AND task_run_id = $2 AND version = $3 AND status = $4 \
                          RETURNING version",
-                        &[task_run_id, version, status],
+                        &[&tenant_id, task_run_id, version, status],
                     )
                     .await
                     .map_err(|error| StorageError::Database(error.to_string()))?
@@ -2110,8 +2181,9 @@ impl PgTaskRepository {
                         ))
                     })?;
                 let task_version: i64 = updated.get(0);
-                append_outbox(
+                append_outbox_for_tenant(
                     &transaction,
+                    &tenant_id,
                     "task_run",
                     task_run_id,
                     task_version,
@@ -2131,11 +2203,12 @@ impl PgTaskRepository {
         let updated_workflow = transaction
             .query_opt(
                 "UPDATE workflow_runs \
-                 SET status = $2, version = version + 1, updated_at = clock_timestamp(), \
+                 SET status = $3, version = version + 1, updated_at = clock_timestamp(), \
                      finished_at = clock_timestamp() \
-                 WHERE workflow_run_id = $1 AND status = $3 \
+                 WHERE tenant_id = $1 AND workflow_run_id = $2 AND status = $4 \
                  RETURNING version",
                 &[
+                    &tenant_id,
                     &workflow_run_id.as_str(),
                     &next_status_text,
                     &current_status_text,
@@ -2150,8 +2223,9 @@ impl PgTaskRepository {
                 ))
             })?;
         let workflow_version: i64 = updated_workflow.get(0);
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            &tenant_id,
             "workflow_run",
             workflow_run_id.as_str(),
             workflow_version,
