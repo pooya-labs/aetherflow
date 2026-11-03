@@ -233,6 +233,18 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
             | MigrationOutcome::AlreadyCurrent { version: 3, .. }
     ));
 
+    // The dispatcher deliberately claims the global outbox. Earlier cases in
+    // this serial integration suite may leave pending rows in the shared test
+    // database, so isolate this retry/deduplication case before inserting its
+    // own workflow. The CI invokes this test binary with --test-threads=1 and
+    // the cluster-fault mutex serializes the tests that mutate shared fixtures.
+    pool.get()
+        .await
+        .expect("get isolated outbox test connection")
+        .batch_execute("TRUNCATE TABLE outbox_events RESTART IDENTITY")
+        .await
+        .expect("clear outbox rows from preceding integration cases");
+
     let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
     let workflow_run_id =
         WorkflowRunId::parse(format!("nats-workflow-run-{suffix}")).expect("valid workflow-run ID");
@@ -2104,6 +2116,33 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             )
             .await
             .expect("register replacement worker");
+        // Node and task leases are separate PostgreSQL clocks. The worker's
+        // task-heartbeat tick may have renewed its task slightly after the
+        // membership heartbeat, so node takeover alone does not prove the
+        // task lease has expired. Wait on the task row itself before recovery.
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let task_lease_expired: bool = pool
+                    .get()
+                    .await
+                    .expect("get task-lease expiry connection")
+                    .query_one(
+                        "SELECT status = 'running' AND lease_expires_at <= clock_timestamp()
+                         FROM task_runs WHERE task_run_id = $1",
+                        &[&task_run_id.as_str()],
+                    )
+                    .await
+                    .expect("read authoritative task lease expiry")
+                    .get(0);
+                if task_lease_expired {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("task lease should expire before abandoned-work recovery");
+
         let recovered = repository
             .recover_expired_leases_registered(&replacement_registration, 8)
             .await
