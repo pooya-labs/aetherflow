@@ -159,7 +159,12 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Enforce the deployment boundary: default loopback bind, reject non-loopback addresses, and retain health-only mode when DATABASE_URL is absent.
 - [x] Add a high-entropy single-operator Bearer credential for all durable API routes; keep /health public, store only a SHA-256 digest and compare in constant time (ADR-0011).
 - [x] Replace NoTls in the server pool with Rustls/native CA roots; default to required TLS and validate the PostgreSQL certificate/hostname. Keep an explicit disable mode only for disposable local databases (ADR-0011).
-- [ ] Design per-principal authentication/authorization, tenant identity and database ownership; scope every durable read/write before permitting non-loopback access. The current global operator token is not tenant isolation.
+- [x] Define tenant identity, principal/credential roles, tenant-owned persistence, forced row-level security, worker tenant grants, and tenant-scoped outbox/inbox invariants (ADR-0012).
+- [ ] Implement the additive tenant migration: create tenants/principals/credentials, backfill existing v1-v3 data into a reserved legacy tenant, and add tenant-consistent composite constraints/indexes.
+- [ ] Make all API-facing repository methods require a typed TenantContext; apply transaction-local tenant state and forced row-level security using a restricted non-owner runtime role.
+- [ ] Add tenant-bound credentials and explicit route/command role checks; keep AETHERFLOW_API_TOKEN restricted to local/platform administration.
+- [ ] Add worker-to-tenant grants and tenant-scoped claims, task settlement, outbox dispatch, and inbox deduplication without weakening existing worker/task fencing.
+- [ ] Verify cross-tenant HTTP/storage isolation, pooled-connection tenant-state cleanup, legacy backfill, worker grants, and event/inbox isolation.
 - [ ] Define and verify the HTTPS boundary for the HTTP listener before permitting non-loopback access.
 - [ ] Verify the Rustls client against a TLS-enabled PostgreSQL instance and prove untrusted certificates/hostname mismatch fail closed.
 - [ ] Add CLI for inspect, submit, cancel, and worker status.
@@ -213,6 +218,8 @@ The v1 API uses caller-supplied unique workflow-run IDs; duplicates return 409 a
 **Owner-only blocker:** choose an explicit open-source license before public release. No legal terms have been assumed.
 
 ## Session log
+
+| 2026-11-03 | M07 tenant isolation design | Inspected the v1-v3 PostgreSQL schema and storage APIs. Accepted ADR-0012 defining tenant/principal/credential ownership, composite tenant constraints, forced row-level security, worker-to-tenant grants, and tenant-scoped outbox/inbox behavior. No migration or tenant route was marked complete; implementation begins with a new additive migration and legacy-row backfill. |
 
 | 2026-11-03 | M07 security foundation | Added a required single-operator Bearer token for durable routes (32–256 URL-safe characters, digest-only in-memory storage, constant-time comparison, public health endpoint) and replaced the server's NoTls pool with Rustls/native CA roots. PostgreSQL TLS defaults to require; disable is an explicit local-database escape hatch. Accepted ADR-0011. Per-principal authorization, tenant ownership, HTTPS and live TLS-server verification remain open; loopback binding is unchanged. |
 
