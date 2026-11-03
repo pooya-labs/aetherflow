@@ -280,6 +280,114 @@ impl DurableWorkflowRun {
     }
 }
 
+/// One workflow-run list row without materializing every task payload or snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRunSummary {
+    workflow_run_id: WorkflowRunId,
+    workflow_id: WorkflowId,
+    status: WorkflowStatus,
+    version: u64,
+    task_count: u64,
+    created_at: SystemTime,
+    updated_at: SystemTime,
+}
+
+impl WorkflowRunSummary {
+    /// Returns the workflow-run identifier.
+    #[must_use]
+    pub fn workflow_run_id(&self) -> &WorkflowRunId { &self.workflow_run_id }
+    /// Returns the workflow definition identifier.
+    #[must_use]
+    pub fn workflow_id(&self) -> &WorkflowId { &self.workflow_id }
+    /// Returns the current workflow status.
+    #[must_use]
+    pub fn status(&self) -> WorkflowStatus { self.status }
+    /// Returns the optimistic version.
+    #[must_use]
+    pub fn version(&self) -> u64 { self.version }
+    /// Returns the number of task runs in this workflow.
+    #[must_use]
+    pub fn task_count(&self) -> u64 { self.task_count }
+    /// Returns the creation timestamp.
+    #[must_use]
+    pub fn created_at(&self) -> SystemTime { self.created_at }
+    /// Returns the update timestamp.
+    #[must_use]
+    pub fn updated_at(&self) -> SystemTime { self.updated_at }
+}
+
+/// One keyset-paginated workflow-run page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRunListPage {
+    items: Vec<WorkflowRunSummary>,
+    has_more: bool,
+}
+
+impl WorkflowRunListPage {
+    /// Returns this page's workflow summaries.
+    #[must_use]
+    pub fn items(&self) -> &[WorkflowRunSummary] { &self.items }
+    /// Returns whether a subsequent cursor page exists.
+    #[must_use]
+    pub fn has_more(&self) -> bool { self.has_more }
+}
+
+/// Safe dashboard event metadata. Raw JSON payloads are deliberately excluded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowEventSummary {
+    event_id: i64,
+    aggregate_type: String,
+    aggregate_id: String,
+    aggregate_version: u64,
+    event_type: String,
+    status: Option<String>,
+    created_at: SystemTime,
+    published_at: Option<SystemTime>,
+}
+
+impl WorkflowEventSummary {
+    /// Returns the globally unique outbox event ID.
+    #[must_use]
+    pub fn event_id(&self) -> i64 { self.event_id }
+    /// Returns the aggregate type.
+    #[must_use]
+    pub fn aggregate_type(&self) -> &str { &self.aggregate_type }
+    /// Returns the aggregate identifier.
+    #[must_use]
+    pub fn aggregate_id(&self) -> &str { &self.aggregate_id }
+    /// Returns the aggregate version recorded by this event.
+    #[must_use]
+    pub fn aggregate_version(&self) -> u64 { self.aggregate_version }
+    /// Returns the stable event type.
+    #[must_use]
+    pub fn event_type(&self) -> &str { &self.event_type }
+    /// Returns the non-sensitive lifecycle status, when the event provides one.
+    #[must_use]
+    pub fn status(&self) -> Option<&str> { self.status.as_deref() }
+    /// Returns the event creation timestamp.
+    #[must_use]
+    pub fn created_at(&self) -> SystemTime { self.created_at }
+    /// Returns the broker acknowledgement timestamp, when published.
+    #[must_use]
+    pub fn published_at(&self) -> Option<SystemTime> { self.published_at }
+}
+
+/// One keyset-paginated event-history page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowEventPage {
+    events: Vec<WorkflowEventSummary>,
+    has_more: bool,
+}
+
+impl WorkflowEventPage {
+    /// Returns the newest events in this page.
+    #[must_use]
+    pub fn events(&self) -> &[WorkflowEventSummary] { &self.events }
+    /// Returns whether a subsequent cursor page exists.
+    #[must_use]
+    pub fn has_more(&self) -> bool { self.has_more }
+}
+
 /// A durable claim, including its attempt and fencing identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PgTaskClaim {
@@ -2815,6 +2923,170 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         Ok(snapshot)
+    }
+
+    /// Lists legacy-default workflow runs using stable descending keyset pagination.
+    /// Operator compatibility APIs intentionally see only legacy-default.
+    pub async fn list_legacy_workflow_runs(
+        &self, status: Option<&str>, limit: i64,
+        before_created_at: Option<SystemTime>,
+        before_workflow_run_id: Option<&WorkflowRunId>,
+    ) -> Result<WorkflowRunListPage, StorageError> {
+        self.list_workflow_runs_scoped(None, status, limit, before_created_at, before_workflow_run_id).await
+    }
+
+    /// Lists workflow runs owned by the authenticated tenant using keyset pagination.
+    pub async fn list_workflow_runs_for_tenant(
+        &self, context: &TenantContext, status: Option<&str>, limit: i64,
+        before_created_at: Option<SystemTime>,
+        before_workflow_run_id: Option<&WorkflowRunId>,
+    ) -> Result<WorkflowRunListPage, StorageError> {
+        self.list_workflow_runs_scoped(Some(context), status, limit, before_created_at, before_workflow_run_id).await
+    }
+
+    async fn list_workflow_runs_scoped(
+        &self, context: Option<&TenantContext>, status: Option<&str>, limit: i64,
+        before_created_at: Option<SystemTime>,
+        before_workflow_run_id: Option<&WorkflowRunId>,
+    ) -> Result<WorkflowRunListPage, StorageError> {
+        if !(1..=100).contains(&limit) || before_created_at.is_some() != before_workflow_run_id.is_some() {
+            return Err(StorageError::InvalidWorkflow("workflow-run page size or cursor is invalid".to_owned()));
+        }
+        let tenant_id = context.map_or("legacy-default", |value| value.tenant_id().as_str());
+        let cursor_id = before_workflow_run_id.map(|value| value.as_str().to_owned());
+        let fetch_limit = limit + 1;
+        let mut client = self.pool.get().await.map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client.transaction().await.map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        match context {
+            Some(value) => value.apply_to_transaction(&transaction).await?,
+            None => apply_legacy_worker_context_to_transaction(&transaction).await?,
+        }
+        let rows = transaction.query(
+            "SELECT workflow.workflow_id, workflow.workflow_run_id, workflow.status,
+                    workflow.version, workflow.created_at, workflow.updated_at,
+                    count(task.task_run_id)::BIGINT AS task_count
+             FROM workflow_runs AS workflow
+             LEFT JOIN task_runs AS task
+               ON task.tenant_id = workflow.tenant_id
+              AND task.workflow_run_id = workflow.workflow_run_id
+             WHERE workflow.tenant_id = $1
+               AND ($2::TEXT IS NULL OR workflow.status = $2)
+               AND ($3::TIMESTAMPTZ IS NULL
+                    OR (workflow.created_at, workflow.workflow_run_id) < ($3, $4))
+             GROUP BY workflow.workflow_id, workflow.workflow_run_id, workflow.status,
+                      workflow.version, workflow.created_at, workflow.updated_at
+             ORDER BY workflow.created_at DESC, workflow.workflow_run_id DESC
+             LIMIT $5",
+            &[&tenant_id, &status, &before_created_at, &cursor_id, &fetch_limit],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+
+        let mut items = Vec::with_capacity(rows.len().min(limit as usize));
+        for row in rows {
+            let workflow_id: String = row.get(0);
+            let workflow_run_id: String = row.get(1);
+            let status: String = row.get(2);
+            let version: i64 = row.get(3);
+            let created_at: SystemTime = row.get(4);
+            let updated_at: SystemTime = row.get(5);
+            let task_count: i64 = row.get(6);
+            items.push(WorkflowRunSummary {
+                workflow_run_id: WorkflowRunId::parse(workflow_run_id).map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
+                workflow_id: WorkflowId::parse(workflow_id).map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
+                status: parse_workflow_status(&status)?,
+                version: u64::try_from(version).map_err(|_| StorageError::InvalidStoredValue("negative workflow version".to_owned()))?,
+                task_count: u64::try_from(task_count).map_err(|_| StorageError::InvalidStoredValue("negative workflow task count".to_owned()))?,
+                created_at,
+                updated_at,
+            });
+        }
+        let has_more = items.len() > limit as usize;
+        items.truncate(limit as usize);
+        transaction.commit().await.map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(WorkflowRunListPage { items, has_more })
+    }
+
+    /// Lists safe event metadata for a legacy-default workflow and its tasks.
+    pub async fn list_legacy_workflow_events(
+        &self, workflow_run_id: &WorkflowRunId, limit: i64, before_event_id: Option<i64>,
+    ) -> Result<WorkflowEventPage, StorageError> {
+        self.list_workflow_events_scoped(None, workflow_run_id, limit, before_event_id).await
+    }
+
+    /// Lists safe event metadata for an authenticated tenant workflow and its tasks.
+    pub async fn list_workflow_events_for_tenant(
+        &self, context: &TenantContext, workflow_run_id: &WorkflowRunId,
+        limit: i64, before_event_id: Option<i64>,
+    ) -> Result<WorkflowEventPage, StorageError> {
+        self.list_workflow_events_scoped(Some(context), workflow_run_id, limit, before_event_id).await
+    }
+
+    async fn list_workflow_events_scoped(
+        &self, context: Option<&TenantContext>, workflow_run_id: &WorkflowRunId,
+        limit: i64, before_event_id: Option<i64>,
+    ) -> Result<WorkflowEventPage, StorageError> {
+        if !(1..=100).contains(&limit) || before_event_id.is_some_and(|value| value <= 0) {
+            return Err(StorageError::InvalidWorkflow("workflow-event page size or cursor is invalid".to_owned()));
+        }
+        let tenant_id = context.map_or("legacy-default", |value| value.tenant_id().as_str());
+        let fetch_limit = limit + 1;
+        let mut client = self.pool.get().await.map_err(|error| StorageError::Pool(error.to_string()))?;
+        let transaction = client.transaction().await.map_err(|error| StorageError::Database(error.to_string()))?;
+        transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        match context {
+            Some(value) => value.apply_to_transaction(&transaction).await?,
+            None => apply_legacy_worker_context_to_transaction(&transaction).await?,
+        }
+        let workflow_exists = transaction.query_opt(
+            "SELECT 1 FROM workflow_runs WHERE tenant_id = $1 AND workflow_run_id = $2",
+            &[&tenant_id, &workflow_run_id.as_str()],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        if workflow_exists.is_none() {
+            return Err(StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned()));
+        }
+        // Raw outbox JSON is never selected or returned; only a non-sensitive
+        // lifecycle status is extracted for the dashboard timeline.
+        let rows = transaction.query(
+            "SELECT event.event_id, event.aggregate_type, event.aggregate_id,
+                    event.aggregate_version, event.event_type, event.payload->>'status',
+                    event.created_at, event.published_at
+             FROM outbox_events AS event
+             WHERE event.tenant_id = $1
+               AND (
+                    (event.aggregate_type = 'workflow_run' AND event.aggregate_id = $2)
+                    OR (
+                        event.aggregate_type = 'task_run'
+                        AND event.aggregate_id IN (
+                            SELECT task.task_run_id FROM task_runs AS task
+                            WHERE task.tenant_id = $1 AND task.workflow_run_id = $2
+                        )
+                    )
+               )
+               AND ($3::BIGINT IS NULL OR event.event_id < $3)
+             ORDER BY event.event_id DESC
+             LIMIT $4",
+            &[&tenant_id, &workflow_run_id.as_str(), &before_event_id, &fetch_limit],
+        ).await.map_err(|error| StorageError::Database(error.to_string()))?;
+        let mut events = Vec::with_capacity(rows.len().min(limit as usize));
+        for row in rows {
+            let aggregate_version: i64 = row.get(3);
+            events.push(WorkflowEventSummary {
+                event_id: row.get(0),
+                aggregate_type: row.get(1),
+                aggregate_id: row.get(2),
+                aggregate_version: u64::try_from(aggregate_version).map_err(|_| StorageError::InvalidStoredValue("negative outbox aggregate version".to_owned()))?,
+                event_type: row.get(4),
+                status: row.get(5),
+                created_at: row.get(6),
+                published_at: row.get(7),
+            });
+        }
+        let has_more = events.len() > limit as usize;
+        events.truncate(limit as usize);
+        transaction.commit().await.map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(WorkflowEventPage { events, has_more })
     }
 
     /// Loads a durable workflow-run summary and its task snapshots.

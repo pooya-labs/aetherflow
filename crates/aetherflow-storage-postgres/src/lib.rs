@@ -28,7 +28,8 @@ pub use outbox::{
 };
 pub use task_repository::{
     DurableTaskRun, DurableWorkflowRun, NewTaskRun, OutboxClaim, PgTaskClaim, PgTaskRepository,
-    RecoveredLease, TaskFailure,
+    RecoveredLease, TaskFailure, WorkflowEventPage, WorkflowEventSummary, WorkflowRunListPage,
+    WorkflowRunSummary,
 };
 pub use tenant::{TenantContext, TenantPermission, TenantRole};
 pub use tenant_auth::PgTenantCredentialRepository;
@@ -53,7 +54,10 @@ const FORCE_TENANT_RLS_MIGRATION_SQL: &str = include_str!(
 const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str = include_str!(
     "../../aetherflow-runtime/migrations/postgres/0007_worker_tenant_grant_lock_rls.sql"
 );
-const MIGRATION_VERSION: i64 = 7;
+const DASHBOARD_HISTORY_INDEX_MIGRATION_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0008_dashboard_history_indexes.sql"
+);
+const MIGRATION_VERSION: i64 = 8;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -98,6 +102,11 @@ const MIGRATIONS: [Migration; 7] = [
         version: 7,
         name: "0007_worker_tenant_grant_lock_rls.sql",
         sql: WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL,
+    },
+    Migration {
+        version: 8,
+        name: "0008_dashboard_history_indexes.sql",
+        sql: DASHBOARD_HISTORY_INDEX_MIGRATION_SQL,
     },
 ];
 
@@ -448,7 +457,7 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 7);
+        assert_eq!(MIGRATION_VERSION, 8);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
@@ -466,6 +475,8 @@ mod tests {
         );
         assert_eq!(MIGRATIONS[6].version, 7);
         assert_eq!(MIGRATIONS[6].name, "0007_worker_tenant_grant_lock_rls.sql");
+        assert_eq!(MIGRATIONS[7].version, 8);
+        assert_eq!(MIGRATIONS[7].name, "0008_dashboard_history_indexes.sql");
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
