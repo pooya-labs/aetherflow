@@ -1,6 +1,6 @@
 # ADR-0012: Tenant ownership and row-level authorization
 
-- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant inbox migration v5, forced-RLS migration v6, tenant/worker authorization paths, tenant-authenticated HTTP routes, and migration-owner/runtime-role separation are implemented but await hosted verification
+- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant inbox migration v5, forced-RLS migration v6, worker grant-lock migration v7, tenant/worker authorization paths, tenant-authenticated HTTP routes, and migration-owner/runtime-role separation are implemented but await hosted verification
 - **Date:** 2026-11-03
 - **Scope:** Tenant identity, API principals and credentials, durable workflow ownership, worker grants, and PostgreSQL row-level isolation
 
@@ -8,7 +8,7 @@
 
 The additive PostgreSQL migration v4 is hosted-verified on PostgreSQL 18. It creates tenant/principal/credential registries and worker grants, backfills workflow/task/dependency/attempt/outbox/inbox rows into the reserved `legacy-default` tenant, and adds tenant-consistent composite keys, foreign keys, and tenant-leading indexes. The exact v4 source passed PostgreSQL/NATS run [41575288110](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41575288110) and Rust CI [41575288079](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41575288079) on source `3a7d704`.
 
-Migration v5 replaces the inbox primary key with `(tenant_id, consumer_name, event_id)`. Migration v6, `0006_force_tenant_row_level_security.sql`, now enables and forces RLS on ten tenant-owned tables: the six workflow/task/dependency/attempt/outbox/inbox tables, plus `tenants`, `tenant_principals`, `tenant_credentials`, and `worker_tenant_grants`. Node and worker membership tables remain cluster-scoped. V5 and v6 are committed and registered in the immutable migration runner; their hosted PostgreSQL verification is pending.
+Migration v5 replaces the inbox primary key with `(tenant_id, consumer_name, event_id)`. Migration v6, `0006_force_tenant_row_level_security.sql`, enables and forces RLS on ten tenant-owned tables: the six workflow/task/dependency/attempt/outbox/inbox tables, plus `tenants`, `tenant_principals`, `tenant_credentials`, and `worker_tenant_grants`. Node and worker membership tables remain cluster-scoped. Migration v7, `0007_worker_tenant_grant_lock_rls.sql`, adds the PostgreSQL `UPDATE USING` policy needed for a registered worker's `SELECT ... FOR SHARE` grant lock while setting an unconditional false `WITH CHECK` so the worker cannot modify the grant registry. It also keeps the tenant grant-admin policy from matching a worker context. V5–v7 are committed and registered in the immutable migration runner; their hosted PostgreSQL verification is pending.
 
 Tenant credentials are stored as SHA-256 digests. Credential authentication sets only the presented digest in transaction-local `aetherflow.credential_sha256`; the RLS policies expose the matching credential and its tenant/principal join for that transaction, and permit its last-used timestamp update. Tenant contexts install the tenant/principal/role GUCs; registered worker operations install worker identity and switch to a selected tenant only after checking and locking the active grant. All GUCs are installed with transaction-local `set_config(..., true)`, and the one-connection pool test verifies cleanup after commit.
 
@@ -20,7 +20,7 @@ The server bootstrap now requires two distinct connections when `DATABASE_URL` i
 
 Before creating the API state, startup checks that the runtime role is not a superuser, does not have `BYPASSRLS`, `CREATEROLE`, or `CREATEDB`, has no membership in any other PostgreSQL role, owns none of the protected tables, has no public-schema CREATE privilege or replication capability, and sees ENABLE + FORCE RLS on all ten protected tables. It continues to reject non-loopback HTTP binds; PostgreSQL TLS is not a substitute for HTTPS on the HTTP listener.
 
-The new migration, runtime-role check, and real `SET ROLE` RLS integration test are not yet hosted-verified. The runtime role must be granted only the DML/sequence privileges it needs and must not be a member of any other PostgreSQL role. Transaction-local custom GUCs are application-controlled context, not tamper-proof claims: forced RLS is defense in depth against missing tenant predicates, not a defense against arbitrary SQL execution or SQL injection. Keep parameterized SQL and the loopback boundary.
+The v5–v7 migrations, runtime-role check, and real `SET ROLE` RLS integration test—including worker `FOR SHARE` locking and denied grant mutation—are not yet hosted-verified. The runtime role must be granted only the DML/sequence privileges it needs and must not be a member of any other PostgreSQL role. Transaction-local custom GUCs are application-controlled context, not tamper-proof claims: forced RLS is defense in depth against missing tenant predicates, not a defense against arbitrary SQL execution or SQL injection. Keep parameterized SQL and the loopback boundary.
 
 ## Context
 
