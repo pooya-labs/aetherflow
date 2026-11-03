@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fs;
 use std::io::{self, Read};
+use std::net::IpAddr;
 use std::path::Path;
 use std::time::Duration;
 
@@ -178,6 +179,27 @@ fn normalize_base_url(raw: &str) -> Result<Url, Box<dyn Error>> {
         )
         .into());
     }
+
+    // A bearer token must never be sent over cleartext HTTP to a remote host.
+    // The server only permits plaintext HTTP on loopback, so the CLI mirrors
+    // the same boundary before constructing an authenticated request.
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() == "http" && !is_loopback {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "remote control-plane URLs must use HTTPS; plain HTTP is allowed only on loopback",
+        )
+        .into());
+    }
+
     Ok(url)
 }
 
@@ -197,22 +219,10 @@ fn validate_identifier(value: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_submission(path: &Path) -> Result<Value, Box<dyn Error>> {
-    let raw = if path.as_os_str() == std::ffi::OsStr::new("-") {
-        let mut input = String::new();
-        io::stdin().read_to_string(&mut input)?;
-        input
-    } else {
-        let metadata = fs::metadata(path)?;
-        if metadata.len() > MAX_HTTP_BODY_BYTES as u64 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "workflow request exceeds the 2 MiB HTTP body limit",
-            )
-            .into());
-        }
-        fs::read_to_string(path)?
-    };
+fn read_bounded(mut reader: impl Read) -> Result<String, Box<dyn Error>> {
+    let mut limited = reader.take((MAX_HTTP_BODY_BYTES + 1) as u64);
+    let mut raw = String::new();
+    limited.read_to_string(&mut raw)?;
     if raw.len() > MAX_HTTP_BODY_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -220,6 +230,16 @@ fn read_submission(path: &Path) -> Result<Value, Box<dyn Error>> {
         )
         .into());
     }
+    Ok(raw)
+}
+
+fn read_submission(path: &Path) -> Result<Value, Box<dyn Error>> {
+    let raw = if path.as_os_str() == std::ffi::OsStr::new("-") {
+        let stdin = io::stdin();
+        read_bounded(stdin.lock())?
+    } else {
+        read_bounded(fs::File::open(path)?)?
+    };
     let value: Value = serde_json::from_str(&raw)?;
     if !value.is_object() {
         return Err(io::Error::new(
@@ -320,7 +340,8 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiClient, normalize_base_url, validate_identifier};
+    use super::{ApiClient, normalize_base_url, read_bounded, validate_identifier};
+    use std::io::Cursor;
 
     #[test]
     fn base_url_adds_trailing_slash_and_preserves_reverse_proxy_prefix() {
@@ -333,6 +354,28 @@ mod tests {
         assert!(normalize_base_url("https://user:secret@example.test").is_err());
         assert!(normalize_base_url("https://example.test?token=secret").is_err());
         assert!(normalize_base_url("file:///tmp/api").is_err());
+    }
+
+    #[test]
+    fn plaintext_http_is_restricted_to_loopback_hosts() {
+        assert!(normalize_base_url("http://127.0.0.1:8080").is_ok());
+        assert!(normalize_base_url("http://127.42.0.9:8080").is_ok());
+        assert!(normalize_base_url("http://localhost:8080").is_ok());
+        assert!(normalize_base_url("http://[::1]:8080").is_ok());
+        assert!(normalize_base_url("https://control.example.test").is_ok());
+        assert!(normalize_base_url("http://control.example.test").is_err());
+        assert!(normalize_base_url("http://192.168.1.10:8080").is_err());
+        assert!(normalize_base_url("http://localhost.attacker.test").is_err());
+    }
+
+    #[test]
+    fn bounded_reader_stops_at_the_http_body_limit() {
+        let oversized = format!(
+            r#"{{"input":"{}"}}"#,
+            "x".repeat(MAX_HTTP_BODY_BYTES + 32)
+        );
+        assert!(read_bounded(Cursor::new(oversized.into_bytes())).is_err());
+        assert_eq!(read_bounded(Cursor::new(b"{\"ok\":true}".to_vec())).unwrap(), "{\"ok\":true}");
     }
 
     #[test]

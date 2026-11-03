@@ -37,7 +37,7 @@ cargo run -p aetherflow-cli -- task inspect task-run-0001
 cargo run -p aetherflow-cli -- task cancel task-run-0001 --expected-version 3
 ~~~
 
-Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the global --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects the server; the default is http://127.0.0.1:8080. Tokens are read only from environment variables, never command-line arguments or error output. HTTPS verification stays enabled through Rustls and the platform trust store. The --file - form reads a JSON request from standard input; request shape and size limits are the same as the v1 HTTP API.
+Tenant workflow/task commands use AETHERFLOW_TENANT_TOKEN and the global --tenant flag. Worker inventory is operator-only. AETHERFLOW_URL or --url selects the server; the default is http://127.0.0.1:8080. Tokens are read only from environment variables, never command-line arguments or error output. HTTPS verification stays enabled through Rustls and the platform trust store; the CLI rejects remote plain-HTTP URLs before it can send a bearer token. Plain HTTP is allowed only for loopback development. The --file - form reads a JSON request from standard input through a bounded reader; file and stdin input stop at the API's 2 MiB request limit.
 
 ## Run the HTTP control plane
 
