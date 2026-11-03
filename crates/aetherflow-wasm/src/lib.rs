@@ -548,4 +548,7 @@ mod tests {
 
 mod runtime;
 
-pub use runtime::{CompiledPlugin, PluginRuntimeError, WasmPluginRuntime};
+pub use runtime::{
+    CompiledPlugin, PluginExecutionResult, PluginLog, PluginLogLevel, PluginRuntimeError,
+    WasmPluginRuntime,
+};
