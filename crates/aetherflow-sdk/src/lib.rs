@@ -793,8 +793,8 @@ fn normalize_base_url(raw: &str) -> Result<Url, ClientError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientError, ControlPlaneClient, RetryPolicy, WorkflowRunSubmission,
-        WorkflowTaskInput, encode_request_body, normalize_base_url, validate_entity_id,
+        ClientError, ControlPlaneClient, RetryPolicy, WorkflowRunSubmission, WorkflowTaskInput,
+        encode_request_body, normalize_base_url, validate_entity_id,
     };
 
     #[test]
