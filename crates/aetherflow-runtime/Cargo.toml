@@ -8,6 +8,7 @@ description = "Single-node execution runtime and in-memory repository for Aether
 
 [dependencies]
 aetherflow-core = { path = "../aetherflow-core" }
+aetherflow-wasm = { path = "../aetherflow-wasm" }
 tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
