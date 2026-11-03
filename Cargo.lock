@@ -36,6 +36,7 @@ name = "aetherflow-runtime"
 version = "0.1.0"
 dependencies = [
  "aetherflow-core",
+ "aetherflow-wasm",
  "tokio",
 ]
 
