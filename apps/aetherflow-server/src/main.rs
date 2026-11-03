@@ -102,19 +102,52 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn should_export_otlp(
+    endpoint_configured: bool,
+    configured_exporter: Option<&str>,
+    sdk_disabled: bool,
+) -> Result<bool, std::io::Error> {
+    if sdk_disabled {
+        return Ok(false);
+    }
+
+    match configured_exporter {
+        Some("none") => Ok(false),
+        Some("otlp") => {
+            if endpoint_configured {
+                Ok(true)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "OTEL_TRACES_EXPORTER=otlp requires an explicit OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                ))
+            }
+        }
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "OTEL_TRACES_EXPORTER must be otlp or none",
+        )),
+        None => Ok(endpoint_configured),
+    }
+}
+
 fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
     let export_disabled =
         std::env::var("OTEL_SDK_DISABLED").is_ok_and(|value| value.eq_ignore_ascii_case("true"));
-    let export_none =
-        std::env::var("OTEL_TRACES_EXPORTER").is_ok_and(|value| value.eq_ignore_ascii_case("none"));
     let endpoint_configured = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
         .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
         .is_ok_and(|value| !value.trim().is_empty());
+    let configured_exporter = std::env::var("OTEL_TRACES_EXPORTER").ok();
+    let export_otlp = should_export_otlp(
+        endpoint_configured,
+        configured_exporter.as_deref(),
+        export_disabled,
+    )?;
 
     let protocol = std::env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
         .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL"))
         .unwrap_or_else(|_| "http/protobuf".to_owned());
-    if endpoint_configured && !matches!(protocol.as_str(), "http/protobuf") {
+    if export_otlp && !matches!(protocol.as_str(), "http/protobuf") {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "AetherFlow currently supports OTEL_EXPORTER_OTLP_* protocol http/protobuf only",
@@ -125,7 +158,7 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
     let resource = Resource::builder()
         .with_service_name("aetherflow-server")
         .build();
-    let tracer_provider = if endpoint_configured && !export_disabled && !export_none {
+    let tracer_provider = if export_otlp {
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
@@ -156,7 +189,7 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
         .with(telemetry_layer)
         .init();
 
-    if export_disabled || export_none || !endpoint_configured {
+    if !export_otlp {
         tracing::info!(
             trace_context = "w3c",
             otlp_export = false,
@@ -431,8 +464,20 @@ mod tests {
 
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
-        postgres_pool_with_ssl_mode, validate_http_transport, verify_runtime_database_role,
+        postgres_pool_with_ssl_mode, should_export_otlp, validate_http_transport,
+        verify_runtime_database_role,
     };
+
+    #[test]
+    fn otlp_export_requires_an_endpoint_and_honors_explicit_disable() {
+        assert!(!should_export_otlp(false, None, false).expect("local spans only"));
+        assert!(should_export_otlp(true, None, false).expect("endpoint enables OTLP"));
+        assert!(!should_export_otlp(true, Some("none"), false).expect("exporter disabled"));
+        assert!(!should_export_otlp(false, None, true).expect("SDK disabled"));
+        assert!(!should_export_otlp(false, Some("otlp"), true).expect("SDK override"));
+        assert!(should_export_otlp(false, Some("otlp"), false).is_err());
+        assert!(should_export_otlp(true, Some("console"), false).is_err());
+    }
 
     #[tokio::test]
     async fn runtime_role_verifier_rejects_owner_and_accepts_restricted_login() {

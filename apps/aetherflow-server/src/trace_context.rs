@@ -38,7 +38,6 @@ pub(crate) fn extract_trace_context(headers: &HeaderMap) -> Context {
     TraceContextPropagator::new().extract(&HeaderMapExtractor(headers))
 }
 
-#[allow(dead_code)]
 pub(crate) fn inject_trace_context(context: &Context, headers: &mut HeaderMap) {
     TraceContextPropagator::new().inject_context(context, &mut HeaderMapInjector(headers));
 }
@@ -87,6 +86,7 @@ mod tests {
         let mut incoming = HeaderMap::new();
         incoming.insert("traceparent", HeaderValue::from_static(TRACEPARENT));
         incoming.insert("tracestate", HeaderValue::from_static("vendor=value"));
+        incoming.insert("baggage", HeaderValue::from_static("user-id=private"));
         let context = extract_trace_context(&incoming);
 
         let mut outgoing = HeaderMap::new();
@@ -94,6 +94,7 @@ mod tests {
 
         assert_eq!(outgoing.get("traceparent").unwrap(), TRACEPARENT);
         assert_eq!(outgoing.get("tracestate").unwrap(), "vendor=value");
+        assert!(outgoing.get("baggage").is_none());
         assert_eq!(outgoing.len(), 2);
     }
 }

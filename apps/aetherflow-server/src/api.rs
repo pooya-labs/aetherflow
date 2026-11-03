@@ -15,8 +15,9 @@ use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{
     ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
-    ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD,
-    AUTHORIZATION, CONTENT_TYPE, ORIGIN, VARY, WWW_AUTHENTICATE,
+    ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS,
+    ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE, ORIGIN, VARY,
+    WWW_AUTHENTICATE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -34,7 +35,7 @@ use subtle::ConstantTimeEq;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::trace_context::extract_trace_context;
+use crate::trace_context::{extract_trace_context, inject_trace_context};
 
 const HTTP_LATENCY_BUCKETS: [(u64, &str); 10] = [
     (5_000, "0.005"),
@@ -360,7 +361,8 @@ async fn observe_http_request(
     }
     let trace_id = span.context().span().span_context().trace_id().to_string();
     span.record("otel_trace_id", tracing::field::display(trace_id));
-    let response = next.run(request).instrument(span.clone()).await;
+    let mut response = next.run(request).instrument(span.clone()).await;
+    inject_trace_context(&span.context(), response.headers_mut());
     let elapsed = started.elapsed();
     let status_code = response.status().as_u16();
 
@@ -435,7 +437,7 @@ fn requested_cors_headers_are_allowed(value: &HeaderValue) -> bool {
     value.split(',').all(|header| {
         matches!(
             header.trim().to_ascii_lowercase().as_str(),
-            "authorization" | "content-type"
+            "authorization" | "content-type" | "traceparent" | "tracestate"
         )
     })
 }
@@ -448,6 +450,10 @@ fn attach_cors_origin(response: &mut Response, origin: &str) {
         response
             .headers_mut()
             .insert(VARY, HeaderValue::from_static("Origin"));
+        response.headers_mut().insert(
+            ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("traceparent, tracestate"),
+        );
     }
 }
 
@@ -496,7 +502,7 @@ async fn apply_browser_cors(
         );
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("authorization, content-type"),
+            HeaderValue::from_static("authorization, content-type, traceparent, tracestate"),
         );
         response
             .headers_mut()
@@ -1698,7 +1704,10 @@ mod tests {
                     .uri("/api/v1/workflow-runs")
                     .header(ORIGIN, "https://pooya16pg-spec.github.io")
                     .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
-                    .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization")
+                    .header(
+                        ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization, traceparent, tracestate",
+                    )
                     .body(Body::empty())
                     .expect("valid Pages preflight request"),
             )
@@ -1714,6 +1723,16 @@ mod tests {
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_METHODS),
             Some(&HeaderValue::from_static("GET, POST, OPTIONS"))
+        );
+        assert_eq!(
+            preflight.headers().get("access-control-allow-headers"),
+            Some(&HeaderValue::from_static(
+                "authorization, content-type, traceparent, tracestate"
+            ))
+        );
+        assert_eq!(
+            preflight.headers().get("access-control-expose-headers"),
+            Some(&HeaderValue::from_static("traceparent, tracestate"))
         );
         assert!(
             preflight
