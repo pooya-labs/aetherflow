@@ -47,9 +47,7 @@ impl TenantRole {
             (Self::Admin, _)
                 | (
                     Self::Operator,
-                    TenantPermission::Read
-                        | TenantPermission::Submit
-                        | TenantPermission::Cancel
+                    TenantPermission::Read | TenantPermission::Submit | TenantPermission::Cancel
                 )
                 | (Self::Reader, TenantPermission::Read)
         )
