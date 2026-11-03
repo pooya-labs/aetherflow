@@ -105,6 +105,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
              INSERT INTO task_runs (task_run_id, workflow_run_id, task_id, tenant_id, status)
              VALUES
                ('task-a-parent', 'workflow-a', 'task-parent', 'tenant-a', 'pending'),
+               ('task-a-another-parent', 'workflow-a', 'task-parent-2', 'tenant-a', 'pending'),
                ('task-a-child', 'workflow-a', 'task-child', 'tenant-a', 'pending'),
                ('task-b-child', 'workflow-b', 'task-child', 'tenant-b', 'pending');
              INSERT INTO task_run_dependencies
@@ -130,7 +131,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .execute(
             "INSERT INTO task_run_dependencies
                (tenant_id, workflow_run_id, child_task_run_id, parent_task_run_id, dependency_position)
-             VALUES ('tenant-b', 'workflow-a', 'task-a-child', 'task-a-parent', 1)",
+             VALUES ('tenant-b', 'workflow-a', 'task-a-child', 'task-a-another-parent', 1)",
             &[],
         )
         .await;
@@ -187,16 +188,16 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .await
         .expect("tenant-scoped worker grant is accepted");
 
-    let legacy_ownership_default: bool = client
+    let explicit_ownership: bool = client
         .query_one(
-            "SELECT tenant_id = 'legacy-default'
+            "SELECT tenant_id = 'tenant-a'
              FROM workflow_runs WHERE workflow_run_id = 'workflow-a'",
             &[],
         )
         .await
         .expect("read explicit tenant fixture")
         .get(0);
-    assert!(legacy_ownership_default == false);
+    assert!(explicit_ownership);
 
     let expected_checksum = initial_migration_checksum();
 
