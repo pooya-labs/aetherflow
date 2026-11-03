@@ -724,10 +724,10 @@ impl PgTaskRepository {
             let tenant_id: String = candidate.get(0);
             let task_run_id: String = candidate.get(1);
 
-            if let Some(registration) = registration {
-                if !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await? {
-                    continue;
-                }
+            if let Some(registration) = registration
+                && !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?
+            {
+                continue;
             }
             apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
@@ -1848,10 +1848,10 @@ impl PgTaskRepository {
             let worker_id: String = row.get(6);
             let fencing_token: i64 = row.get(7);
 
-            if let Some(registration) = registration {
-                if !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await? {
-                    continue;
-                }
+            if let Some(registration) = registration
+                && !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?
+            {
+                continue;
             }
             apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
@@ -2062,10 +2062,10 @@ impl PgTaskRepository {
         for candidate in candidates {
             let tenant_id: String = candidate.get(0);
             let event_id: i64 = candidate.get(1);
-            if let Some(registration) = registration {
-                if !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await? {
-                    continue;
-                }
+            if let Some(registration) = registration
+                && !try_lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?
+            {
+                continue;
             }
             apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
