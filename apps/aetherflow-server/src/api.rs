@@ -1227,7 +1227,7 @@ mod tests {
         use aetherflow_core::domain::{NodeId, NodeIncarnationId, WorkerId};
         use aetherflow_storage_postgres::PgMembershipRepository;
 
-        let membership = PgMembershipRepository::from_pool(pool);
+        let membership = PgMembershipRepository::from_pool(pool.clone());
         let node_id = NodeId::parse(format!("api-node-{suffix}")).expect("valid node ID");
         let incarnation_id = NodeIncarnationId::parse(format!("api-incarnation-{suffix}"))
             .expect("valid node incarnation ID");
