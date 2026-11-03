@@ -1100,17 +1100,20 @@ impl PgTaskRepository {
             // Existing work may settle while draining, but a stale epoch cannot write.
             lock_worker_registration(&transaction, registration, false).await?;
         }
+        let tenant_id =
+            lock_task_tenant_for_worker(&transaction, task_run_id, worker_id, registration).await?;
         let row = transaction
             .query_opt(
                 "UPDATE task_runs \
-             SET status = 'succeeded', output_payload = $5, claimed_by = NULL, \
+             SET status = 'succeeded', output_payload = $6, claimed_by = NULL, \
                  lease_expires_at = NULL, version = version + 1, \
                  updated_at = clock_timestamp(), finished_at = clock_timestamp() \
-             WHERE task_run_id = $1 AND status = 'running' AND claimed_by = $2 \
-               AND version = $3 AND fencing_token = $4 \
+             WHERE tenant_id = $1 AND task_run_id = $2 AND status = 'running' AND claimed_by = $3 \
+               AND version = $4 AND fencing_token = $5 \
                AND lease_expires_at > clock_timestamp() \
              RETURNING version, attempts_started",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &worker_id.as_str(),
                     &expected_version,
@@ -1120,16 +1123,17 @@ impl PgTaskRepository {
             )
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
-        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
+        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
         let version: i64 = row.get(0);
         let attempt_number: i32 = row.get(1);
         let attempt_updated = transaction
             .execute(
                 "UPDATE task_attempts \
              SET outcome = 'succeeded', finished_at = clock_timestamp() \
-             WHERE task_run_id = $1 AND attempt_number = $2 AND worker_id = $3 \
-               AND fencing_token = $4 AND outcome = 'running'",
+             WHERE tenant_id = $1 AND task_run_id = $2 AND attempt_number = $3 AND worker_id = $4 \
+               AND fencing_token = $5 AND outcome = 'running'",
                 &[
+                    &tenant_id,
                     &task_run_id.as_str(),
                     &attempt_number,
                     &worker_id.as_str(),
@@ -1143,8 +1147,9 @@ impl PgTaskRepository {
                 "successful task transition did not match one running attempt".to_owned(),
             ));
         }
-        append_outbox(
+        append_outbox_for_tenant(
             &transaction,
+            &tenant_id,
             "task_run",
             task_run_id.as_str(),
             version,
@@ -1152,7 +1157,8 @@ impl PgTaskRepository {
             json!({"task_run_id": task_run_id.as_str(), "status": "succeeded", "version": version}),
         )
         .await?;
-        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        let snapshot =
+            load_snapshot_for_tenant(&transaction, &tenant_id, task_run_id.as_str()).await?;
         transaction
             .commit()
             .await
