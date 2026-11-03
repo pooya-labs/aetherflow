@@ -105,6 +105,7 @@ impl AppState {
                 tenant_credentials,
             })),
             api_token_hash: Some(api_token_hash),
+            cors_allowed_origins: Arc::default(),
         })
     }
 
@@ -186,7 +187,10 @@ pub fn router(state: AppState) -> Router {
 }
 
 fn valid_cors_origin(value: &str) -> bool {
-    if value.is_empty() || value == "*" || value.contains(['?', '#', ',']) {
+    if value.is_empty()
+        || value == "*"
+        || value.chars().any(|character| matches!(character, '?' | '#' | ','))
+    {
         return false;
     }
     let Ok(uri) = value.parse::<Uri>() else {
@@ -1369,7 +1373,10 @@ fn format_timestamp(value: SystemTime) -> String {
 mod tests {
     use super::{AppState, authorization_matches, hash_api_token, router};
     use axum::body::{Body, to_bytes};
-    use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+    use axum::http::header::{
+        ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS,
+        ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN, WWW_AUTHENTICATE,
+    };
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use tower::ServiceExt;
 
