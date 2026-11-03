@@ -380,12 +380,13 @@ mod tests {
                     COALESCE(current_setting('aetherflow.tenant_id', true), ''),
                     COALESCE(current_setting('aetherflow.worker_id', true), ''),
                     COALESCE(current_setting('aetherflow.principal_id', true), ''),
-                    COALESCE(current_setting('aetherflow.tenant_role', true), '')",
+                    COALESCE(current_setting('aetherflow.tenant_role', true), ''),
+                    COALESCE(current_setting('aetherflow.credential_sha256', true), '')",
                 &[],
             )
             .await
             .expect("inspect connection after worker and legacy transactions");
-        for index in 0..4 {
+        for index in 0..5 {
             assert_eq!(after_worker_and_legacy.get::<_, String>(index), "");
         }
     }
