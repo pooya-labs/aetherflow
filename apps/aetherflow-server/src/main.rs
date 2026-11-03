@@ -467,7 +467,7 @@ mod tests {
             .await
             .expect("connect a negative plain-HTTP client");
         plaintext
-            .write_all(b"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n")
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
             .expect("write raw HTTP bytes");
         let mut response_prefix = [0_u8; 5];
