@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 now includes an Axum v1 control plane backed by PostgreSQL: workflow submission and inspection, task inspection and version-guarded cancellation, and live worker discovery. The HTTP routes and API integration suite have passed hosted verification; follow-up tests extend coverage for missing records, live worker results, and safe storage-error mapping. The listener remains loopback-only even with single-operator Bearer authentication; multi-user authorization and tenant isolation are not implemented. AetherFlow remains experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 now includes platform and tenant-authenticated Axum routes, tenant-scoped task/workflow storage, grant-gated workers and event processing, PostgreSQL migrations v4–v6, forced RLS on ten tenant-owned tables, and separate migration-owner/runtime database pools. These newer changes and their integration tests are committed but await hosted verification on the current source tree. The listener remains loopback-only; HTTPS, CLI/SDK, dashboard, and operational hardening remain open. AetherFlow is experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -52,11 +52,15 @@ The versioned v1 control-plane API is implemented in apps/aetherflow-server and 
 | GET | /api/v1/workflow-runs/{workflow_run_id} | Read a workflow run and its task summaries |
 | GET | /api/v1/task-runs/{task_run_id} | Read task state and payload-size metadata |
 | POST | /api/v1/task-runs/{task_run_id}/cancel | Cancel with an expected_version guard |
-| GET | /api/v1/workers | List live active worker registrations |
+| GET | /api/v1/workers | List live active worker registrations (platform operator) |
+| POST | /api/v1/tenant/workflow-runs | Submit a workflow for the authenticated tenant |
+| GET | /api/v1/tenant/workflow-runs/{workflow_run_id} | Read a tenant-owned workflow |
+| GET | /api/v1/tenant/task-runs/{task_run_id} | Read a tenant-owned task |
+| POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel a tenant-owned task with an expected_version guard |
 
 The contract and its compatibility/security decisions are recorded in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). Task input is base64 encoded and limited to 1 MiB after decoding; the HTTP request body is capped at 2 MiB. Inspection responses never return task input or output bytes. Reusing a workflow-run ID returns a conflict; the v1 API does not promise idempotent replay.
 
-**Security boundary:** when DATABASE_URL is configured, every /api/v1 route requires Authorization: Bearer $AETHERFLOW_API_TOKEN. Generate a 32-byte random token and keep it secret. It is one operator credential, not per-user authorization or tenant isolation. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener still defaults to 127.0.0.1:8080 and rejects non-loopback binds. Do not expose it to an untrusted network.
+**Security boundary:** `AETHERFLOW_API_TOKEN` protects the platform/operator compatibility routes; tenant routes authenticate separately against stored tenant credentials and derive tenant identity server-side. `AETHERFLOW_MIGRATION_DATABASE_URL` is the DDL/migration owner pool; `DATABASE_URL` must be a restricted non-owner runtime role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, or owner/bypass-role membership. Startup verifies this role and ENABLE + FORCE RLS on all ten protected tables. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener still defaults to 127.0.0.1:8080 and rejects non-loopback binds; PostgreSQL TLS does not provide HTTP HTTPS. Do not expose it to an untrusted network. Transaction-local RLS GUCs are app-controlled context and do not protect against arbitrary SQL execution or SQL injection.
 
 ## Repository map
 
@@ -64,17 +68,11 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-M00–M06 are complete: the Rust execution domain/runtime, durable PostgreSQL repository, worker membership/fencing, NATS JetStream outbox/inbox, combined failure-recovery coverage, and bounded Wasmtime/WIT v1 extension runtime are hosted-verified. See [ROADMAP.md](ROADMAP.md) for the detailed history and exact verification checkpoints.
+M00–M06 are complete and hosted-verified. M07's HTTP control plane, tenant credential routes, tenant-scoped repository paths, worker grants, tenant-aware outbox/inbox, and forced-RLS schema are implemented. Migrations v5/v6, RLS policies, the real `SET ROLE` regression suite, the server's restricted-role verifier, and recent tenant changes await hosted CI on the exact latest source SHA. See [ROADMAP.md](ROADMAP.md) for the authoritative verification state.
 
-M07 has an implemented HTTP control-plane slice:
-- Axum preserves GET /health and exposes versioned workflow-run, task-run, cancellation, and active-worker routes.
-- Workflow submission is validated with the existing DAG/retry-policy model and persisted through PgWorkflowCoordinator.
-- Workflow snapshots use a repeatable-read PostgreSQL view; task snapshots omit payload bytes and expose only sizes/presence metadata.
-- Cancellation uses the caller's expected task version and aggregates the workflow state after the transition.
-- Worker discovery reads live registrations from PgMembershipRepository.
-- The listener is loopback-only. Without DATABASE_URL, the process runs in health-only mode and durable routes fail closed with 503 database_unavailable.
+The tenant routes support workflow submission/read and task read/cancel with explicit Read/Submit/Cancel role checks. Platform/operator routes remain separate. Workflow definitions are submitted as snapshots rather than stored as reusable versioned definitions. Duplicate workflow-run IDs return 409; v1 does not promise idempotent replay.
 
-The server does not start workers; durable workers run as separate processes using the PostgreSQL worker runtime. The HTTP server currently configures PostgreSQL with NoTls, has no authentication/authorization or tenant isolation, and is not safe to expose to untrusted networks. Workflow definitions are submitted as snapshots rather than stored as reusable versioned definitions. Duplicate workflow-run IDs return 409; v1 does not claim idempotent replay.
+The database pools are intentionally separate: `AETHERFLOW_MIGRATION_DATABASE_URL` is the migration-owner URL; `DATABASE_URL` is the restricted runtime URL. The server refuses an owner, superuser, BYPASSRLS, CREATEROLE, CREATEDB, or owner/bypass-member runtime role and refuses startup unless all protected tables have FORCE RLS. Keep HTTP loopback-only until HTTPS, negative TLS tests, and a threat-model review are complete.
 
 The latest verified implementation and remaining M07 work are tracked in [ROADMAP.md](ROADMAP.md). License selection remains an owner-only release decision, and property-based lifecycle tests remain deferred engineering debt.
 
