@@ -169,13 +169,11 @@ impl ApiError {
                 "conflict",
                 "the workflow-run identifier has already been used",
             ),
-            StorageError::TaskRunNotFound(_) | StorageError::WorkflowRunNotFound(_) => {
-                Self::new(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "the requested workflow run or task run does not exist",
-                )
-            }
+            StorageError::TaskRunNotFound(_) | StorageError::WorkflowRunNotFound(_) => Self::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "the requested workflow run or task run does not exist",
+            ),
             StorageError::ClaimLost(_) => Self::new(
                 StatusCode::CONFLICT,
                 "stale_version",
@@ -278,7 +276,8 @@ async fn submit_workflow(
     State(state): State<AppState>,
     payload: Result<Json<SubmitWorkflowRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<WorkflowRunReceipt>), ApiError> {
-    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
+    let Json(request) = payload
+        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
 
     let workflow_id =
         WorkflowId::parse(request.workflow_id).map_err(|_| ApiError::invalid_identifier())?;
@@ -364,8 +363,8 @@ async fn get_workflow_run(
     State(state): State<AppState>,
     Path(raw_workflow_run_id): Path<String>,
 ) -> Result<Json<WorkflowRunSnapshot>, ApiError> {
-    let workflow_run_id = WorkflowRunId::parse(raw_workflow_run_id)
-        .map_err(|_| ApiError::invalid_identifier())?;
+    let workflow_run_id =
+        WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
     let database = state.database()?;
     let snapshot = database
         .tasks
@@ -412,9 +411,8 @@ async fn get_task_run(
     State(state): State<AppState>,
     Path(raw_task_run_id): Path<String>,
 ) -> Result<Json<TaskRunSnapshot>, ApiError> {
-    let task_run_id =
-        aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
-            .map_err(|_| ApiError::invalid_identifier())?;
+    let task_run_id = aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
+        .map_err(|_| ApiError::invalid_identifier())?;
     let database = state.database()?;
     let snapshot = database
         .tasks
@@ -486,10 +484,10 @@ async fn cancel_task_run(
     Path(raw_task_run_id): Path<String>,
     payload: Result<Json<CancelTaskRunRequest>, JsonRejection>,
 ) -> Result<Json<CancelTaskRunResponse>, ApiError> {
-    let Json(request) = payload.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
-    let task_run_id =
-        aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
-            .map_err(|_| ApiError::invalid_identifier())?;
+    let Json(request) = payload
+        .map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
+    let task_run_id = aetherflow_core::domain::TaskRunId::parse(raw_task_run_id)
+        .map_err(|_| ApiError::invalid_identifier())?;
     let database = state.database()?;
     let cancelled = database
         .tasks
@@ -645,8 +643,7 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024)
             .await
             .expect("read response");
-        let response: serde_json::Value =
-            serde_json::from_slice(&body).expect("stable error JSON");
+        let response: serde_json::Value = serde_json::from_slice(&body).expect("stable error JSON");
         assert_eq!(
             response["error"]["code"],
             serde_json::Value::String("invalid_identifier".to_owned())

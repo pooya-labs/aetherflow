@@ -2192,8 +2192,9 @@ impl PgTaskRepository {
             workflow_id: WorkflowId::parse(workflow_id)
                 .map_err(|error| StorageError::InvalidStoredValue(error.to_string()))?,
             status: parse_workflow_status(&status)?,
-            version: u64::try_from(version)
-                .map_err(|_| StorageError::InvalidStoredValue("negative workflow version".to_owned()))?,
+            version: u64::try_from(version).map_err(|_| {
+                StorageError::InvalidStoredValue("negative workflow version".to_owned())
+            })?,
             created_at,
             updated_at,
             task_runs,
