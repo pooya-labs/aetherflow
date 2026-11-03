@@ -1802,7 +1802,7 @@ impl PgTaskRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, true).await?;
-            apply_worker_identity_to_transaction(&transaction, publisher_id).await?;
+            apply_worker_identity_to_transaction(&transaction, registration.worker_id()).await?;
         } else {
             apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
@@ -1853,6 +1853,7 @@ impl PgTaskRepository {
                     continue;
                 }
             }
+            apply_tenant_id_to_transaction(&transaction, &tenant_id).await?;
 
             let attempts_u32 = u32::try_from(attempts_started).map_err(|_| {
                 StorageError::InvalidStoredValue("negative attempt count".to_owned())
