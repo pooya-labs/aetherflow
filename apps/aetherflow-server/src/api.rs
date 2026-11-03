@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -102,23 +102,52 @@ impl HttpMetrics {
 
     fn render_prometheus(&self) -> String {
         let requests_total = self.requests_total.load(Ordering::Relaxed);
-        let duration_sum = Duration::from_micros(
-            self.request_duration_sum_micros.load(Ordering::Relaxed),
-        )
-        .as_secs_f64();
+        let duration_sum =
+            Duration::from_micros(self.request_duration_sum_micros.load(Ordering::Relaxed))
+                .as_secs_f64();
         let mut output = String::new();
 
-        writeln!(output, "# HELP aetherflow_http_requests_total Completed HTTP requests.").expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_requests_total Completed HTTP requests."
+        )
+        .expect("write metrics");
         writeln!(output, "# TYPE aetherflow_http_requests_total counter").expect("write metrics");
         writeln!(output, "aetherflow_http_requests_total {requests_total}").expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_failed_total HTTP requests completed with a 5xx response.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_requests_failed_total counter").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_failed_total {}", self.requests_failed_total.load(Ordering::Relaxed)).expect("write metrics");
-        writeln!(output, "# HELP aetherflow_http_requests_in_flight HTTP requests currently being handled.").expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_requests_failed_total counter"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_failed_total {}",
+            self.requests_failed_total.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_requests_in_flight HTTP requests currently being handled."
+        )
+        .expect("write metrics");
         writeln!(output, "# TYPE aetherflow_http_requests_in_flight gauge").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_in_flight {}", self.requests_in_flight.load(Ordering::Relaxed)).expect("write metrics");
-        writeln!(output, "# HELP aetherflow_http_request_duration_seconds HTTP request latency distribution.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_request_duration_seconds histogram").expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_in_flight {}",
+            self.requests_in_flight.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_request_duration_seconds HTTP request latency distribution."
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_request_duration_seconds histogram"
+        )
+        .expect("write metrics");
         for ((_, rendered_bound), bucket) in HTTP_LATENCY_BUCKETS
             .iter()
             .zip(self.request_duration_buckets.iter())
@@ -130,9 +159,21 @@ impl HttpMetrics {
             )
             .expect("write metrics");
         }
-        writeln!(output, "aetherflow_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {requests_total}").expect("write metrics");
-        writeln!(output, "aetherflow_http_request_duration_seconds_sum {duration_sum:.6}").expect("write metrics");
-        writeln!(output, "aetherflow_http_request_duration_seconds_count {requests_total}").expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {requests_total}"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_sum {duration_sum:.6}"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_count {requests_total}"
+        )
+        .expect("write metrics");
         output
     }
 }
@@ -297,7 +338,10 @@ async fn observe_http_request(
     };
     let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let started = Instant::now();
-    state.metrics.requests_in_flight.fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .requests_in_flight
+        .fetch_add(1, Ordering::Relaxed);
 
     // Deliberately omit URI, query, headers, and body: these may contain
     // resource identifiers, credentials, or customer payloads.
@@ -307,7 +351,10 @@ async fn observe_http_request(
     let status_code = response.status().as_u16();
 
     state.metrics.observe(status_code, elapsed);
-    state.metrics.requests_in_flight.fetch_sub(1, Ordering::Relaxed);
+    state
+        .metrics
+        .requests_in_flight
+        .fetch_sub(1, Ordering::Relaxed);
     tracing::info!(
         parent: &span,
         status_code,
@@ -1526,14 +1573,14 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{AppState, HttpMetrics, authorization_matches, hash_api_token, router};
-    use std::sync::Arc;
-    use std::time::Duration;
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS,
         ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN, WWW_AUTHENTICATE,
     };
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+    use std::sync::Arc;
+    use std::time::Duration;
     use tower::ServiceExt;
 
     const TEST_API_TOKEN: &str = "test-only-aetherflow-api-token-32-bytes";
@@ -1547,7 +1594,9 @@ mod tests {
         let output = metrics.render_prometheus();
         assert!(output.contains("aetherflow_http_requests_total 2"));
         assert!(output.contains("aetherflow_http_requests_failed_total 1"));
-        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.005"} 1"#));
+        assert!(
+            output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.005"} 1"#)
+        );
         assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.5"} 2"#));
         assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 2"#));
         assert!(!output.contains("workflow_run_id"));
