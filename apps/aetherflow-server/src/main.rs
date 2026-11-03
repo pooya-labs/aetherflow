@@ -10,8 +10,8 @@ use std::error::Error;
 use std::net::SocketAddr;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
-use tokio_postgres::config::SslMode;
 use tokio_postgres::Config;
+use tokio_postgres::config::SslMode;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use aetherflow_storage_postgres::PgStore;
@@ -66,7 +66,9 @@ fn postgres_pool(database_url: &str) -> Result<Pool, Box<dyn Error>> {
             .install_default()
             .is_err()
     {
-        return Err(std::io::Error::other("unable to install the rustls ring crypto provider").into());
+        return Err(
+            std::io::Error::other("unable to install the rustls ring crypto provider").into(),
+        );
     }
 
     let ssl_mode = database_ssl_mode()?;

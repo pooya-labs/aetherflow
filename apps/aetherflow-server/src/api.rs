@@ -868,7 +868,8 @@ mod tests {
 
         let submit = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri("/api/v1/workflow-runs")
                     .header("content-type", "application/json")
@@ -892,7 +893,8 @@ mod tests {
 
         let duplicate = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri("/api/v1/workflow-runs")
                     .header("content-type", "application/json")
@@ -905,7 +907,8 @@ mod tests {
 
         let workflow = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/workflow-runs/{workflow_run_id}"))
                     .body(Body::empty())
                     .expect("valid workflow inspection request"),
@@ -926,7 +929,8 @@ mod tests {
 
         let missing_workflow = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/workflow-runs/{workflow_run_id}-missing"))
                     .body(Body::empty())
                     .expect("valid missing workflow inspection request"),
@@ -943,7 +947,8 @@ mod tests {
 
         let task = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/task-runs/{task_run_id}"))
                     .body(Body::empty())
                     .expect("valid task inspection request"),
@@ -954,7 +959,8 @@ mod tests {
 
         let missing_task = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri(format!("/api/v1/task-runs/{task_run_id}-missing"))
                     .body(Body::empty())
                     .expect("valid missing task inspection request"),
@@ -982,7 +988,8 @@ mod tests {
 
         let cancel = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
                     .header("content-type", "application/json")
@@ -1002,7 +1009,8 @@ mod tests {
 
         let stale_cancel = router(state.clone())
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .method("POST")
                     .uri(format!("/api/v1/task-runs/{task_run_id}/cancel"))
                     .header("content-type", "application/json")
@@ -1040,7 +1048,8 @@ mod tests {
 
         let workers = router(state)
             .oneshot(
-                Request::builder().header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
                     .uri("/api/v1/workers")
                     .body(Body::empty())
                     .expect("valid worker listing request"),
