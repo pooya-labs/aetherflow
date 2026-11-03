@@ -490,8 +490,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
             &granted_registration,
             claimed_version,
             claimed_fencing_token,
-            TaskOutput::new(b"tenant-a-completed".to_vec())
-                .expect("valid task output"),
+            TaskOutput::new(b"tenant-a-completed".to_vec()).expect("valid task output"),
         )
         .await
         .expect("active grant permits task completion");
