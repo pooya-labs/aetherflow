@@ -8,12 +8,14 @@ info:
     DATABASE_URL, only GET /health is available. AETHERFLOW_API_TOKEN is a
     separate high-entropy platform-operator credential; it does not identify
     or select a tenant. Routes under /api/v1/tenant/* require a tenant-bound
-    Bearer credential and enforce tenant roles. The listener remains
-    loopback-only; forced PostgreSQL RLS and external HTTPS exposure are not
-    enabled yet. PostgreSQL connections use Rustls and native CA roots; TLS
-    is required by default. Each HTTP request body is limited to 2 MiB;
-    decoded task input is limited to 1 MiB per task. Inspection omits payload
-    bytes.
+    Bearer credential and enforce tenant roles. PostgreSQL enforces tenant
+    isolation with ENABLE + FORCE ROW LEVEL SECURITY on all ten tenant-owned
+    tables. The HTTP listener defaults to loopback and accepts plaintext only
+    on loopback; non-loopback binds require a valid Rustls certificate chain
+    and private key. PostgreSQL connections use Rustls and native CA roots,
+    with chain and hostname validation required by default. Each HTTP request
+    body is limited to 2 MiB; decoded task input is limited to 1 MiB per task.
+    Inspection omits payload bytes.
 servers:
   - url: http://127.0.0.1:8080
     description: Local development only; control-plane routes require Bearer authentication.

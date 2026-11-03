@@ -36,7 +36,7 @@ The existing storage model has global workflow/task IDs and no tenant key on dur
 4. Rustls listener tests verify a successful handshake, malformed PEM rejection, untrusted-chain rejection, hostname-mismatch rejection, and rejection of raw HTTP on the TLS socket. These passed Rust CI on source `54b17742aee822f37a4a3b034968bbcd3e851c13`.
 5. Operators remain responsible for certificate issuance, renewal, private-key protection, and matching certificate SANs to the address clients use.
 
-Tenant ownership, tenant-authenticated routes, forced RLS on tenant tables, and worker-to-tenant grants are implemented under ADR-0012. Direct non-loopback HTTP exposure is blocked unless HTTPS is configured. Live PostgreSQL Rustls trust/hostname verification is still the next hosted security gate.
+Tenant ownership, tenant-authenticated routes, forced RLS on tenant tables, and worker-to-tenant grants are implemented under ADR-0012. Direct non-loopback HTTP exposure is blocked unless HTTPS is configured. Live PostgreSQL Rustls trust/hostname verification passed hosted PostgreSQL/NATS CI run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469).
 
 ## Consequences
 

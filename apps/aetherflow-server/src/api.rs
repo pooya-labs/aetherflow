@@ -1,8 +1,8 @@
 //! Versioned HTTP control plane for durable workflow execution.
 //!
-//! The v1 service is intentionally loopback-only until authentication and
-//! tenant isolation are implemented. Payload bytes are accepted on submission
-//! but are never included in workflow/task inspection responses.
+//! The v1 service separates operator and tenant-authenticated control-plane
+//! routes, with tenant identity enforced by storage authorization and RLS.
+//! Payload bytes are accepted on submission but never included in inspection.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
