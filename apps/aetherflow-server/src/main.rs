@@ -393,22 +393,22 @@ mod tests {
         let loopback: SocketAddr = "127.0.0.1:8080".parse().expect("valid loopback address");
         let remote: SocketAddr = "0.0.0.0:8443".parse().expect("valid wildcard address");
 
-        assert_eq!(
-            validate_http_transport(loopback, false, false).expect("loopback HTTP is allowed"),
-            false
+        assert!(
+            !validate_http_transport(loopback, false, false)
+                .expect("loopback HTTP is allowed")
         );
-        assert_eq!(
-            validate_http_transport(loopback, true, true).expect("loopback HTTPS is allowed"),
-            true
+        assert!(
+            validate_http_transport(loopback, true, true)
+                .expect("loopback HTTPS is allowed")
         );
         assert!(validate_http_transport(loopback, true, false).is_err());
         assert!(validate_http_transport(loopback, false, true).is_err());
         assert!(validate_http_transport(remote, false, false).is_err());
         assert!(validate_http_transport(remote, true, false).is_err());
         assert!(validate_http_transport(remote, false, true).is_err());
-        assert_eq!(
-            validate_http_transport(remote, true, true).expect("remote HTTPS is allowed"),
-            true
+        assert!(
+            validate_http_transport(remote, true, true)
+                .expect("remote HTTPS is allowed")
         );
     }
 
