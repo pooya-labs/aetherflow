@@ -6,3 +6,6 @@ pub mod clock;
 pub mod repository;
 pub mod scheduler;
 pub mod workflow;
+pub mod wasm;
+
+pub use wasm::{PluginLogSink, WasmTaskHandler};
