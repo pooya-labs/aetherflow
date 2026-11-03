@@ -27,11 +27,14 @@ Create a high-entropy local operator token and use a disposable local database:
 
 ~~~bash
 export AETHERFLOW_API_TOKEN="$(openssl rand -hex 32)"
-export DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_dev'
+export AETHERFLOW_MIGRATION_DATABASE_URL='postgres://aetherflow_migrator:YOUR_MIGRATION_PASSWORD@127.0.0.1:5432/aetherflow_dev'
+export DATABASE_URL='postgres://aetherflow_runtime:YOUR_RUNTIME_PASSWORD@127.0.0.1:5432/aetherflow_dev'
 cargo run -p aetherflow-server
 ~~~
 
-When DATABASE_URL is set, AETHERFLOW_API_TOKEN is mandatory and must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
+When DATABASE_URL is set, both database URLs and AETHERFLOW_API_TOKEN are mandatory. AETHERFLOW_API_TOKEN must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
+
+`AETHERFLOW_MIGRATION_DATABASE_URL` is used only by the migration/DDL owner pool. `DATABASE_URL` is used only by the API runtime pool and must authenticate as a restricted non-owner role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, or membership in the migration-owner/bypass role. Startup checks all ten protected tables for both ENABLE and FORCE ROW LEVEL SECURITY and fails closed if the runtime role is too privileged. Grant the runtime role only USAGE on schema public, DML on the required tables, and USAGE/SELECT on required sequences; do not grant it membership in the migration role. The migration role needs the DDL privileges required to apply the versioned schema.
 
 The server applies pending PostgreSQL migrations before it starts listening. By default it binds to 127.0.0.1:8080 and requires PostgreSQL TLS. Rustls validates the server chain using the platform's native CA store and checks the hostname. Install private database CA certificates in that trust store. For a disposable local PostgreSQL instance without TLS only, explicitly set DATABASE_SSL_MODE=disable; never use that mode over a network. The other accepted values are prefer (may fall back to plaintext) and require (default).
 
@@ -43,7 +46,7 @@ curl --fail -H "Authorization: Bearer $AETHERFLOW_API_TOKEN" \
 
 GET /health is public process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
 
-AETHERFLOW_BIND remains loopback-only. The single Bearer token is one operator credential, not a multi-user authorization system and not tenant isolation. Do not work around the non-loopback guard or expose the server to an untrusted network. HTTPS for the HTTP listener, per-principal authorization and tenant-scoped storage remain future work.
+AETHERFLOW_BIND remains loopback-only. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Forced RLS and tenant-scoped storage are implemented but await hosted verification; HTTPS for the HTTP listener remains future work. Do not work around the non-loopback guard or expose the server to an untrusted network.
 
 ## HTTP v1 resources
 
@@ -56,7 +59,11 @@ The OpenAPI 3.1 source of truth is docs/api/openapi.yaml.
 | GET | /api/v1/workflow-runs/{workflow_run_id} | Read a workflow-run and task status summary |
 | GET | /api/v1/task-runs/{task_run_id} | Read task status and payload metadata |
 | POST | /api/v1/task-runs/{task_run_id}/cancel | Version-guarded cancellation and workflow aggregation |
-| GET | /api/v1/workers | List live active worker registrations |
+| GET | /api/v1/workers | List live active worker registrations (operator credential) |
+| POST | /api/v1/tenant/workflow-runs | Submit a workflow as the authenticated tenant |
+| GET | /api/v1/tenant/workflow-runs/{workflow_run_id} | Read the authenticated tenant's workflow |
+| GET | /api/v1/tenant/task-runs/{task_run_id} | Read the authenticated tenant's task |
+| POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel the authenticated tenant's task with expected_version |
 
 The submit request carries a caller-supplied unique workflow_run_id, a workflow ID, task IDs/dependencies, a retry policy, and optional base64 task input. Input is limited to 1 MiB after base64 decoding; the HTTP request body is limited to 2 MiB. A reused workflow-run ID returns 409 Conflict; no idempotent replay contract is implemented. Workflow and task inspection never return input/output bytes.
 
@@ -74,14 +81,14 @@ The HTTP process does not launch a worker. Run durable workers separately throug
 
 ## PostgreSQL-backed tests
 
-The HTTP API integration test uses AETHERFLOW_TEST_DATABASE_URL. It migrates the disposable database and exercises workflow submission, duplicate conflict handling, workflow/task reads, not-found responses, payload redaction, stale cancellation, and active worker discovery.
+The HTTP API integration test uses AETHERFLOW_TEST_DATABASE_URL. It migrates the disposable database and exercises platform and tenant route authentication, tenant role checks, workflow submission, duplicate conflict handling, own/foreign/missing workflow and task reads, payload redaction, stale cancellation, and active worker discovery.
 
 ~~~bash
 AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_api_test' \
   cargo test -p aetherflow-server --locked -- --test-threads=1
 ~~~
 
-PostgreSQL storage integration tests use the same variable:
+PostgreSQL storage integration tests use the same variable. The forced-RLS test creates a temporary restricted role with SET ROLE and verifies tenant filtering, worker-grant visibility, cross-tenant write denial, and digest-scoped credential lookup. These real-database suites require a disposable PostgreSQL test account with the privileges needed to create and grant a temporary role; the hosted CI service account provides this.
 
 ~~~bash
 AETHERFLOW_TEST_DATABASE_URL='postgres://aetherflow:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/aetherflow_storage_test' \
@@ -122,4 +129,4 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 
 ## Project state
 
-M00–M06 are complete. M07's v1 HTTP routes and PostgreSQL integration path are implemented, but the control plane is not production-ready. Per-principal authorization, tenant isolation, HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The current one-operator Bearer gate and Rustls PostgreSQL client are implemented. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
+M00–M06 are complete. M07 now includes tenant-authenticated HTTP routes, transaction-local tenant/worker context, PostgreSQL migrations v4–v6, forced RLS, and a separate restricted runtime DB role. Those additions still await hosted verification against the latest source commit, and the control plane is not production-ready. HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
