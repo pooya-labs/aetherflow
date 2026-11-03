@@ -87,9 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Loads a complete server certificate/key pair and enforces TLS for external binds.
-async fn load_http_tls_config(
-    address: SocketAddr,
-) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
+async fn load_http_tls_config(address: SocketAddr) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
     let certificate_path = std::env::var_os("AETHERFLOW_TLS_CERT_PATH").map(PathBuf::from);
     let private_key_path = std::env::var_os("AETHERFLOW_TLS_KEY_PATH").map(PathBuf::from);
     let use_tls = validate_http_transport(
@@ -146,7 +144,9 @@ fn ensure_rustls_crypto_provider() -> Result<(), std::io::Error> {
             .install_default()
             .is_err()
     {
-        return Err(std::io::Error::other("unable to install the rustls ring crypto provider"));
+        return Err(std::io::Error::other(
+            "unable to install the rustls ring crypto provider",
+        ));
     }
     Ok(())
 }
@@ -313,7 +313,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use axum_server::tls_rustls::RustlsConfig;
     use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
     use rcgen::generate_simple_self_signed;
@@ -438,7 +438,9 @@ mod tests {
             .expect("bind ephemeral TLS test port");
         let address = listener.local_addr().expect("read ephemeral TLS address");
         let server = axum_server::tls_rustls::from_tcp_rustls(
-            listener.into_std().expect("convert listener for axum-server"),
+            listener
+                .into_std()
+                .expect("convert listener for axum-server"),
             server_config,
         )
         .expect("construct Rustls HTTPS server");
@@ -456,7 +458,11 @@ mod tests {
             .await
             .expect("complete verified TLS handshake");
         assert_eq!(
-            tls_stream.get_ref().1.peer_certificates().expect("peer certificate")[0],
+            tls_stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .expect("peer certificate")[0],
             expected_certificate
         );
         drop(tls_stream);
@@ -471,13 +477,11 @@ mod tests {
             .await
             .expect("write raw HTTP bytes");
         let mut response_prefix = [0_u8; 5];
-        let read_result = tokio::time::timeout(
-            Duration::from_secs(2),
-            plaintext.read(&mut response_prefix),
-        )
-        .await
-        .expect("TLS listener should reject cleartext promptly")
-        .expect("read TLS alert or closed connection");
+        let read_result =
+            tokio::time::timeout(Duration::from_secs(2), plaintext.read(&mut response_prefix))
+                .await
+                .expect("TLS listener should reject cleartext promptly")
+                .expect("read TLS alert or closed connection");
         assert!(
             read_result == 0 || &response_prefix[..read_result] != b"HTTP/",
             "TLS listener must not return a cleartext HTTP response"
