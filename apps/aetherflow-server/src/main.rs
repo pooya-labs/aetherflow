@@ -310,6 +310,7 @@ fn parse_database_ssl_mode(value: Option<&str>) -> Result<SslMode, std::io::Erro
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Duration;
 
