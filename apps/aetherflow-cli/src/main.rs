@@ -86,11 +86,20 @@ impl ApiClient {
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
-        Ok(Self { http, base_url, token, tenant })
+        Ok(Self {
+            http,
+            base_url,
+            token,
+            tenant,
+        })
     }
 
     fn endpoint(&self, route: &str) -> Result<Url, Box<dyn Error>> {
-        let prefix = if self.tenant { "api/v1/tenant/" } else { "api/v1/" };
+        let prefix = if self.tenant {
+            "api/v1/tenant/"
+        } else {
+            "api/v1/"
+        };
         Ok(self.base_url.join(&format!("{prefix}{route}"))?)
     }
 
@@ -148,7 +157,9 @@ impl ApiClient {
 fn normalize_base_url(raw: &str) -> Result<Url, Box<dyn Error>> {
     let mut value = raw.trim().to_owned();
     if value.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "server URL cannot be empty").into());
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "server URL cannot be empty").into(),
+        );
     }
     if !value.ends_with('/') {
         value.push('/');
@@ -234,11 +245,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         None
     } else if cli.tenant {
         Some(std::env::var("AETHERFLOW_TENANT_TOKEN").map_err(|_| {
-            io::Error::new(io::ErrorKind::PermissionDenied, "AETHERFLOW_TENANT_TOKEN is required")
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "AETHERFLOW_TENANT_TOKEN is required",
+            )
         })?)
     } else {
         Some(std::env::var("AETHERFLOW_API_TOKEN").map_err(|_| {
-            io::Error::new(io::ErrorKind::PermissionDenied, "AETHERFLOW_API_TOKEN is required")
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "AETHERFLOW_API_TOKEN is required",
+            )
         })?)
     };
 
@@ -249,26 +266,42 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Command::Workflow { command } => match command {
             WorkflowCommand::Inspect { workflow_run_id } => {
                 validate_identifier(&workflow_run_id)?;
-                client.request(Method::GET, &format!("workflow-runs/{workflow_run_id}"), None, true).await?
+                client
+                    .request(
+                        Method::GET,
+                        &format!("workflow-runs/{workflow_run_id}"),
+                        None,
+                        true,
+                    )
+                    .await?
             }
             WorkflowCommand::Submit { file } => {
                 let request = read_submission(&file)?;
-                client.request(Method::POST, "workflow-runs", Some(request), true).await?
+                client
+                    .request(Method::POST, "workflow-runs", Some(request), true)
+                    .await?
             }
         },
         Command::Task { command } => match command {
             TaskCommand::Inspect { task_run_id } => {
                 validate_identifier(&task_run_id)?;
-                client.request(Method::GET, &format!("task-runs/{task_run_id}"), None, true).await?
+                client
+                    .request(Method::GET, &format!("task-runs/{task_run_id}"), None, true)
+                    .await?
             }
-            TaskCommand::Cancel { task_run_id, expected_version } => {
+            TaskCommand::Cancel {
+                task_run_id,
+                expected_version,
+            } => {
                 validate_identifier(&task_run_id)?;
-                client.request(
-                    Method::POST,
-                    &format!("task-runs/{task_run_id}/cancel"),
-                    Some(json!({ "expected_version": expected_version })),
-                    true,
-                ).await?
+                client
+                    .request(
+                        Method::POST,
+                        &format!("task-runs/{task_run_id}/cancel"),
+                        Some(json!({ "expected_version": expected_version })),
+                        true,
+                    )
+                    .await?
             }
         },
     };
