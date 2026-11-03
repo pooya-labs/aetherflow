@@ -857,7 +857,7 @@ fn format_timestamp(value: SystemTime) -> String {
 mod tests {
     use super::{AppState, authorization_matches, hash_api_token, router};
     use axum::body::{Body, to_bytes};
-    use axum::http::header::AUTHORIZATION;
+    use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use tower::ServiceExt;
 
@@ -1281,8 +1281,14 @@ mod tests {
         let reader_principal_id = format!("api-reader-{suffix}");
         let tenant_token = format!("tenant-api-token-{suffix}-abcdefghijklmnopqrstuvwxyz");
         let reader_token = format!("tenant-reader-token-{suffix}-abcdefghijklmnopqrstuvwxyz");
-        let tenant_token_digest = format!("{:x}", Sha256::digest(tenant_token.as_bytes()));
-        let reader_token_digest = format!("{:x}", Sha256::digest(reader_token.as_bytes()));
+        let tenant_token_digest = Sha256::digest(tenant_token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let reader_token_digest = Sha256::digest(reader_token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
 
         let database_client = pool
             .get()
@@ -1323,11 +1329,11 @@ mod tests {
                     &tenant_id,
                     &tenant_principal_id,
                     &tenant_token_digest,
-                    &tenant_token[..12],
+                    &&tenant_token[..12],
                     &format!("api-reader-credential-{suffix}"),
                     &reader_principal_id,
                     &reader_token_digest,
-                    &reader_token[..12],
+                    &&reader_token[..12],
                 ],
             )
             .await
