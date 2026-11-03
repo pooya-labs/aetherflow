@@ -11,8 +11,8 @@ use aetherflow_storage_postgres::{
     MembershipStatus, MigrationOutcome, NewTaskRun, PgMembershipRepository, PgStore,
     PgTaskRepository, PgTenantCredentialRepository, StorageError, TaskFailure,
 };
-use sha2::{Digest, Sha256};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use sha2::{Digest, Sha256};
 use tokio::{
     io::copy_bidirectional,
     net::{TcpListener, TcpStream},
@@ -962,7 +962,13 @@ async fn postgres_database_partition_then_epoch_takeover_recovers_task() {
             "INSERT INTO tenant_credentials
                (credential_id, tenant_id, principal_id, token_sha256, token_prefix, role, status)
              VALUES ($1, $2, $3, $4, $5, 'tenant_operator', 'active')",
-            &[&credential_id, &tenant_id, &principal_id, &tenant_digest, &token_prefix],
+            &[
+                &credential_id,
+                &tenant_id,
+                &principal_id,
+                &tenant_digest,
+                &token_prefix,
+            ],
         )
         .await
         .expect("create tenant credential for the partition test");
