@@ -51,15 +51,17 @@ fi
 
 mapfile -t protected_tables < <(
   sed -n '/FOREACH protected_table IN ARRAY ARRAY\[/,/    \]/p' "$rls_source" |
-    sed -nE "s/.*'([a-z_]+)'.*/\\1/p"
+    grep -oE "'[a-z_]+'" |
+    tr -d "'"
 )
 mapfile -t documented_tables < <(
   awk '
-    index($0, "SELECT count(*) AS forced_rls_tables") { in_query = 1 }
-    in_query { print }
-    in_query && index($0, "AND c.relforcerowsecurity;") { in_query = 0 }
+    index($0, "AND c.relname = ANY (ARRAY[") { in_array = 1; next }
+    in_array && index($0, "])") { exit }
+    in_array { print }
   ' "$upgrade_doc" |
-    sed -nE "s/.*'([a-z_]+)'.*/\\1/p"
+    grep -oE "'[a-z_]+'" |
+    tr -d "'"
 )
 
 if (( ${#protected_tables[@]} != 10 )); then
