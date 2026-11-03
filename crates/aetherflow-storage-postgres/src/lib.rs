@@ -54,9 +54,8 @@ const FORCE_TENANT_RLS_MIGRATION_SQL: &str = include_str!(
 const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str = include_str!(
     "../../aetherflow-runtime/migrations/postgres/0007_worker_tenant_grant_lock_rls.sql"
 );
-const DASHBOARD_HISTORY_INDEX_MIGRATION_SQL: &str = include_str!(
-    "../../aetherflow-runtime/migrations/postgres/0008_dashboard_history_indexes.sql"
-);
+const DASHBOARD_HISTORY_INDEX_MIGRATION_SQL: &str =
+    include_str!("../../aetherflow-runtime/migrations/postgres/0008_dashboard_history_indexes.sql");
 const MIGRATION_VERSION: i64 = 8;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
