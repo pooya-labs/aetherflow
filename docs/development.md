@@ -46,7 +46,7 @@ curl --fail -H "Authorization: Bearer $AETHERFLOW_API_TOKEN" \
 
 GET /health is public process liveness only; it does not prove that PostgreSQL is reachable. When DATABASE_URL is absent, the server deliberately starts in health-only mode and durable API routes return 503 database_unavailable.
 
-AETHERFLOW_BIND remains loopback-only. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Forced RLS and tenant-scoped storage are implemented but await hosted verification; HTTPS for the HTTP listener remains future work. Do not work around the non-loopback guard or expose the server to an untrusted network.
+AETHERFLOW_BIND remains loopback-only. The global operator token and tenant credentials are separate. Tenant routes are available at `/api/v1/tenant/*`; use a tenant credential for workflow submit/read and task read/cancel. The global worker inventory and compatibility routes remain operator-only. Forced RLS and tenant-scoped storage passed the exact-source Rust/PostgreSQL/NATS/Pages matrix on `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (run IDs 41602415273, 41602415207, 41602415169). HTTPS for the HTTP listener remains future work. Do not work around the non-loopback guard or expose the server to an untrusted network.
 
 ## HTTP v1 resources
 
@@ -129,4 +129,4 @@ The host harness verifies default-deny behavior, registers WasmTaskHandler in Ta
 
 ## Project state
 
-M00–M06 are complete. M07 now includes tenant-authenticated HTTP routes, transaction-local tenant/worker context, PostgreSQL migrations v4–v7, forced RLS, and a separate restricted runtime DB role. Those additions still await hosted verification against the latest source commit, and the control plane is not production-ready. HTTPS for the HTTP listener, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
+M00–M06 are complete. M07's tenant-authenticated routes, transaction-local contexts, PostgreSQL migrations v4–v7, forced RLS, restricted runtime role, tenant storage/API suites, and JetStream integration passed the exact-source hosted matrix at `74c4e368d6ce43c6b9abd98cf1132120b1bbd199` (Rust CI 41602415273, PostgreSQL/NATS 41602415207, Pages 41602415169). The control plane is still not production-ready: HTTPS for the HTTP listener, PostgreSQL TLS negative tests, CLI/SDK, dashboard, and operational hardening remain future work. The master roadmap (../ROADMAP.md) is the source of truth for exact completion and hosted CI status.
