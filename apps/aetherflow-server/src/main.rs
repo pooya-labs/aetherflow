@@ -1,14 +1,16 @@
-//! Loopback-only HTTP process for the AetherFlow v1 control plane.
+//! Loopback-default HTTP/HTTPS process for the AetherFlow v1 control plane.
 //!
-//! The process deliberately refuses non-loopback binds until HTTPS and the
-//! external-network deployment boundary are configured. DATABASE_URL is the
+//! Plain HTTP is permitted only on loopback. A non-loopback bind requires a
+//! complete, parseable Rustls certificate/key pair. DATABASE_URL is the
 //! restricted runtime connection; migrations use a separate owner connection.
 
 mod api;
 
 use std::error::Error;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
+use axum_server::tls_rustls::RustlsConfig;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio_postgres::Config;
 use tokio_postgres::config::SslMode;
@@ -21,12 +23,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let address = std::env::var("AETHERFLOW_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse::<SocketAddr>()?;
-    if !address.ip().is_loopback() {
-        return Err(format!(
-            "refusing non-loopback bind {address}: HTTPS and the external-network deployment boundary are not configured"
-        )
-        .into());
-    }
+    // Validate the external-listener security boundary before applying DDL.
+    // Non-loopback addresses are never served over cleartext HTTP.
+    let tls_config = load_http_tls_config(address).await?;
 
     let state = match std::env::var("DATABASE_URL") {
         Ok(runtime_database_url) => {
@@ -65,13 +64,90 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    println!(
-        "AetherFlow {} control plane listening on {}",
-        aetherflow_core::VERSION,
-        listener.local_addr()?
-    );
-    axum::serve(listener, api::router(state)).await?;
+    let router = api::router(state);
+    if let Some(tls_config) = tls_config {
+        println!(
+            "AetherFlow {} HTTPS control plane listening on {}",
+            aetherflow_core::VERSION,
+            address
+        );
+        axum_server::bind_rustls(address, tls_config)
+            .serve(router.into_make_service())
+            .await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        println!(
+            "AetherFlow {} loopback HTTP control plane listening on {}",
+            aetherflow_core::VERSION,
+            listener.local_addr()?
+        );
+        axum::serve(listener, router).await?;
+    }
+    Ok(())
+}
+
+/// Loads a complete server certificate/key pair and enforces TLS for external binds.
+async fn load_http_tls_config(
+    address: SocketAddr,
+) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
+    let certificate_path = std::env::var_os("AETHERFLOW_TLS_CERT_PATH").map(PathBuf::from);
+    let private_key_path = std::env::var_os("AETHERFLOW_TLS_KEY_PATH").map(PathBuf::from);
+    let use_tls = validate_http_transport(
+        address,
+        certificate_path.is_some(),
+        private_key_path.is_some(),
+    )?;
+
+    if !use_tls {
+        return Ok(None);
+    }
+
+    ensure_rustls_crypto_provider()?;
+    let certificate_path = certificate_path.expect("TLS mode requires a certificate path");
+    let private_key_path = private_key_path.expect("TLS mode requires a private-key path");
+    let config = RustlsConfig::from_pem_file(&certificate_path, &private_key_path)
+        .await
+        .map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unable to load the HTTPS certificate/key pair: {error}"),
+            )
+        })?;
+    Ok(Some(config))
+}
+
+/// Returns true when TLS is required; rejects incomplete pairs and remote HTTP.
+fn validate_http_transport(
+    address: SocketAddr,
+    certificate_configured: bool,
+    private_key_configured: bool,
+) -> Result<bool, std::io::Error> {
+    match (certificate_configured, private_key_configured) {
+        (true, true) => Ok(true),
+        (true, false) | (false, true) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHERFLOW_TLS_CERT_PATH and AETHERFLOW_TLS_KEY_PATH must be configured together",
+        )),
+        (false, false) if address.ip().is_loopback() => Ok(false),
+        (false, false) => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing non-loopback bind {address}: configure a trusted TLS certificate chain and private key"
+            ),
+        )),
+    }
+}
+
+/// Installs the explicitly selected Rustls crypto provider before constructing
+/// PostgreSQL or HTTPS TLS configurations.
+fn ensure_rustls_crypto_provider() -> Result<(), std::io::Error> {
+    if rustls::crypto::CryptoProvider::get_default().is_none()
+        && rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_err()
+    {
+        return Err(std::io::Error::other("unable to install the rustls ring crypto provider"));
+    }
     Ok(())
 }
 
@@ -174,15 +250,7 @@ async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>>
 }
 
 fn postgres_pool(database_url: &str) -> Result<Pool, Box<dyn Error>> {
-    if rustls::crypto::CryptoProvider::get_default().is_none()
-        && rustls::crypto::ring::default_provider()
-            .install_default()
-            .is_err()
-    {
-        return Err(
-            std::io::Error::other("unable to install the rustls ring crypto provider").into(),
-        );
-    }
+    ensure_rustls_crypto_provider()?;
 
     let ssl_mode = database_ssl_mode()?;
     let tls = if ssl_mode == SslMode::Disable {
@@ -242,11 +310,24 @@ fn parse_database_ssl_mode(value: Option<&str>) -> Result<SslMode, std::io::Erro
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::{routing::get, Router};
+    use axum_server::tls_rustls::RustlsConfig;
     use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+    use rcgen::generate_simple_self_signed;
+    use rustls::pki_types::ServerName;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio_postgres::config::SslMode;
     use tokio_postgres::{Config, NoTls};
+    use tokio_rustls::TlsConnector;
 
-    use super::{parse_database_ssl_mode, verify_runtime_database_role};
+    use super::{
+        ensure_rustls_crypto_provider, parse_database_ssl_mode, validate_http_transport,
+        verify_runtime_database_role,
+    };
 
     #[tokio::test]
     async fn runtime_role_verifier_rejects_owner_and_accepts_restricted_login() {
@@ -304,6 +385,105 @@ mod tests {
             verify_runtime_database_role(&member_pool).await.is_err(),
             "a runtime login that can SET ROLE to another role must be rejected"
         );
+    }
+
+    #[test]
+    fn external_bind_requires_a_complete_tls_pair() {
+        let loopback: SocketAddr = "127.0.0.1:8080".parse().expect("valid loopback address");
+        let remote: SocketAddr = "0.0.0.0:8443".parse().expect("valid wildcard address");
+
+        assert_eq!(
+            validate_http_transport(loopback, false, false).expect("loopback HTTP is allowed"),
+            false
+        );
+        assert_eq!(
+            validate_http_transport(loopback, true, true).expect("loopback HTTPS is allowed"),
+            true
+        );
+        assert!(validate_http_transport(loopback, true, false).is_err());
+        assert!(validate_http_transport(loopback, false, true).is_err());
+        assert!(validate_http_transport(remote, false, false).is_err());
+        assert!(validate_http_transport(remote, true, false).is_err());
+        assert!(validate_http_transport(remote, false, true).is_err());
+        assert_eq!(
+            validate_http_transport(remote, true, true).expect("remote HTTPS is allowed"),
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn https_listener_negotiates_tls_and_never_serves_plain_http() {
+        ensure_rustls_crypto_provider().expect("install ring crypto provider");
+        let certified = generate_simple_self_signed(vec!["localhost".to_owned()])
+            .expect("generate ephemeral HTTPS test certificate");
+        let expected_certificate = certified.cert.der().clone();
+
+        let mut trusted_roots = rustls::RootCertStore::empty();
+        trusted_roots
+            .add(expected_certificate.clone())
+            .expect("trust test certificate");
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(trusted_roots)
+            .with_no_client_auth();
+
+        let server_config = RustlsConfig::from_pem(
+            certified.cert.pem().into_bytes(),
+            certified.signing_key.serialize_pem().into_bytes(),
+        )
+        .await
+        .expect("parse generated server certificate and key");
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral TLS test port");
+        let address = listener.local_addr().expect("read ephemeral TLS address");
+        let server = axum_server::tls_rustls::from_tcp_rustls(
+            listener.into_std().expect("convert listener for axum-server"),
+            server_config,
+        )
+        .expect("construct Rustls HTTPS server");
+        let app = Router::new().route("/", get(|| async { "tls-only" }));
+        let server_task = tokio::spawn(server.serve(app.into_make_service()));
+
+        let tcp = TcpStream::connect(address)
+            .await
+            .expect("connect to HTTPS listener");
+        let connector = TlsConnector::from(Arc::new(client_config));
+        let server_name =
+            ServerName::try_from("localhost".to_owned()).expect("valid TLS server name");
+        let tls_stream = connector
+            .connect(server_name, tcp)
+            .await
+            .expect("complete verified TLS handshake");
+        assert_eq!(
+            tls_stream.get_ref().1.peer_certificates().expect("peer certificate")[0],
+            expected_certificate
+        );
+        drop(tls_stream);
+
+        // A raw HTTP request sent to the TLS socket must never receive an HTTP
+        // response; the TLS acceptor closes or emits a TLS alert instead.
+        let mut plaintext = TcpStream::connect(address)
+            .await
+            .expect("connect a negative plain-HTTP client");
+        plaintext
+            .write_all(b"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n")
+            .await
+            .expect("write raw HTTP bytes");
+        let mut response_prefix = [0_u8; 5];
+        let read_result = tokio::time::timeout(
+            Duration::from_secs(2),
+            plaintext.read(&mut response_prefix),
+        )
+        .await
+        .expect("TLS listener should reject cleartext promptly")
+        .expect("read TLS alert or closed connection");
+        assert!(
+            read_result == 0 || &response_prefix[..read_result] != b"HTTP/",
+            "TLS listener must not return a cleartext HTTP response"
+        );
+
+        server_task.abort();
     }
 
     #[test]
