@@ -89,8 +89,9 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     // Create two independent tenant trees and a tenant-bound API credential.
     client
         .batch_execute(
-            "INSERT INTO tenants (tenant_id, display_name) VALUES
-               ('tenant-a', 'Tenant A'), ('tenant-b', 'Tenant B');
+            "INSERT INTO tenants (tenant_id, display_name, status) VALUES
+               ('tenant-a', 'Tenant A', 'active'),
+               ('tenant-b', 'Tenant B', 'active');
              INSERT INTO tenant_principals
                (principal_id, tenant_id, display_name, status)
              VALUES ('principal-a', 'tenant-a', 'Tenant A operator', 'active');
