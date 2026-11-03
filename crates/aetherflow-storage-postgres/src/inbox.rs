@@ -17,6 +17,10 @@ use tokio_postgres::Transaction;
 
 use crate::membership::lock_worker_registration;
 use crate::task_repository::lock_worker_tenant_grant;
+use crate::tenant::{
+    apply_legacy_worker_context_to_transaction, apply_tenant_id_to_transaction,
+    apply_worker_identity_to_transaction,
+};
 use crate::{StorageError, WorkerRegistration};
 
 const MAX_LEASE_MILLIS: u128 = i64::MAX as u128;
@@ -203,7 +207,11 @@ impl PgInboxRepository {
             .map_err(|error| StorageError::Database(error.to_string()))?;
         if let Some(registration) = registration {
             lock_worker_registration(&transaction, registration, true).await?;
+            apply_worker_identity_to_transaction(&transaction, registration.worker_id()).await?;
+            apply_tenant_id_to_transaction(&transaction, tenant_id).await?;
             lock_worker_tenant_grant(&transaction, registration, tenant_id).await?;
+        } else {
+            apply_legacy_worker_context_to_transaction(&transaction).await?;
         }
 
         let row = transaction
@@ -481,9 +489,13 @@ async fn lock_claim_registration(
                 ));
             }
             lock_worker_registration(transaction, registration, require_active).await?;
+            apply_worker_identity_to_transaction(transaction, registration.worker_id()).await?;
+            apply_tenant_id_to_transaction(transaction, &claim.tenant_id).await?;
             lock_worker_tenant_grant(transaction, registration, &claim.tenant_id).await
         }
-        None if claim.tenant_id == "legacy-default" => Ok(()),
+        None if claim.tenant_id == "legacy-default" => {
+            apply_legacy_worker_context_to_transaction(transaction).await
+        },
         None => Err(StorageError::InvalidTenantCredential),
     }
 }
