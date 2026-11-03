@@ -31,6 +31,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+use crate::trace_context::extract_trace_context;
 
 const HTTP_LATENCY_BUCKETS: [(u64, &str); 10] = [
     (5_000, "0.005"),
@@ -345,7 +348,20 @@ async fn observe_http_request(
 
     // Deliberately omit URI, query, headers, and body: these may contain
     // resource identifiers, credentials, or customer payloads.
-    let span = tracing::info_span!("http.request", request_id, http_method = method);
+    let span = tracing::info_span!(
+        "http.request",
+        request_id,
+        http_method = method,
+        otel_trace_id = tracing::field::Empty
+    );
+    span.set_parent(extract_trace_context(request.headers()));
+    let trace_id = span
+        .context()
+        .span()
+        .span_context()
+        .trace_id()
+        .to_string();
+    span.record("otel_trace_id", tracing::field::display(trace_id));
     let response = next.run(request).instrument(span.clone()).await;
     let elapsed = started.elapsed();
     let status_code = response.status().as_u16();

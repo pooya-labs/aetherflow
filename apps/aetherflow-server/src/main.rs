@@ -5,6 +5,7 @@
 //! restricted runtime connection; migrations use a separate owner connection.
 
 mod api;
+mod trace_context;
 
 use std::error::Error;
 use std::net::SocketAddr;
@@ -17,11 +18,19 @@ use tokio_postgres::config::SslMode;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use aetherflow_storage_postgres::PgStore;
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::{Protocol, WithExportConfig};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    init_tracing();
+    let tracer_provider = init_tracing()?;
     let address = std::env::var("AETHERFLOW_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse::<SocketAddr>()?;
@@ -89,18 +98,83 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
         axum::serve(listener, router).await?;
     }
+    tracer_provider.shutdown()?;
     Ok(())
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
+fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
+    let export_disabled = std::env::var("OTEL_SDK_DISABLED")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+    let export_none = std::env::var("OTEL_TRACES_EXPORTER")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("none"));
+    let endpoint_configured = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .is_ok_and(|value| !value.trim().is_empty());
+
+    let protocol = std::env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+        .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL"))
+        .unwrap_or_else(|_| "http/protobuf".to_owned());
+    if endpoint_configured && !matches!(protocol.as_str(), "http/protobuf") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AetherFlow currently supports OTEL_EXPORTER_OTLP_* protocol http/protobuf only",
+        )
+        .into());
+    }
+
+    let resource = Resource::builder()
+        .with_service_name("aetherflow-server")
+        .build();
+    let tracer_provider = if endpoint_configured && !export_disabled && !export_none {
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpBinary)
+            .build()?;
+        SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(resource)
+            .build()
+    } else {
+        SdkTracerProvider::builder()
+            .with_resource(resource)
+            .build()
+    };
+
+    global::set_tracer_provider(tracer_provider.clone());
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let tracer = tracer_provider.tracer("aetherflow-server");
+    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
-        .with_env_filter(filter)
         .with_target(true)
         .with_current_span(true)
-        .with_span_list(true)
+        .with_span_list(true);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .with(telemetry_layer)
         .init();
+
+    if export_disabled || export_none || !endpoint_configured {
+        tracing::info!(
+            trace_context = "w3c",
+            otlp_export = false,
+            "OpenTelemetry tracing initialized without an exporter"
+        );
+    } else {
+        tracing::info!(
+            trace_context = "w3c",
+            otlp_export = true,
+            protocol = "http/protobuf",
+            "OpenTelemetry OTLP tracing exporter initialized"
+        );
+    }
+
+    Ok(tracer_provider)
 }
 
 /// Loads a complete server certificate/key pair and enforces TLS for external binds.
