@@ -18,9 +18,9 @@ The server bootstrap now requires two distinct connections when `DATABASE_URL` i
 - `AETHERFLOW_MIGRATION_DATABASE_URL`: migration/DDL owner connection used only to apply migrations.
 - `DATABASE_URL`: restricted application runtime connection.
 
-Before creating the API state, startup checks that the runtime role is not a superuser, does not have `BYPASSRLS`, `CREATEROLE`, or `CREATEDB`, cannot assume a protected-table owner or RLS-bypass role, owns none of the protected tables, and sees ENABLE + FORCE RLS on all ten protected tables. It continues to reject non-loopback HTTP binds; PostgreSQL TLS is not a substitute for HTTPS on the HTTP listener.
+Before creating the API state, startup checks that the runtime role is not a superuser, does not have `BYPASSRLS`, `CREATEROLE`, or `CREATEDB`, has no membership in any other PostgreSQL role, owns none of the protected tables, has no public-schema CREATE privilege or replication capability, and sees ENABLE + FORCE RLS on all ten protected tables. It continues to reject non-loopback HTTP binds; PostgreSQL TLS is not a substitute for HTTPS on the HTTP listener.
 
-The new migration, runtime-role check, and real `SET ROLE` RLS integration test are not yet hosted-verified. The runtime role must be granted only the DML/sequence privileges it needs and must not be a member of the migration-owner role. Transaction-local custom GUCs are application-controlled context, not tamper-proof claims: forced RLS is defense in depth against missing tenant predicates, not a defense against arbitrary SQL execution or SQL injection. Keep parameterized SQL and the loopback boundary.
+The new migration, runtime-role check, and real `SET ROLE` RLS integration test are not yet hosted-verified. The runtime role must be granted only the DML/sequence privileges it needs and must not be a member of any other PostgreSQL role. Transaction-local custom GUCs are application-controlled context, not tamper-proof claims: forced RLS is defense in depth against missing tenant predicates, not a defense against arbitrary SQL execution or SQL injection. Keep parameterized SQL and the loopback boundary.
 
 ## Context
 
