@@ -11,8 +11,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use aetherflow_core::domain::WorkerId;
-use aetherflow_storage_postgres::{InboxClaim, InboxClaimResult, PgInboxRepository, StorageError};
+use aetherflow_core::domain::{TenantId, WorkerId};
+use aetherflow_storage_postgres::{
+    InboxClaim, InboxClaimResult, PgInboxRepository, StorageError, WorkerRegistration,
+};
 use async_nats::jetstream::consumer::PullConsumer;
 use async_nats::jetstream::{AckKind, Message as JetStreamMessage};
 use futures_util::StreamExt;
@@ -26,6 +28,8 @@ pub type EventHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct JetStreamEvent {
     schema_version: u16,
+    #[serde(default = "legacy_default_tenant")]
+    tenant_id: String,
     event_id: String,
     aggregate_type: String,
     aggregate_id: String,
@@ -35,6 +39,12 @@ pub struct JetStreamEvent {
 }
 
 impl JetStreamEvent {
+    /// Returns the tenant that owns this event.
+    #[must_use]
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
     /// Returns the envelope schema version.
     #[must_use]
     pub const fn schema_version(&self) -> u16 {
@@ -133,6 +143,8 @@ pub enum NatsConsumerError {
     UnsupportedSchemaVersion(u16),
     /// The inbox lease is zero or cannot be represented in PostgreSQL.
     InvalidLeaseDuration,
+    /// A tenant-owned event was delivered to a consumer without a registered tenant grant.
+    TenantRegistrationRequired,
 }
 
 impl std::fmt::Display for NatsConsumerError {
@@ -151,6 +163,9 @@ impl std::fmt::Display for NatsConsumerError {
             }
             Self::InvalidLeaseDuration => {
                 formatter.write_str("consumer inbox lease duration is not representable")
+            }
+            Self::TenantRegistrationRequired => {
+                formatter.write_str("tenant-owned events require a registered worker with a tenant grant")
             }
         }
     }
@@ -184,24 +199,62 @@ pub struct NatsJetStreamConsumer<H: JetStreamEventHandler> {
     inbox: PgInboxRepository,
     consumer_name: String,
     worker_id: WorkerId,
+    registration: Option<WorkerRegistration>,
     lease_duration: Duration,
     handler: Arc<H>,
     metrics: ConsumerMetrics,
 }
 
 impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
-    /// Creates a consumer for an existing durable JetStream pull consumer.
+    /// Creates a consumer for the reserved legacy-default inbox.
     ///
-    /// Configure the JetStream consumer with explicit acknowledgements and an
-    /// `ack_wait` comfortably longer than the inbox lease. During long-running
-    /// handlers, this worker renews the PostgreSQL lease and sends JetStream
-    /// progress acknowledgements. The handler runs serially per instance;
-    /// concurrent instances coordinate through PostgreSQL.
+    /// This compatibility constructor cannot process tenant-owned events.
     pub fn new(
         consumer: PullConsumer,
         inbox: PgInboxRepository,
         consumer_name: impl Into<String>,
         worker_id: WorkerId,
+        lease_duration: Duration,
+        handler: Arc<H>,
+    ) -> Result<Self, NatsConsumerError> {
+        Self::build(
+            consumer,
+            inbox,
+            consumer_name.into(),
+            worker_id,
+            None,
+            lease_duration,
+            handler,
+        )
+    }
+
+    /// Creates a consumer whose registered worker grant gates tenant inbox access.
+    pub fn new_registered(
+        consumer: PullConsumer,
+        inbox: PgInboxRepository,
+        consumer_name: impl Into<String>,
+        registration: WorkerRegistration,
+        lease_duration: Duration,
+        handler: Arc<H>,
+    ) -> Result<Self, NatsConsumerError> {
+        let worker_id = registration.worker_id().clone();
+        Self::build(
+            consumer,
+            inbox,
+            consumer_name.into(),
+            worker_id,
+            Some(registration),
+            lease_duration,
+            handler,
+        )
+    }
+
+    fn build(
+        consumer: PullConsumer,
+        inbox: PgInboxRepository,
+        consumer_name: String,
+        worker_id: WorkerId,
+        registration: Option<WorkerRegistration>,
         lease_duration: Duration,
         handler: Arc<H>,
     ) -> Result<Self, NatsConsumerError> {
@@ -212,8 +265,9 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
         Ok(Self {
             consumer,
             inbox,
-            consumer_name: consumer_name.into(),
+            consumer_name,
             worker_id,
+            registration,
             lease_duration,
             handler,
             metrics: ConsumerMetrics::default(),
@@ -270,16 +324,34 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
             ));
         }
 
-        match self
-            .inbox
-            .try_claim(
-                &self.consumer_name,
-                &event.event_id,
-                &self.worker_id,
-                self.lease_duration,
-            )
-            .await?
-        {
+        let claim_result = match self.registration.as_ref() {
+            Some(registration) => {
+                let tenant_id = TenantId::parse(event.tenant_id.clone())
+                    .map_err(|error| NatsConsumerError::InvalidEnvelope(error.to_string()))?;
+                self.inbox
+                    .try_claim_for_tenant(
+                        &tenant_id,
+                        registration,
+                        &self.consumer_name,
+                        &event.event_id,
+                        self.lease_duration,
+                    )
+                    .await?
+            }
+            None if event.tenant_id == "legacy-default" => {
+                self.inbox
+                    .try_claim(
+                        &self.consumer_name,
+                        &event.event_id,
+                        &self.worker_id,
+                        self.lease_duration,
+                    )
+                    .await?
+            }
+            None => return Err(NatsConsumerError::TenantRegistrationRequired),
+        };
+
+        match claim_result {
             InboxClaimResult::AlreadyProcessed => {
                 self.metrics.duplicates.fetch_add(1, Ordering::Relaxed);
                 message
@@ -363,6 +435,10 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
             }
         }
     }
+}
+
+fn legacy_default_tenant() -> String {
+    "legacy-default".to_owned()
 }
 
 fn bounded_error(message: &str) -> String {
