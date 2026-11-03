@@ -370,12 +370,12 @@ mod tests {
 
     #[test]
     fn bounded_reader_stops_at_the_http_body_limit() {
-        let oversized = format!(
-            r#"{{"input":"{}"}}"#,
-            "x".repeat(MAX_HTTP_BODY_BYTES + 32)
-        );
+        let oversized = format!(r#"{{"input":"{}"}}"#, "x".repeat(MAX_HTTP_BODY_BYTES + 32));
         assert!(read_bounded(Cursor::new(oversized.into_bytes())).is_err());
-        assert_eq!(read_bounded(Cursor::new(b"{\"ok\":true}".to_vec())).unwrap(), "{\"ok\":true}");
+        assert_eq!(
+            read_bounded(Cursor::new(b"{\"ok\":true}".to_vec())).unwrap(),
+            "{\"ok\":true}"
+        );
     }
 
     #[test]
