@@ -2838,6 +2838,7 @@ impl PgTaskRepository {
             .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
+        apply_legacy_worker_context_to_transaction(&transaction).await?;
         let row = transaction
             .query_opt(
                 "SELECT workflow_id, status, version, created_at, updated_at
@@ -2896,12 +2897,22 @@ impl PgTaskRepository {
         &self,
         task_run_id: &TaskRunId,
     ) -> Result<DurableTaskRun, StorageError> {
-        let client = self
+        let mut client = self
             .pool
             .get()
             .await
             .map_err(|error| StorageError::Pool(error.to_string()))?;
-        load_snapshot_from_client(&client, task_run_id.as_str()).await
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        apply_legacy_worker_context_to_transaction(&transaction).await?;
+        let snapshot = load_snapshot(&transaction, task_run_id.as_str()).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        Ok(snapshot)
     }
 }
 
@@ -3097,33 +3108,6 @@ async fn append_outbox(
             StorageError::Database(format!("append outbox event {event_type}: {error:?}"))
         })?;
     Ok(())
-}
-
-async fn load_snapshot_from_client(
-    client: &deadpool_postgres::Object,
-    task_run_id: &str,
-) -> Result<DurableTaskRun, StorageError> {
-    let row = client
-        .query_opt(
-            "SELECT task_run_id, workflow_run_id, task_id, status, version, \
-                attempts_started, available_at, input_payload, output_payload, \
-                claimed_by, fencing_token, lease_expires_at, created_at, updated_at \
-         FROM task_runs WHERE tenant_id = 'legacy-default' AND task_run_id = $1",
-            &[&task_run_id],
-        )
-        .await
-        .map_err(|error| StorageError::Database(error.to_string()))?
-        .ok_or_else(|| StorageError::TaskRunNotFound(task_run_id.to_owned()))?;
-    let dependencies = client
-        .query(
-            "SELECT parent_task_run_id FROM task_run_dependencies \
-         WHERE tenant_id = 'legacy-default' AND child_task_run_id = $1
-         ORDER BY dependency_position",
-            &[&task_run_id],
-        )
-        .await
-        .map_err(|error| StorageError::Database(error.to_string()))?;
-    build_snapshot(row, dependencies)
 }
 
 async fn load_snapshot(
