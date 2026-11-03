@@ -42,14 +42,17 @@ impl TenantRole {
     /// Returns whether this role grants the requested tenant permission.
     #[must_use]
     pub const fn allows(self, permission: TenantPermission) -> bool {
-        match (self, permission) {
-            (Self::Admin, _) => true,
-            (Self::Operator, TenantPermission::Read)
-            | (Self::Operator, TenantPermission::Submit)
-            | (Self::Operator, TenantPermission::Cancel) => true,
-            (Self::Reader, TenantPermission::Read) => true,
-            _ => false,
-        }
+        matches!(
+            (self, permission),
+            (Self::Admin, _)
+                | (
+                    Self::Operator,
+                    TenantPermission::Read
+                        | TenantPermission::Submit
+                        | TenantPermission::Cancel
+                )
+                | (Self::Reader, TenantPermission::Read)
+        )
     }
 }
 
