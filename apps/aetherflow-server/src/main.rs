@@ -1,129 +1,65 @@
-//! Minimal bootstrap HTTP process.
+//! Loopback-only HTTP process for the AetherFlow v1 control plane.
 //!
-//! This standard-library server proves the workspace and health-check contract.
-//! It is intentionally not the production API server.
+//! The process deliberately refuses non-loopback binds until authentication
+//! and tenant isolation exist. DATABASE_URL enables durable routes; without it,
+//! only the health endpoint is available.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::process::ExitCode;
-use std::time::Duration;
+mod api;
 
-const MAX_REQUEST_BYTES: usize = 8 * 1024;
+use std::error::Error;
+use std::net::SocketAddr;
 
-fn main() -> ExitCode {
-    let address = std::env::var("AETHERFLOW_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use tokio_postgres::{Config, NoTls};
 
-    match run(&address) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("aetherflow-server: {error}");
-            ExitCode::FAILURE
-        }
+use aetherflow_storage_postgres::PgStore;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let address = std::env::var("AETHERFLOW_BIND")
+        .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
+        .parse::<SocketAddr>()?;
+    if !address.ip().is_loopback() {
+        return Err(format!(
+            "refusing non-loopback bind {address}: authentication and tenant isolation are not implemented"
+        )
+        .into());
     }
-}
 
-fn run(address: &str) -> std::io::Result<()> {
-    let listener = TcpListener::bind(address)?;
+    let state = match std::env::var("DATABASE_URL") {
+        Ok(database_url) => {
+            let pool = postgres_pool(&database_url)?;
+            let store = PgStore::from_pool(pool.clone());
+            let migration = store.migrate().await?;
+            eprintln!("PostgreSQL schema ready: {migration:?}");
+            api::AppState::from_pool(pool)
+        }
+        Err(_) => {
+            eprintln!(
+                "DATABASE_URL is not set; starting health-only mode, durable API routes return 503"
+            );
+            api::AppState::without_database()
+        }
+    };
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
     println!(
-        "AetherFlow {} listening on {}",
+        "AetherFlow {} control plane listening on {}",
         aetherflow_core::VERSION,
         listener.local_addr()?
     );
-
-    for incoming in listener.incoming() {
-        match incoming {
-            Ok(stream) => {
-                if let Err(error) = handle_connection(stream) {
-                    eprintln!("request error: {error}");
-                }
-            }
-            Err(error) => eprintln!("connection error: {error}"),
-        }
-    }
-
+    axum::serve(listener, api::router(state)).await?;
     Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    let mut request = vec![0_u8; MAX_REQUEST_BYTES];
-    let mut bytes_read = 0;
-
-    while bytes_read < request.len() {
-        let chunk_size = stream.read(&mut request[bytes_read..])?;
-        if chunk_size == 0 {
-            break;
-        }
-        bytes_read += chunk_size;
-
-        if request[..bytes_read]
-            .windows(4)
-            .any(|window| window == b"\r\n\r\n")
-        {
-            break;
-        }
-    }
-    let request_line = request[..bytes_read]
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap_or_default();
-    let mut parts = request_line.split(|byte| *byte == b' ');
-    let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
-
-    let (status, body) = if method == b"GET" && path == b"/health" {
-        ("200 OK", "{\"status\":\"ok\"}")
-    } else {
-        ("404 Not Found", "{\"error\":\"not_found\"}")
-    };
-
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    )?;
-    stream.flush()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::handle_connection;
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::thread;
-    use std::time::Duration;
-
-    fn request(path: &'static str) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let address = listener.local_addr().expect("read local address");
-
-        let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept connection");
-            handle_connection(stream).expect("handle request");
-        });
-
-        let mut client = TcpStream::connect(address).expect("connect");
-        write!(client, "GET {path} HTTP/1.1\r\n").expect("send request line");
-        thread::sleep(Duration::from_millis(10));
-        write!(client, "host: localhost\r\n\r\n").expect("send request headers");
-
-        let mut response = String::new();
-        client.read_to_string(&mut response).expect("read response");
-        server.join().expect("server thread");
-        response
-    }
-
-    #[test]
-    fn health_endpoint_returns_ok() {
-        let response = request("/health");
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with("{\"status\":\"ok\"}"));
-    }
-
-    #[test]
-    fn unknown_path_returns_not_found() {
-        let response = request("/not-a-route");
-        assert!(response.starts_with("HTTP/1.1 404 Not Found"));
-        assert!(response.ends_with("{\"error\":\"not_found\"}"));
-    }
+fn postgres_pool(database_url: &str) -> Result<Pool, Box<dyn Error>> {
+    let config: Config = database_url.parse()?;
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    Ok(Pool::builder(manager).max_size(16).build()?)
 }
