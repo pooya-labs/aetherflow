@@ -151,7 +151,6 @@ For every material regression, record: detection time; affected commit and Actio
 - [x] Add tenant-scoped workflow and task snapshot readers; include explicit tenant predicates for workflow/task/dependency rows and preserve foreign-tenant versus missing-resource 404 equivalence (implementation commit `ca1e942`, integration test commit `ccce8f5`).
 - [x] Add atomic tenant-owned workflow creation: persist tenant identity on workflow, tasks, dependency edges, and `workflow.started` outbox event; expose it through `PgWorkflowCoordinator::submit_workflow_for_tenant` (implementation commits `6c57c6e` and `02d5c57`; integration test commits `88bbc13` and `768dc77`).
 - [ ] Hosted-verify tenant credential lifecycle/role checks, transaction-local context cleanup, tenant-scoped reads, and tenant-owned workflow creation on the exact latest source SHA.
-- [ ] Hosted-verify tenant credential lifecycle/role checks and transaction-local context cleanup on the exact latest source SHA.
 - [ ] Make all API-facing repository methods require a typed TenantContext; apply transaction-local tenant state and forced row-level security using a restricted non-owner runtime role.
 - [ ] Add tenant-bound credentials and explicit route/command role checks; keep AETHERFLOW_API_TOKEN restricted to local/platform administration.
 - [ ] Add worker-to-tenant grants and tenant-scoped claims, task settlement, outbox dispatch, and inbox deduplication without weakening existing worker/task fencing.
@@ -180,7 +179,7 @@ For every material regression, record: detection time; affected commit and Actio
 
 ## Current checkpoint
 
-**Canonical branch:** main. Latest implementation/test commit at this checkpoint: `768dc77ca6160f8a60dc2e0ee8874928380003f7`; the ADR status was reconciled in documentation commit `d3d9ea98d73b6c8901c0deb5ffc9b71afd4d3e5c`. The next roadmap write follows these commits. Fetch the live tip and all file SHAs before every write. Development remains directly on main.
+**Canonical branch:** main. Latest source/test tree at this checkpoint: `a152ba4bc29a2fc2dbf9d8e672192943d906ad52` (format-only follow-up to implementation/test commit `768dc77ca6160f8a60dc2e0ee8874928380003f7`); the ADR status was reconciled in documentation commit `d3d9ea98d73b6c8901c0deb5ffc9b71afd4d3e5c`. The next roadmap write follows these commits. Fetch the live tip and all file SHAs before every write. Development remains directly on main.
 
 **Implementation baseline:** M00–M06 remain complete. The WASM scheduler integration is hosted-verified by Rust CI [41563269188](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41563269188); see its M06 session entry for the ABI/resource test history.
 
