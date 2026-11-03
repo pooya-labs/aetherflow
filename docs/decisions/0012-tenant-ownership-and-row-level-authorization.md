@@ -1,6 +1,6 @@
 # ADR-0012: Tenant ownership and row-level authorization
 
-- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant-aware inbox migration v5 and data-plane grant enforcement are implemented but await hosted verification; HTTP tenant authorization and forced RLS remain pending
+- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant inbox migration v5, data-plane grant enforcement, and tenant-authenticated HTTP routes are implemented but await hosted verification; transaction-local worker/event state and forced RLS remain pending
 - **Date:** 2026-11-03
 - **Scope:** Tenant identity, API principals and credentials, durable workflow ownership, worker grants, and PostgreSQL row-level isolation
 
@@ -22,7 +22,7 @@ The tenant-aware data-plane implementation now covers the main storage and event
 
 These newer tests have not yet been confirmed by a hosted run. Do not treat the v5 migration, the grant-gated event pipeline, or the latest Rust changes as CI-verified yet.
 
-The tenant data plane is materially scoped, but **row-level tenant isolation is not fully active**. HTTP routes still authenticate only through the global operator token and do not resolve tenant credentials or pass `TenantContext` into every API-facing repository operation. Forced RLS and a restricted non-owner runtime database role are not enabled. The global operator token remains a local/platform bootstrap credential, not a tenant identity. Keep the HTTP listener loopback-only and do not create customer tenant data until HTTP tenant authorization, database RLS, and the remaining deployment boundary are verified.
+The tenant data plane and initial HTTP tenant route group are materially scoped, but **row-level tenant isolation is not fully active**. New `/api/v1/tenant/*` submit/read/cancel routes authenticate through `PgTenantCredentialRepository`, derive `TenantContext` only from the stored credential, and enforce `Read`, `Submit`, and `Cancel` roles. Existing `/api/v1/*` and worker inventory routes remain behind the separate global platform-operator credential. The HTTP integration test covers tenant submit/read/cancel, cross-tenant 404 equivalence, invalid/platform credentials, and reader-role denials (implementation commit `29384d7`; HTTP test commits `2d97e53` and `f766f80`; OpenAPI commit `a5556ba`). These changes await hosted verification. Worker, promotion/recovery, outbox, and inbox transactions still rely on explicit tenant predicates and grant checks but do not all install transaction-local tenant GUC state. Forced RLS and a restricted non-owner/non-BYPASSRLS runtime database role are not enabled. The global operator token remains a local/platform bootstrap credential, not a tenant identity. Keep the HTTP listener loopback-only and do not create customer tenant data until transaction-local state, forced RLS, the restricted runtime role, and the remaining deployment boundary are verified.
 
 ## Context
 
