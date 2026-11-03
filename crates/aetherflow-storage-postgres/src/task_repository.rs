@@ -1930,8 +1930,7 @@ impl PgTaskRepository {
             )
             .await?;
             let id = parse_task_run_id(task_run_id)?;
-            let snapshot =
-                load_snapshot_for_tenant(&transaction, &tenant_id, id.as_str()).await?;
+            let snapshot = load_snapshot_for_tenant(&transaction, &tenant_id, id.as_str()).await?;
             recovered.push(RecoveredLease {
                 task_run: snapshot,
                 was_retried: will_retry,
