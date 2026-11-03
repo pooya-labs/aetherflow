@@ -66,7 +66,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 7] = [
+const MIGRATIONS: [Migration; 8] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -484,6 +484,7 @@ mod tests {
         let tenant_inbox_identity = migration_checksum(&MIGRATIONS[4]);
         let forced_tenant_rls = migration_checksum(&MIGRATIONS[5]);
         let worker_grant_lock_rls = migration_checksum(&MIGRATIONS[6]);
+        let dashboard_history_indexes = migration_checksum(&MIGRATIONS[7]);
         for checksum in [
             initial,
             inbox,
@@ -492,6 +493,7 @@ mod tests {
             tenant_inbox_identity,
             forced_tenant_rls,
             worker_grant_lock_rls,
+            dashboard_history_indexes,
         ] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
