@@ -62,7 +62,7 @@ impl AppState {
         let api_token_hash = hash_api_token(api_token)?;
         let tasks = Arc::new(PgTaskRepository::from_pool(pool.clone()));
         let tenant_credentials = PgTenantCredentialRepository::from_pool(pool.clone());
-        let membership = PgMembershipRepository::from_pool(pool);
+        let membership = PgMembershipRepository::from_pool(pool.clone());
         let coordinator = PgWorkflowCoordinator::new(Arc::clone(&tasks));
         Ok(Self {
             database: Some(Arc::new(AppDatabase {
@@ -246,11 +246,7 @@ fn require_tenant_permission(
     if context.allows(permission) {
         Ok(())
     } else {
-        Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "the authenticated tenant role does not permit this operation",
-        ))
+        Err(ApiError::forbidden())
     }
 }
 
