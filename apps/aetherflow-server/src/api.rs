@@ -889,11 +889,9 @@ mod tests {
 
         let membership = PgMembershipRepository::from_pool(pool);
         let node_id = NodeId::parse(format!("api-node-{suffix}")).expect("valid node ID");
-        let incarnation_id =
-            NodeIncarnationId::parse(format!("api-incarnation-{suffix}"))
-                .expect("valid node incarnation ID");
-        let worker_id =
-            WorkerId::parse(format!("api-worker-{suffix}")).expect("valid worker ID");
+        let incarnation_id = NodeIncarnationId::parse(format!("api-incarnation-{suffix}"))
+            .expect("valid node incarnation ID");
+        let worker_id = WorkerId::parse(format!("api-worker-{suffix}")).expect("valid worker ID");
         let node = membership
             .join_node(&node_id, &incarnation_id, Duration::from_secs(60))
             .await
