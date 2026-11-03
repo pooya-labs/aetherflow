@@ -1,6 +1,8 @@
 //! Durable consumer inbox and event deduplication.
 //!
-//! The inbox is a lease-based idempotency ledger keyed by (consumer, event ID).
+//! The compatibility inbox is a lease-based idempotency ledger restricted to
+//! legacy-default. Tenant-aware inbox operations need a tenant-scoped API and
+//! tenant-leading primary key before customer event processing is enabled.
 //! A broker message should be acknowledged only after the application has
 //! successfully completed its work and this repository has acknowledged the
 //! inbox claim. Delivery remains at-least-once: external side effects must use
@@ -20,11 +22,11 @@ const MAX_ERROR_BYTES: usize = 4096;
 
 const CLAIM_INBOX_SQL: &str = "
     INSERT INTO consumer_inbox AS inbox (
-        consumer_name, event_id, status, attempts, claim_owner,
+        tenant_id, consumer_name, event_id, status, attempts, claim_owner,
         claim_token, lease_expires_at
     )
     VALUES (
-        $1, $2, 'processing', 1, $3, 1,
+        'legacy-default', $1, $2, 'processing', 1, $3, 1,
         clock_timestamp() + ($4::BIGINT * INTERVAL '1 millisecond')
     )
     ON CONFLICT (consumer_name, event_id) DO UPDATE
@@ -171,7 +173,7 @@ impl PgInboxRepository {
 
         let row = client
             .query_opt(
-                "SELECT status FROM consumer_inbox WHERE consumer_name = $1 AND event_id = $2",
+                "SELECT status FROM consumer_inbox WHERE tenant_id = 'legacy-default' AND consumer_name = $1 AND event_id = $2",
                 &[&consumer_name, &event_id],
             )
             .await
@@ -215,7 +217,7 @@ impl PgInboxRepository {
                      last_error = NULL,
                      processed_at = clock_timestamp(),
                      updated_at = clock_timestamp()
-                 WHERE consumer_name = $1
+                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
                    AND event_id = $2
                    AND status = 'processing'
                    AND claim_owner = $3
@@ -238,7 +240,7 @@ impl PgInboxRepository {
         let row = client
             .query_opt(
                 "SELECT status, claim_token FROM consumer_inbox
-                 WHERE consumer_name = $1 AND event_id = $2",
+                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1 AND event_id = $2",
                 &[&claim.consumer_name, &claim.event_id],
             )
             .await
@@ -287,7 +289,7 @@ impl PgInboxRepository {
                  SET lease_expires_at =
                          clock_timestamp() + ($5::BIGINT * INTERVAL '1 millisecond'),
                      updated_at = clock_timestamp()
-                 WHERE consumer_name = $1
+                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
                    AND event_id = $2
                    AND status = 'processing'
                    AND claim_owner = $3
@@ -342,7 +344,7 @@ impl PgInboxRepository {
                      lease_expires_at = NULL,
                      last_error = $5,
                      updated_at = clock_timestamp()
-                 WHERE consumer_name = $1
+                 WHERE tenant_id = 'legacy-default' AND consumer_name = $1
                    AND event_id = $2
                    AND status = 'processing'
                    AND claim_owner = $3
