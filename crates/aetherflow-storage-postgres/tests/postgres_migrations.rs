@@ -52,11 +52,11 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     ];
     let applied = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 4, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 5, .. }))
         .count();
     let already_current = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 4, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 5, .. }))
         .count();
     assert_eq!(applied, 1);
     assert_eq!(already_current, 1);
@@ -1087,11 +1087,24 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
     let outcome = store
         .migrate()
         .await
-        .expect("apply tenant ownership migration to existing v3 schema");
+        .expect("apply tenant ownership and tenant inbox identity migrations to existing v3 schema");
     assert!(matches!(
         outcome,
-        MigrationOutcome::Applied { version: 4, .. }
+        MigrationOutcome::Applied { version: 5, .. }
     ));
+
+    let inbox_primary_key: String = client
+        .query_one(
+            "SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
+             FROM information_schema.key_column_usage
+             WHERE table_schema = 'public' AND table_name = 'consumer_inbox'
+               AND constraint_name = 'consumer_inbox_pkey'",
+            &[],
+        )
+        .await
+        .expect("read tenant-aware inbox primary key")
+        .get(0);
+    assert_eq!(inbox_primary_key, "tenant_id,consumer_name,event_id");
 
     for (table, expected) in [
         ("workflow_runs", 1_i64),
