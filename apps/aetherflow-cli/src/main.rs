@@ -219,7 +219,7 @@ fn validate_identifier(value: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_bounded(mut reader: impl Read) -> Result<String, Box<dyn Error>> {
+fn read_bounded(reader: impl Read) -> Result<String, Box<dyn Error>> {
     let mut limited = reader.take((MAX_HTTP_BODY_BYTES + 1) as u64);
     let mut raw = String::new();
     limited.read_to_string(&mut raw)?;
