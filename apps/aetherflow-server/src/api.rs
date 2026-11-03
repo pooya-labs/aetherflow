@@ -694,9 +694,8 @@ async fn list_workflow_runs(
     State(state): State<AppState>,
     query: Result<Query<WorkflowRunListQuery>, QueryRejection>,
 ) -> Result<Json<WorkflowRunListResponse>, ApiError> {
-    let Query(query) = query.map_err(|rejection| {
-        ApiError::invalid_request(rejection.into_response().status())
-    })?;
+    let Query(query) =
+        query.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
     validate_workflow_status_filter(query.status.as_deref())?;
     let limit = page_limit(query.limit)?;
     let position = workflow_run_cursor_position(query.cursor.as_deref())?;
@@ -733,9 +732,8 @@ async fn list_tenant_workflow_runs(
     query: Result<Query<WorkflowRunListQuery>, QueryRejection>,
 ) -> Result<Json<WorkflowRunListResponse>, ApiError> {
     require_tenant_permission(&context, TenantPermission::Read)?;
-    let Query(query) = query.map_err(|rejection| {
-        ApiError::invalid_request(rejection.into_response().status())
-    })?;
+    let Query(query) =
+        query.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
     validate_workflow_status_filter(query.status.as_deref())?;
     let limit = page_limit(query.limit)?;
     let position = workflow_run_cursor_position(query.cursor.as_deref())?;
@@ -774,16 +772,18 @@ async fn list_workflow_events(
 ) -> Result<Json<WorkflowEventListResponse>, ApiError> {
     let workflow_run_id =
         WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
-    let Query(query) = query.map_err(|rejection| {
-        ApiError::invalid_request(rejection.into_response().status())
-    })?;
+    let Query(query) =
+        query.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
     let limit = page_limit(query.limit)?;
     let cursor = query
         .cursor
         .as_deref()
         .map(decode_cursor::<EventHistoryCursor>)
         .transpose()?;
-    if cursor.as_ref().is_some_and(|value| value.before_event_id <= 0) {
+    if cursor
+        .as_ref()
+        .is_some_and(|value| value.before_event_id <= 0)
+    {
         return Err(ApiError::invalid_cursor());
     }
     let page = state
@@ -804,8 +804,15 @@ async fn list_workflow_events(
     } else {
         None
     };
-    let events = page.events().iter().map(WorkflowEventListItem::from).collect();
-    Ok(Json(WorkflowEventListResponse { events, next_cursor }))
+    let events = page
+        .events()
+        .iter()
+        .map(WorkflowEventListItem::from)
+        .collect();
+    Ok(Json(WorkflowEventListResponse {
+        events,
+        next_cursor,
+    }))
 }
 
 async fn list_tenant_workflow_events(
@@ -817,16 +824,18 @@ async fn list_tenant_workflow_events(
     require_tenant_permission(&context, TenantPermission::Read)?;
     let workflow_run_id =
         WorkflowRunId::parse(raw_workflow_run_id).map_err(|_| ApiError::invalid_identifier())?;
-    let Query(query) = query.map_err(|rejection| {
-        ApiError::invalid_request(rejection.into_response().status())
-    })?;
+    let Query(query) =
+        query.map_err(|rejection| ApiError::invalid_request(rejection.into_response().status()))?;
     let limit = page_limit(query.limit)?;
     let cursor = query
         .cursor
         .as_deref()
         .map(decode_cursor::<EventHistoryCursor>)
         .transpose()?;
-    if cursor.as_ref().is_some_and(|value| value.before_event_id <= 0) {
+    if cursor
+        .as_ref()
+        .is_some_and(|value| value.before_event_id <= 0)
+    {
         return Err(ApiError::invalid_cursor());
     }
     let page = state
@@ -848,8 +857,15 @@ async fn list_tenant_workflow_events(
     } else {
         None
     };
-    let events = page.events().iter().map(WorkflowEventListItem::from).collect();
-    Ok(Json(WorkflowEventListResponse { events, next_cursor }))
+    let events = page
+        .events()
+        .iter()
+        .map(WorkflowEventListItem::from)
+        .collect();
+    Ok(Json(WorkflowEventListResponse {
+        events,
+        next_cursor,
+    }))
 }
 
 async fn submit_workflow(
