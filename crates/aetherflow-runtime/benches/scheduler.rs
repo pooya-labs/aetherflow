@@ -17,9 +17,7 @@ use aetherflow_runtime::repository::{InMemoryRepository, TaskOutput};
 use aetherflow_runtime::scheduler::{
     SchedulerConfig, TaskContext, TaskExecutionError, TaskRegistry, TaskScheduler,
 };
-use aetherflow_runtime::workflow::{
-    SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask,
-};
+use aetherflow_runtime::workflow::{SequenceTaskRunIdGenerator, WorkflowDefinition, WorkflowTask};
 use tokio::runtime::Builder;
 use tokio::sync::watch;
 
@@ -139,7 +137,9 @@ fn parse_args() -> Result<Option<Config>, String> {
         return Err("warmup must not exceed 100".to_owned());
     }
     if config.sizes.is_empty() || config.sizes.iter().any(|size| *size > MAX_TASKS) {
-        return Err(format!("sizes must contain values between 1 and {MAX_TASKS}"));
+        return Err(format!(
+            "sizes must contain values between 1 and {MAX_TASKS}"
+        ));
     }
     if config.concurrencies.is_empty()
         || config
@@ -193,10 +193,7 @@ fn print_usage() {
 
 fn task_ids(size: usize) -> Result<Vec<TaskId>, String> {
     (0..size)
-        .map(|index| {
-            TaskId::parse(format!("task-{index:05}"))
-                .map_err(|error| error.to_string())
-        })
+        .map(|index| TaskId::parse(format!("task-{index:05}")).map_err(|error| error.to_string()))
         .collect()
 }
 
@@ -218,8 +215,7 @@ fn workflow_tasks(size: usize, scenario: Scenario) -> Result<Vec<WorkflowTask>, 
 }
 
 fn workflow_definition(size: usize, scenario: Scenario) -> Result<WorkflowDefinition, String> {
-    let workflow_id =
-        WorkflowId::parse("benchmark-workflow").map_err(|error| error.to_string())?;
+    let workflow_id = WorkflowId::parse("benchmark-workflow").map_err(|error| error.to_string())?;
     WorkflowDefinition::new(workflow_id, workflow_tasks(size, scenario)?)
         .map_err(|error| error.to_string())
 }
@@ -278,12 +274,9 @@ fn benchmark_scheduler(
 
         for task in definition.tasks() {
             registry
-                .register(
-                    task.task_id().clone(),
-                    |_context: TaskContext| async {
-                        Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
-                    },
-                )
+                .register(task.task_id().clone(), |_context: TaskContext| async {
+                    Ok::<TaskOutput, TaskExecutionError>(TaskOutput::empty())
+                })
                 .map_err(|error| error.to_string())?;
         }
 
@@ -342,12 +335,7 @@ fn benchmark_scheduler(
     Ok(())
 }
 
-fn print_summary(
-    scenario: &str,
-    task_count: usize,
-    concurrency: &str,
-    samples: &[Duration],
-) {
+fn print_summary(scenario: &str, task_count: usize, concurrency: &str, samples: &[Duration]) {
     let mut ordered = samples.to_vec();
     ordered.sort_unstable();
 
