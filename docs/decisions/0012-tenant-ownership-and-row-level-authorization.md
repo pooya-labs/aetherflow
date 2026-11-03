@@ -1,6 +1,6 @@
 # ADR-0012: Tenant ownership and row-level authorization
 
-- **Status:** Accepted; tenant ownership schema migration v4 implemented and hosted-verified; runtime tenant enforcement remains pending
+- **Status:** Accepted; tenant ownership migration v4 is hosted-verified; tenant-aware inbox migration v5 and data-plane grant enforcement are implemented but await hosted verification; HTTP tenant authorization and forced RLS remain pending
 - **Date:** 2026-11-03
 - **Scope:** Tenant identity, API principals and credentials, durable workflow ownership, worker grants, and PostgreSQL row-level isolation
 
