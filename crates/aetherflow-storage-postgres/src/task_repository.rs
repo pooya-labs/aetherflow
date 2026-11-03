@@ -3082,34 +3082,6 @@ async fn append_outbox_for_tenant(
     Ok(())
 }
 
-async fn append_outbox(
-    transaction: &Transaction<'_>,
-    aggregate_type: &str,
-    aggregate_id: &str,
-    aggregate_version: i64,
-    event_type: &str,
-    payload: serde_json::Value,
-) -> Result<(), StorageError> {
-    transaction
-        .execute(
-            "INSERT INTO outbox_events \
-         (aggregate_type, aggregate_id, aggregate_version, event_type, payload) \
-         VALUES ($1, $2, $3, $4, $5)",
-            &[
-                &aggregate_type,
-                &aggregate_id,
-                &aggregate_version,
-                &event_type,
-                &payload,
-            ],
-        )
-        .await
-        .map_err(|error| {
-            StorageError::Database(format!("append outbox event {event_type}: {error:?}"))
-        })?;
-    Ok(())
-}
-
 async fn load_snapshot(
     transaction: &Transaction<'_>,
     task_run_id: &str,
