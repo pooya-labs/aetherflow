@@ -1001,7 +1001,6 @@ impl PgTaskRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
-        let row = row.ok_or_else(|| StorageError::ClaimLost(task_run_id.as_str().to_owned()))?;
         let attempt_number: i32 = row.get(0);
         let expiry: SystemTime = row.get(1);
         let updated = transaction
@@ -1537,7 +1536,13 @@ impl PgTaskRepository {
             lock_worker_registration(&transaction, registration, false).await?;
         }
 
-        let tenant_filter = context.map(|value| value.tenant_id().as_str());
+        let tenant_filter = context.map(|value| value.tenant_id().as_str()).or_else(|| {
+            if registration.is_none() {
+                Some("legacy-default")
+            } else {
+                None
+            }
+        });
         let row = transaction
             .query_opt(
                 "SELECT tenant_id, status, attempts_started, version, claimed_by, fencing_token \
@@ -1550,6 +1555,9 @@ impl PgTaskRepository {
             .ok_or_else(|| StorageError::TaskRunNotFound(task_run_id.as_str().to_owned()))?;
 
         let tenant_id: String = row.get(0);
+        if let Some(registration) = registration {
+            lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        }
         let current_status: String = row.get(1);
         let attempts_started: i32 = row.get(2);
         let actual_version: i64 = row.get(3);
@@ -2049,7 +2057,13 @@ impl PgTaskRepository {
             lock_worker_registration(&transaction, registration, false).await?;
         }
 
-        let tenant_filter = context.map(|value| value.tenant_id().as_str());
+        let tenant_filter = context.map(|value| value.tenant_id().as_str()).or_else(|| {
+            if registration.is_none() {
+                Some("legacy-default")
+            } else {
+                None
+            }
+        });
         let workflow_row = transaction
             .query_opt(
                 "SELECT tenant_id, status FROM workflow_runs \
@@ -2062,6 +2076,9 @@ impl PgTaskRepository {
                 StorageError::WorkflowRunNotFound(workflow_run_id.as_str().to_owned())
             })?;
         let tenant_id: String = workflow_row.get(0);
+        if let Some(registration) = registration {
+            lock_worker_tenant_grant(&transaction, registration, &tenant_id).await?;
+        }
         let current_status_text: String = workflow_row.get(1);
         let current_status = parse_workflow_status(&current_status_text)?;
         if workflow_status_is_terminal(current_status) {
