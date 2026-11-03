@@ -1933,19 +1933,6 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
         assert_eq!(running.get::<_, String>(0), "running");
         let old_fencing_token: i64 = running.get(1);
         assert_eq!(running.get::<_, i32>(2), 1);
-        let node_lease_before: f64 = pool
-            .get()
-            .await
-            .expect("get pre-partition membership connection")
-            .query_one(
-                "SELECT extract(epoch FROM lease_expires_at)::double precision
-                 FROM cluster_nodes WHERE node_id = $1",
-                &[&node_id.as_str()],
-            )
-            .await
-            .expect("read node lease before packet partition")
-            .get(0);
-
         let workflow_event_id: i64 = pool
             .get()
             .await
@@ -1988,6 +1975,24 @@ async fn jetstream_combined_chaos_recovers_partitioned_worker_and_member_loss() 
             old_worker.try_wait().is_none(),
             "worker process should still be alive before packet partition"
         );
+
+        // Docker stop can take longer than the worker heartbeat interval. Take
+        // the baseline after that slow operation, while the worker still has
+        // database access, so a legitimate pre-partition heartbeat is not
+        // mistaken for a renewal that crossed the packet filter.
+        let node_lease_before: f64 = pool
+            .get()
+            .await
+            .expect("get pre-partition membership connection")
+            .query_one(
+                "SELECT extract(epoch FROM lease_expires_at)::double precision
+                 FROM cluster_nodes WHERE node_id = $1",
+                &[&node_id.as_str()],
+            )
+            .await
+            .expect("read node lease immediately before packet partition")
+            .get(0);
+
         packet_filter.install();
 
         let node_lease_after: f64 = pool
