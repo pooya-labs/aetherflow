@@ -1,8 +1,8 @@
 //! Loopback-only HTTP process for the AetherFlow v1 control plane.
 //!
-//! The process deliberately refuses non-loopback binds until authentication
-//! and tenant isolation exist. DATABASE_URL enables durable routes; without it,
-//! only the health endpoint is available.
+//! The process deliberately refuses non-loopback binds until HTTPS and the
+//! external-network deployment boundary are configured. DATABASE_URL is the
+//! restricted runtime connection; migrations use a separate owner connection.
 
 mod api;
 
@@ -23,24 +23,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .parse::<SocketAddr>()?;
     if !address.ip().is_loopback() {
         return Err(format!(
-            "refusing non-loopback bind {address}: authentication and tenant isolation are not implemented"
+            "refusing non-loopback bind {address}: HTTPS and the external-network deployment boundary are not configured"
         )
         .into());
     }
 
     let state = match std::env::var("DATABASE_URL") {
-        Ok(database_url) => {
+        Ok(runtime_database_url) => {
+            let migration_database_url =
+                std::env::var("AETHERFLOW_MIGRATION_DATABASE_URL").map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "AETHERFLOW_MIGRATION_DATABASE_URL is required when DATABASE_URL is configured",
+                    )
+                })?;
             let api_token = std::env::var("AETHERFLOW_API_TOKEN").map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "AETHERFLOW_API_TOKEN is required when DATABASE_URL is configured",
                 )
             })?;
-            let pool = postgres_pool(&database_url)?;
-            let store = PgStore::from_pool(pool.clone());
-            let migration = store.migrate().await?;
+
+            // DDL runs only through the separately provisioned migration-owner
+            // connection. The server never reuses this pool for API requests.
+            let migration_pool = postgres_pool(&migration_database_url)?;
+            let migration = PgStore::from_pool(migration_pool.clone()).migrate().await?;
             eprintln!("PostgreSQL schema ready: {migration:?}");
-            api::AppState::from_pool(pool, &api_token)?
+            drop(migration_pool);
+
+            // The API pool must be a non-owner, non-superuser, non-BYPASSRLS
+            // role. Refuse startup if even one tenant table is not FORCE RLS.
+            let runtime_pool = postgres_pool(&runtime_database_url)?;
+            verify_runtime_database_role(&runtime_pool).await?;
+            api::AppState::from_pool(runtime_pool, &api_token)?
         }
         Err(_) => {
             eprintln!(
@@ -57,6 +72,91 @@ async fn main() -> Result<(), Box<dyn Error>> {
         listener.local_addr()?
     );
     axum::serve(listener, api::router(state)).await?;
+    Ok(())
+}
+
+/// Ensures the API is connected through a role that cannot bypass tenant RLS.
+async fn verify_runtime_database_role(pool: &Pool) -> Result<(), Box<dyn Error>> {
+    const RLS_TABLES: [&str; 10] = [
+        "workflow_runs",
+        "task_runs",
+        "task_run_dependencies",
+        "task_attempts",
+        "outbox_events",
+        "consumer_inbox",
+        "tenants",
+        "tenant_principals",
+        "tenant_credentials",
+        "worker_tenant_grants",
+    ];
+
+    let client = pool.get().await?;
+    let row = client
+        .query_one(
+            "SELECT
+                role.rolsuper,
+                role.rolbypassrls,
+                role.rolcreaterole,
+                role.rolcreatedb,
+                EXISTS (
+                    SELECT 1
+                    FROM pg_class AS relation
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = 'public'
+                      AND relation.relname = ANY($1)
+                      AND relation.relkind IN ('r', 'p')
+                      AND (
+                          relation.relowner = role.oid
+                          OR pg_has_role(role.oid, relation.relowner, 'MEMBER')
+                      )
+                ) AS owns_or_can_assume_table_owner,
+                EXISTS (
+                    SELECT 1
+                    FROM pg_roles AS elevated_role
+                    WHERE elevated_role.oid <> role.oid
+                      AND (elevated_role.rolsuper OR elevated_role.rolbypassrls)
+                      AND pg_has_role(role.oid, elevated_role.oid, 'MEMBER')
+                ) AS can_assume_rls_bypass_role,
+                (
+                    SELECT count(*)::BIGINT
+                    FROM pg_class AS relation
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = 'public'
+                      AND relation.relname = ANY($1)
+                      AND relation.relkind IN ('r', 'p')
+                      AND relation.relrowsecurity
+                      AND relation.relforcerowsecurity
+                ) AS forced_rls_table_count
+             FROM pg_roles AS role
+             WHERE role.rolname = current_user",
+            &[&RLS_TABLES[..]],
+        )
+        .await?;
+    let is_superuser: bool = row.get(0);
+    let bypasses_rls: bool = row.get(1);
+    let can_create_roles: bool = row.get(2);
+    let can_create_databases: bool = row.get(3);
+    let owns_or_can_assume_table_owner: bool = row.get(4);
+    let can_assume_rls_bypass_role: bool = row.get(5);
+    let forced_rls_table_count: i64 = row.get(6);
+
+    if is_superuser
+        || bypasses_rls
+        || can_create_roles
+        || can_create_databases
+        || owns_or_can_assume_table_owner
+        || can_assume_rls_bypass_role
+        || forced_rls_table_count != RLS_TABLES.len() as i64
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "DATABASE_URL must use a restricted runtime role: no superuser, BYPASSRLS, role/database creation, protected-table ownership, or membership in an owner/bypass role; all ten tenant tables must have ENABLE and FORCE ROW LEVEL SECURITY",
+        )
+        .into());
+    }
+
     Ok(())
 }
 
