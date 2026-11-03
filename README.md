@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M06 are complete. M07 now includes platform and tenant-authenticated Axum routes, tenant-scoped task/workflow storage, grant-gated workers and event processing, PostgreSQL migrations v4–v7, forced RLS on ten tenant-owned tables, and worker grant row-lock policies, and separate migration-owner/runtime database pools. These newer changes and their integration tests are committed but await hosted verification on the current source tree. The listener remains loopback-only; HTTPS, CLI/SDK, dashboard, and operational hardening remain open. AetherFlow is experimental and is not production-ready.
+> **Project status:** M00–M06 are complete. M07 now includes platform and tenant-authenticated Axum routes, tenant-scoped task/workflow storage, grant-gated workers and event processing, PostgreSQL migrations v4–v7, forced RLS on ten tenant-owned tables, worker grant row-lock policies, and separate migration-owner/runtime database pools. This implementation passed Rust CI, PostgreSQL 18 + three-node NATS, and Pages on the same source SHA [74c4e368](https://github.com/pooya16pg-spec/aetherflow/commit/74c4e368d6ce43c6b9abd98cf1132120b1bbd199). The listener remains loopback-only; HTTPS, PostgreSQL TLS negative tests, CLI/SDK, dashboard, and operational hardening remain open. AetherFlow is experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/).
 
@@ -68,13 +68,13 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-M00–M06 are complete and hosted-verified. M07's HTTP control plane, tenant credential routes, tenant-scoped repository paths, worker grants, tenant-aware outbox/inbox, and forced-RLS schema are implemented. Migrations v5/v6, RLS policies, the real `SET ROLE` regression suite, the server's restricted-role verifier, and recent tenant changes await hosted CI on the exact latest source SHA. See [ROADMAP.md](ROADMAP.md) for the authoritative verification state.
+M00–M06 are complete and hosted-verified. M07's tenant credential routes, role checks, tenant-scoped repository paths, worker grants, tenant-aware outbox/inbox and JetStream, PostgreSQL migrations v4–v7, forced RLS, and migration-owner/restricted-runtime split passed the exact-source hosted matrix at `74c4e368d6ce43c6b9abd98cf1132120b1bbd199`: Rust CI [41602415273](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415273), PostgreSQL/NATS [41602415207](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415207), and Pages [41602415169](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41602415169).
 
-The tenant routes support workflow submission/read and task read/cancel with explicit Read/Submit/Cancel role checks. Platform/operator routes remain separate. Workflow definitions are submitted as snapshots rather than stored as reusable versioned definitions. Duplicate workflow-run IDs return 409; v1 does not promise idempotent replay.
+The tenant routes support workflow submission/read and task read/cancel with explicit Read/Submit/Cancel checks. Platform/operator routes remain separate. Workflow definitions are submitted as snapshots rather than stored as reusable versioned definitions. Duplicate workflow-run IDs return 409; v1 does not promise idempotent replay.
 
-The database pools are intentionally separate: `AETHERFLOW_MIGRATION_DATABASE_URL` is the migration-owner URL; `DATABASE_URL` is the restricted runtime URL. The server refuses an owner, superuser, BYPASSRLS, CREATEROLE, CREATEDB, or owner/bypass-member runtime role and refuses startup unless all protected tables have FORCE RLS. Keep HTTP loopback-only until HTTPS, negative TLS tests, and a threat-model review are complete.
+Database pools are deliberately separate: `AETHERFLOW_MIGRATION_DATABASE_URL` is the migration-owner URL; `DATABASE_URL` is the restricted runtime URL. Startup rejects SUPERUSER, BYPASSRLS, REPLICATION, CREATEROLE, CREATEDB, public-schema CREATE, protected-table ownership, or any role membership, and refuses startup unless all protected tables have FORCE RLS. The HTTP listener still rejects non-loopback binds. Keep it loopback-only until an HTTPS listener and negative TLS tests are implemented and verified.
 
-The latest verified implementation and remaining M07 work are tracked in [ROADMAP.md](ROADMAP.md). License selection remains an owner-only release decision, and property-based lifecycle tests remain deferred engineering debt.
+License selection remains an owner-only release decision, and property-based lifecycle tests remain deferred engineering debt.
 
 ## License
 
