@@ -313,6 +313,44 @@ mod tests {
         assert_eq!(after_commit.get::<_, String>(1), "");
         assert_eq!(after_commit.get::<_, String>(2), "");
 
+        // Credential lookup temporarily installs only a digest, never
+        // the raw token. The digest must disappear when this pooled
+        // connection is returned to the pool.
+        let credential_transaction = client
+            .transaction()
+            .await
+            .expect("begin credential lookup transaction");
+        let credential_digest = "a".repeat(64);
+        credential_transaction
+            .query_one(
+                "SELECT set_config('aetherflow.credential_sha256', $1, true)",
+                &[&credential_digest],
+            )
+            .await
+            .expect("install credential digest");
+        let active_digest: String = credential_transaction
+            .query_one(
+                "SELECT current_setting('aetherflow.credential_sha256', true)",
+                &[],
+            )
+            .await
+            .expect("read active credential digest")
+            .get(0);
+        assert_eq!(active_digest, credential_digest);
+        credential_transaction
+            .commit()
+            .await
+            .expect("commit credential lookup transaction");
+        let cleared_digest: String = client
+            .query_one(
+                "SELECT COALESCE(current_setting('aetherflow.credential_sha256', true), '')",
+                &[],
+            )
+            .await
+            .expect("inspect credential digest cleanup")
+            .get(0);
+        assert_eq!(cleared_digest, "");
+
         // A worker transaction receives only its worker identity until a
         // selected, grant-validated tenant is applied.
         let worker_transaction = client
