@@ -158,6 +158,24 @@ async fn run() -> Result<(), Box<dyn Error>> {
             Duration::from_secs(60),
         )
         .await?;
+
+    // The HTTP operator endpoint creates legacy-default work. Registered
+    // workers have no tenant GUC by default, so RLS requires an explicit
+    // worker grant before this worker can promote or claim that work.
+    // This admin-side grant is scoped to the disposable restore fixture.
+    let admin_client = admin_pool.get().await?;
+    admin_client
+        .execute(
+            "INSERT INTO worker_tenant_grants (tenant_id, worker_id, status)
+             VALUES ('legacy-default', $1, 'active')
+             ON CONFLICT (tenant_id, worker_id) DO UPDATE
+             SET status = 'active',
+                 granted_at = clock_timestamp(),
+                 expires_at = NULL,
+                 revoked_at = NULL",
+            &[&WORKER_ID],
+        )
+        .await?;
     let worker_config = PostgresWorkerConfig::new(
         NonZeroUsize::new(1).expect("one is non-zero"),
         Duration::from_millis(5),
@@ -228,7 +246,6 @@ async fn run() -> Result<(), Box<dyn Error>> {
             .map_err(|error| error.to_string())
     });
 
-    let admin_client = admin_pool.get().await?;
     let aggregate_ids = vec![
         workflow_run_id.as_str().to_owned(),
         task_run_id.as_str().to_owned(),
