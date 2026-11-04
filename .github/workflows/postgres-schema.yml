@@ -88,7 +88,39 @@ jobs:
             sudo apt-get update
             sudo apt-get install --yes "${packages[@]}"
           fi
+          # pg_dump and pg_restore must match the PostgreSQL server major.
+          # Ubuntu 24.04 includes PostgreSQL 16 clients while this fixture uses 18.
+          server_version_num="$(psql --no-align --tuples-only --command 'SHOW server_version_num')"
+          server_major="$((server_version_num / 10000))"
+          dump_major="$(pg_dump --version | awk '{print $3}' | cut -d. -f1)"
+          if [[ "$dump_major" != "$server_major" ]]; then
+            sudo apt-get install --yes ca-certificates curl gnupg
+            curl --fail --show-error --silent \
+              --output "$RUNNER_TEMP/apt.postgresql.org.asc" \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc
+            fingerprint="$(gpg --show-keys --with-colons "$RUNNER_TEMP/apt.postgresql.org.asc" \
+              | awk -F: '$1 == "fpr" { print $10; exit }')"
+            test "$fingerprint" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo install -m 0644 "$RUNNER_TEMP/apt.postgresql.org.asc" \
+              /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+            . /etc/os-release
+            printf 'Types: deb\\nURIs: https://apt.postgresql.org/pub/repos/apt\\nSuites: %s-pgdg\\nArchitectures: %s\\nComponents: main\\nSigned-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc\\n' \
+              "$VERSION_CODENAME" "$(dpkg --print-architecture)" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
+            sudo apt-get update
+            sudo apt-get install --yes "postgresql-client-$server_major"
+            echo "/usr/lib/postgresql/$server_major/bin" >> "$GITHUB_PATH"
+            export PATH="/usr/lib/postgresql/$server_major/bin:$PATH"
+          fi
+          dump_major="$(pg_dump --version | awk '{print $3}' | cut -d. -f1)"
+          restore_major="$(pg_restore --version | awk '{print $3}' | cut -d. -f1)"
+          test "$dump_major" = "$server_major"
+          test "$restore_major" = "$server_major"
+
           psql --version
+          pg_dump --version
+          pg_restore --version
           iptables --version
           sudo -n iptables -S OUTPUT >/dev/null
           test "$(sudo -n -u nobody -- id -u)" = "$(id -u nobody)"
