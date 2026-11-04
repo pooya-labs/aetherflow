@@ -8,9 +8,9 @@ description = "Host harness for the minimal AetherFlow ABI v1 plugin example."
 publish = false
 
 [dependencies]
-aetherflow-core = { path = "../../../crates/aetherflow-core" }
-aetherflow-runtime = { path = "../../../crates/aetherflow-runtime" }
-aetherflow-wasm = { path = "../../../crates/aetherflow-wasm" }
+aetherflow-core = { version = "0.1.0", path = "../../../crates/aetherflow-core" }
+aetherflow-runtime = { version = "0.1.0", path = "../../../crates/aetherflow-runtime" }
+aetherflow-wasm = { version = "0.1.0", path = "../../../crates/aetherflow-wasm" }
 tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 wit-component = "=0.254.2"
 
