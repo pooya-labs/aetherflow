@@ -380,6 +380,51 @@ jobs:
           createdb --host 127.0.0.1 --username aetherflow aetherflow_nats_test
           cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
 
+      - name: Create isolated end-to-end load databases
+        run: |
+          createdb --host 127.0.0.1 --username aetherflow aetherflow_load_fanout
+          createdb --host 127.0.0.1 --username aetherflow aetherflow_load_chain
+
+      - name: Run PostgreSQL and JetStream fan-out load profile
+        env:
+          AETHERFLOW_LOAD_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_load_fanout
+          AETHERFLOW_LOAD_NATS_URL: nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224
+          AETHERFLOW_LOAD_SHAPE: fan_out
+          AETHERFLOW_LOAD_WORKFLOWS: "16"
+          AETHERFLOW_LOAD_TASKS: "4"
+          AETHERFLOW_LOAD_PAYLOAD_BYTES: "256"
+          AETHERFLOW_LOAD_WORKERS: "4"
+          AETHERFLOW_LOAD_PRODUCER_RATE: "8"
+          AETHERFLOW_LOAD_HANDLER_DELAY_MS: "1"
+          AETHERFLOW_LOAD_TIMEOUT_SECS: "120"
+          AETHERFLOW_LOAD_OUTPUT: target/aetherflow-end-to-end-load-fan-out.csv
+        run: cargo +1.99.1 run -p aetherflow-transport-nats --example end_to_end_load --locked
+
+      - name: Run PostgreSQL and JetStream chain load profile
+        env:
+          AETHERFLOW_LOAD_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_load_chain
+          AETHERFLOW_LOAD_NATS_URL: nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224
+          AETHERFLOW_LOAD_SHAPE: chain
+          AETHERFLOW_LOAD_WORKFLOWS: "16"
+          AETHERFLOW_LOAD_TASKS: "4"
+          AETHERFLOW_LOAD_PAYLOAD_BYTES: "256"
+          AETHERFLOW_LOAD_WORKERS: "4"
+          AETHERFLOW_LOAD_PRODUCER_RATE: "8"
+          AETHERFLOW_LOAD_HANDLER_DELAY_MS: "1"
+          AETHERFLOW_LOAD_TIMEOUT_SECS: "120"
+          AETHERFLOW_LOAD_OUTPUT: target/aetherflow-end-to-end-load-chain.csv
+        run: cargo +1.99.1 run -p aetherflow-transport-nats --example end_to_end_load --locked
+
+      - name: Upload end-to-end PostgreSQL and JetStream load results
+        uses: actions/upload-artifact@v7
+        with:
+          name: aetherflow-end-to-end-load-${{ github.sha }}
+          path: |
+            target/aetherflow-end-to-end-load-fan-out.csv
+            target/aetherflow-end-to-end-load-chain.csv
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Verify schema records and reject invalid invariants
         run: |
           psql --set ON_ERROR_STOP=1 <<'SQL'
