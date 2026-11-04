@@ -296,9 +296,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     .await?
                     .get(0);
                 final_counts = (published, pending, inbox);
-                let in_process = i64::try_from(consumer_metrics.snapshot().processed)?;
+                let metrics = consumer_metrics.snapshot();
+                let in_process = i64::try_from(metrics.processed)?;
+                let duplicates = i64::try_from(metrics.duplicates)?;
 
-                if published > 0 && pending == 0 && inbox == published && in_process == published {
+                if published > 0
+                    && pending == 0
+                    && inbox == published
+                    && in_process == published
+                    && duplicates == 0
+                {
                     break;
                 }
             }
