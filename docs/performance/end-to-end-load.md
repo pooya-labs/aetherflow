@@ -133,8 +133,50 @@ All throughput values are whole-run rates, including setup and transport drain. 
 
 The archived artifact is `aetherflow-end-to-end-baseline-b9d30659caed6c525ec6a245f5b8d44bf5cc2dd3` (90-day retention). It includes all ten per-run CSVs, a combined sample CSV, summary statistics, and `metadata.json` with the environment fingerprint.
 
+
+## Second five-repeat session — separate CPU fingerprint (2026-11-04)
+
+A second PostgreSQL/NATS five-repeat session completed in CI [41860721271](https://github.com/pooya-labs/aetherflow/actions/runs/41860721271) attempt 2 on exact source `db204488edc219d105552ee646245054ac9ed913`. The job passed storage integration, restricted-role/API/TLS checks, three-node JetStream transport, schema invariants, both five-repeat workload profiles, and the isolated PostgreSQL/JetStream restore rehearsal. Each workload shape again reconciled 896 published outbox events with 896 processed inbox rows, with zero duplicates and zero errors.
+
+### Environment fingerprint (second session)
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24` / `20261026.354.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 7763 64-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,344,576 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.6 (Debian 18.6-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte input |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+### Results (second session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 5.701 | 5.141 |
+| Mean workflows/s | 5.561 | 5.164 |
+| Sample standard deviation, workflows/s | 0.220 | 0.077 |
+| Observed range, workflows/s | 5.295–5.733 | 5.111–5.298 |
+| Median workflow p50 | 4,235.195 ms | 4,363.544 ms |
+| Median workflow p95 | 8,192.001 ms | 8,454.851 ms |
+| Sample standard deviation, p95 | 44.981 ms | 34.709 ms |
+| Median whole-run elapsed | 11,225.796 ms | 12,448.748 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The archived artifact is `aetherflow-end-to-end-baseline-db204488edc219d105552ee646245054ac9ed913` (run [41860721271](https://github.com/pooya-labs/aetherflow/actions/runs/41860721271), attempt 2). It contains all ten per-run CSVs, a combined sample CSV, summary statistics, and `metadata.json`.
+
+**Comparison boundary:** the first session ran on an AMD EPYC 9V45 host; this session ran on an AMD EPYC 7763 host. The runner image, kernel, vCPU allocation, memory, Rust/PostgreSQL/NATS versions, and workload match, but the CPU model does not. Keep these as separate fingerprinted baselines; do not pool the samples or interpret the throughput difference as a regression. A further independent session matching the full CPU fingerprint is still required before setting automated regression thresholds.
 ### Interpretation and remaining validation
 
-This is a repeat baseline on one ephemeral hosted VM, not a dedicated reserved performance host, production capacity result, or customer-facing SLO. The within-session variation is low for the chain profile and modest for fan-out, but one VM session cannot characterize day-to-day runner variance. Run the same profile in a second independent hosted session and compare the complete environment fingerprint before setting any regression threshold. No automated performance threshold is enabled yet.
+Both archived profiles are five-repeat baselines on ephemeral hosted VMs, not dedicated reserved performance hosts, production capacity results, or customer-facing SLOs. Within-session variation is recorded for each fingerprint. Because the CPU model differs between the two sessions, their throughput values are not a matched day-to-day repeatability comparison and must not be pooled. Run the same profile in an independent session that matches the complete CPU/environment fingerprint before setting any automated regression threshold. No automated performance threshold is enabled.
 
 The harness still exercises the coordinator directly rather than HTTP/TLS/authentication, uses the `legacy-default` compatibility tenant path, one worker process, and one inbox consumer loop. It does not measure multi-process scaling, per-tenant authorization overhead, external side effects, or production sizing.
