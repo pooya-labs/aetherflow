@@ -321,7 +321,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     workflow.status()
                 )));
             }
-            WorkflowStatus::Running => {}
+            WorkflowStatus::Pending | WorkflowStatus::Running => {}
         }
 
         sleep(Duration::from_millis(10)).await;
