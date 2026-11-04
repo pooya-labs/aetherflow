@@ -108,13 +108,25 @@ fn run() -> Result<(), String> {
 }
 
 fn parse_args() -> Result<Option<Config>, String> {
+    parse_args_from(env::args().skip(1))
+}
+
+fn parse_args_from<I>(arguments: I) -> Result<Option<Config>, String>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut config = Config::default();
-    let mut arguments = env::args().skip(1);
+    let mut arguments = arguments.into_iter();
 
     while let Some(argument) = arguments.next() {
         if argument == "--help" || argument == "-h" {
             print_usage();
             return Ok(None);
+        }
+
+        // Cargo appends this marker when it runs a harness-free benchmark target.
+        if argument == "--bench" {
+            continue;
         }
 
         let value = arguments
