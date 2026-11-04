@@ -259,7 +259,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .create_stream(jetstream::stream::Config {
             name: stream_name.clone(),
             subjects: vec![subject.clone()],
-            replicas: 3,
+            num_replicas: 3,
             duplicate_window: Duration::from_secs(120),
             ..Default::default()
         })
