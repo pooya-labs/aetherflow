@@ -203,13 +203,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let (worker_shutdown, worker_shutdown_rx) = watch::channel(false);
     let worker_task = tokio::spawn(async move {
-        worker.run(worker_shutdown_rx)
+        worker
+            .run(worker_shutdown_rx)
             .await
             .map_err(|error| error.to_string())
     });
     let (consumer_shutdown, consumer_shutdown_rx) = watch::channel(false);
     let consumer_task = tokio::spawn(async move {
-        consumer.run(consumer_shutdown_rx)
+        consumer
+            .run(consumer_shutdown_rx)
             .await
             .map_err(|error| error.to_string())
     });
@@ -234,7 +236,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             return Err("PostgreSQL worker exited before recovery verification completed".into());
         }
         if consumer_task.is_finished() {
-            return Err("JetStream inbox consumer exited before recovery verification completed".into());
+            return Err(
+                "JetStream inbox consumer exited before recovery verification completed".into(),
+            );
         }
 
         dispatcher.dispatch_once().await?;
@@ -250,7 +254,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     || task.status() != TaskStatus::Succeeded
                     || task.output().map(|output| output.as_bytes()) != Some(EXPECTED_OUTPUT)
                 {
-                    return Err("restored task did not persist its expected successful output".into());
+                    return Err(
+                        "restored task did not persist its expected successful output".into(),
+                    );
                 }
 
                 let outbox = admin_client
@@ -283,11 +289,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 final_counts = (published, pending, inbox);
                 let in_process = i64::try_from(consumer_metrics.snapshot().processed)?;
 
-                if published > 0
-                    && pending == 0
-                    && inbox == published
-                    && in_process == published
-                {
+                if published > 0 && pending == 0 && inbox == published && in_process == published {
                     break;
                 }
             }
@@ -304,8 +306,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
         sleep(Duration::from_millis(10)).await;
     }
 
-    worker_shutdown.send(true).map_err(|_| "worker shutdown channel closed")?;
-    consumer_shutdown.send(true).map_err(|_| "consumer shutdown channel closed")?;
+    worker_shutdown
+        .send(true)
+        .map_err(|_| "worker shutdown channel closed")?;
+    consumer_shutdown
+        .send(true)
+        .map_err(|_| "consumer shutdown channel closed")?;
     join_task(worker_task, "PostgreSQL worker").await?;
     join_task(consumer_task, "JetStream consumer").await?;
     membership.drain_node(&node).await?;
