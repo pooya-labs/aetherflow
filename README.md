@@ -111,7 +111,7 @@ See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
 ## Reproducible scheduler benchmarks
 
-The repository includes a repeatable benchmark runner for DAG validation and local scheduler execution across fan-out and dependency-chain workloads. It reports median/p95 latency and throughput, with a small CI smoke run. These measurements use the in-memory runtime and are not distributed-system capacity claims. See the [benchmark guide](docs/performance/benchmarks.md).
+The repository includes two complementary performance tools: an in-memory scheduler/DAG benchmark and a PostgreSQL 18 + NATS 2.12 end-to-end load profile covering the durable worker, outbox, JetStream, and inbox path. Both report CSV metrics and run in CI. The end-to-end guide records the first fan-out/chain run; neither smoke is yet a stable regression baseline or production capacity claim. See the [in-memory benchmark guide](docs/performance/benchmarks.md) and the [end-to-end PostgreSQL/JetStream load guide](docs/performance/end-to-end-load.md).
 
 ## Repository map
 

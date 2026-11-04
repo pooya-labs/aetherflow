@@ -35,4 +35,4 @@ Rust CI runs a small smoke workload and uploads its CSV output as a workflow art
 
 These measurements cover only the process-local scheduler and in-memory repository. They do **not** measure PostgreSQL persistence, NATS JetStream delivery, HTTP request handling, network latency, multi-process coordination, or production capacity. Do not use these numbers for deployment sizing or an exactly-once/throughput claim.
 
-A future end-to-end load suite should exercise the PostgreSQL/NATS path with controlled producer rates, payload sizes, worker counts, injected broker/database faults, and explicit latency/error-rate reporting. Record a representative baseline only after the environment and workload are fixed.
+For real persistence and transport behavior, use the [PostgreSQL/JetStream end-to-end load guide](end-to-end-load.md). The in-memory smoke and the end-to-end profile exercise different paths and their throughput numbers must not be compared as if they measured the same system. Neither CI smoke is a stable regression baseline.
