@@ -1,5 +1,6 @@
 //! Exercises a restored PostgreSQL database and JetStream target through the
 //! live control-plane API, durable worker, transactional outbox, and inbox.
+use std::collections::HashSet;
 use std::error::Error;
 use std::io;
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -42,11 +43,22 @@ const EXPECTED_OUTPUT: &[u8] = b"restore-smoke-output";
 #[derive(Clone, Default)]
 struct RecoveryEventHandler {
     processed: Arc<AtomicUsize>,
+    target_aggregate_ids: Arc<HashSet<String>>,
+}
+
+impl RecoveryEventHandler {
+    fn new(target_aggregate_ids: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            processed: Arc::default(),
+            target_aggregate_ids: Arc::new(target_aggregate_ids.into_iter().collect()),
+        }
+    }
 }
 
 impl JetStreamEventHandler for RecoveryEventHandler {
     fn handle<'a>(&'a self, event: &'a JetStreamEvent) -> EventHandlerFuture<'a> {
         let processed = Arc::clone(&self.processed);
+        let target_aggregate_ids = Arc::clone(&self.target_aggregate_ids);
         Box::pin(async move {
             if event.schema_version() != 1 {
                 return Err(format!(
@@ -54,7 +66,9 @@ impl JetStreamEventHandler for RecoveryEventHandler {
                     event.schema_version()
                 ));
             }
-            processed.fetch_add(1, Ordering::Relaxed);
+            if target_aggregate_ids.contains(event.aggregate_id()) {
+                processed.fetch_add(1, Ordering::Relaxed);
+            }
             Ok(())
         })
     }
@@ -206,7 +220,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         })
         .await?;
-    let event_handler = Arc::new(RecoveryEventHandler::default());
+    let aggregate_ids = vec![
+        workflow_run_id.as_str().to_owned(),
+        task_run_id.as_str().to_owned(),
+    ];
+    let event_handler = Arc::new(RecoveryEventHandler::new(aggregate_ids.iter().cloned()));
     let consumer = NatsJetStreamConsumer::new(
         pull_consumer,
         PgInboxRepository::from_pool(runtime_pool.clone()),
@@ -246,13 +264,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             .map_err(|error| error.to_string())
     });
 
-    let aggregate_ids = vec![
-        workflow_run_id.as_str().to_owned(),
-        task_run_id.as_str().to_owned(),
-    ];
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut final_counts = (0_i64, 0_i64, 0_i64);
-    let mut final_metrics = (0_i64, 0_i64, 0_i64, 0_i64);
+    let mut final_metrics = (0_i64, 0_i64, 0_i64, 0_i64, 0_i64);
 
     loop {
         if Instant::now() >= deadline {
@@ -327,7 +341,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>()
                 .join(",");
             return Err(failure(format!(
-                "restore execution did not drain before the deadline; published={}, pending={}, inbox={}, processed={}, duplicates={}, busy={}, handler_failures={}; workflow={:?}/v{}; task={:?}/v{}, attempts_started={}, output_bytes={:?}, error={:?}:{:?}, claimed_by={:?}, lease={:?}; events=[{}]; inbox_states=[{}]; attempts=[{}]",
+                "restore execution did not drain before the deadline; published={}, pending={}, inbox={}, target_processed={}, consumer_processed={}, duplicates={}, busy={}, handler_failures={}; workflow={:?}/v{}; task={:?}/v{}, attempts_started={}, output_bytes={:?}, error={:?}:{:?}, claimed_by={:?}, lease={:?}; events=[{}]; inbox_states=[{}]; attempts=[{}]",
                 final_counts.0,
                 final_counts.1,
                 final_counts.2,
@@ -335,6 +349,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 final_metrics.1,
                 final_metrics.2,
                 final_metrics.3,
+                final_metrics.4,
                 workflow_state.get::<_, String>(0),
                 workflow_state.get::<_, i64>(1),
                 task_state.get::<_, String>(0),
@@ -410,10 +425,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     .get(0);
                 final_counts = (published, pending, inbox);
                 let metrics = consumer_metrics.snapshot();
-                let in_process = i64::try_from(metrics.processed)?;
+                let target_processed =
+                    i64::try_from(event_handler.processed.load(Ordering::Relaxed))?;
+                let consumer_processed = i64::try_from(metrics.processed)?;
                 let duplicates = i64::try_from(metrics.duplicates)?;
                 final_metrics = (
-                    in_process,
+                    target_processed,
+                    consumer_processed,
                     duplicates,
                     i64::try_from(metrics.busy)?,
                     i64::try_from(metrics.handler_failures)?,
@@ -422,7 +440,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 if published > 0
                     && pending == 0
                     && inbox == published
-                    && in_process == published
+                    && target_processed == published
+                    && consumer_processed >= target_processed
                     && duplicates == 0
                 {
                     break;
@@ -451,8 +470,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     membership.drain_node(&node).await?;
 
     println!(
-        "PASS: restored API submission executed through PostgreSQL worker; task output persisted; {} outbox events were published and committed to the PostgreSQL inbox with zero duplicates.",
-        final_counts.0
+        "PASS: restored API submission executed through PostgreSQL worker; task output persisted; {} target outbox events were published and committed to the PostgreSQL inbox with zero duplicates (consumer processed {} total events, including the restored backlog).",
+        final_counts.0,
+        final_metrics.1
     );
     Ok(())
 }
