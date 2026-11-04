@@ -252,12 +252,102 @@ async fn run() -> Result<(), Box<dyn Error>> {
     ];
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut final_counts = (0_i64, 0_i64, 0_i64);
+    let mut final_metrics = (0_i64, 0_i64, 0_i64, 0_i64);
 
     loop {
         if Instant::now() >= deadline {
+            let workflow_state = admin_client
+                .query_one(
+                    "SELECT status, version FROM workflow_runs
+                     WHERE tenant_id = 'legacy-default' AND workflow_run_id = $1",
+                    &[&workflow_run_id.as_str()],
+                )
+                .await?;
+            let task_state = admin_client
+                .query_one(
+                    "SELECT status, version, attempts_started, octet_length(output_payload),
+                            last_error_kind, last_error_message, claimed_by, lease_expires_at
+                     FROM task_runs
+                     WHERE tenant_id = 'legacy-default' AND task_run_id = $1",
+                    &[&task_run_id.as_str()],
+                )
+                .await?;
+            let event_rows = admin_client
+                .query(
+                    "SELECT event_type, count(*)::BIGINT,
+                            count(*) FILTER (WHERE published_at IS NOT NULL)::BIGINT
+                     FROM outbox_events
+                     WHERE tenant_id = 'legacy-default' AND aggregate_id = ANY($1::TEXT[])
+                     GROUP BY event_type ORDER BY event_type",
+                    &[&aggregate_ids],
+                )
+                .await?;
+            let inbox_rows = admin_client
+                .query(
+                    "SELECT status, count(*)::BIGINT
+                     FROM consumer_inbox
+                     WHERE tenant_id = 'legacy-default' AND consumer_name = $1
+                       AND event_id IN (
+                           SELECT event_id::TEXT FROM outbox_events
+                           WHERE tenant_id = 'legacy-default' AND aggregate_id = ANY($2::TEXT[])
+                       )
+                     GROUP BY status ORDER BY status",
+                    &[&CONSUMER_NAME, &aggregate_ids],
+                )
+                .await?;
+            let attempt_rows = admin_client
+                .query(
+                    "SELECT outcome, count(*)::BIGINT
+                     FROM task_attempts
+                     WHERE tenant_id = 'legacy-default' AND task_run_id = $1
+                     GROUP BY outcome ORDER BY outcome",
+                    &[&task_run_id.as_str()],
+                )
+                .await?;
+            let events = event_rows
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{}={}/{}",
+                        row.get::<_, String>(0),
+                        row.get::<_, i64>(2),
+                        row.get::<_, i64>(1)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let inbox_states = inbox_rows
+                .iter()
+                .map(|row| format!("{}={}", row.get::<_, String>(0), row.get::<_, i64>(1)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let attempts = attempt_rows
+                .iter()
+                .map(|row| format!("{}={}", row.get::<_, String>(0), row.get::<_, i64>(1)))
+                .collect::<Vec<_>>()
+                .join(",");
             return Err(failure(format!(
-                "restore execution did not drain before the deadline; published={}, pending={}, inbox={}",
-                final_counts.0, final_counts.1, final_counts.2
+                "restore execution did not drain before the deadline; published={}, pending={}, inbox={}, processed={}, duplicates={}, busy={}, handler_failures={}; workflow={:?}/v{}; task={:?}/v{}, attempts_started={}, output_bytes={:?}, error={:?}:{:?}, claimed_by={:?}, lease={:?}; events=[{}]; inbox_states=[{}]; attempts=[{}]",
+                final_counts.0,
+                final_counts.1,
+                final_counts.2,
+                final_metrics.0,
+                final_metrics.1,
+                final_metrics.2,
+                final_metrics.3,
+                workflow_state.get::<_, String>(0),
+                workflow_state.get::<_, i64>(1),
+                task_state.get::<_, String>(0),
+                task_state.get::<_, i64>(1),
+                task_state.get::<_, i32>(2),
+                task_state.get::<_, Option<i32>>(3),
+                task_state.get::<_, Option<String>>(4),
+                task_state.get::<_, Option<String>>(5),
+                task_state.get::<_, Option<String>>(6),
+                task_state.get::<_, Option<std::time::SystemTime>>(7),
+                events,
+                inbox_states,
+                attempts
             )));
         }
         if worker_task.is_finished() {
@@ -322,6 +412,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 let metrics = consumer_metrics.snapshot();
                 let in_process = i64::try_from(metrics.processed)?;
                 let duplicates = i64::try_from(metrics.duplicates)?;
+                final_metrics = (
+                    in_process,
+                    duplicates,
+                    i64::try_from(metrics.busy)?,
+                    i64::try_from(metrics.handler_failures)?,
+                );
 
                 if published > 0
                     && pending == 0
