@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Single-node execution runtime and in-memory repository for AetherFlow."
 
 [dependencies]
-aetherflow-core = { path = "../aetherflow-core" }
-aetherflow-wasm = { path = "../aetherflow-wasm" }
+aetherflow-core = { version = "0.1.0", path = "../aetherflow-core" }
+aetherflow-wasm = { version = "0.1.0", path = "../aetherflow-wasm" }
 tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [[bench]]
