@@ -471,8 +471,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     println!(
         "PASS: restored API submission executed through PostgreSQL worker; task output persisted; {} target outbox events were published and committed to the PostgreSQL inbox with zero duplicates (consumer processed {} total events, including the restored backlog).",
-        final_counts.0,
-        final_metrics.1
+        final_counts.0, final_metrics.1
     );
     Ok(())
 }
