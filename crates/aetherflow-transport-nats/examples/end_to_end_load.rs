@@ -448,9 +448,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     if completed.insert(workflow_id.clone())
                         && let Some(submission) = submitted_at.get(&workflow_id)
                     {
-                        completion_latencies_ms.push(
-                            observed_at.duration_since(*submission).as_secs_f64() * 1000.0,
-                        );
+                        completion_latencies_ms
+                            .push(observed_at.duration_since(*submission).as_secs_f64() * 1000.0);
                     }
                 }
                 "failed" | "cancelled" | "timed_out" => {
