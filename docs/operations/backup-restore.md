@@ -223,9 +223,12 @@ The rehearsal:
 
 - Creates a PostgreSQL custom-format dump, validates the archive and checksum, restores it to a separate isolated database, and checks migration ledger v8, all ten FORCE-RLS tables, and twelve tenant RLS policies.
 - Creates a three-replica JetStream stream with three retained test messages, backs it up using NATS CLI v0.4.0, restores it to a separate NATS 2.12 server using one replica, and verifies the restored message count and a retained payload.
-- Removes the isolated restore database, temporary backup directory, and restore container on exit.
+- Grants the restored database to the non-owner runtime test role, starts the real AetherFlow server against that restored database, and waits for an authenticated database-backed API route.
+- Submits a fixed one-task workflow through `POST /api/v1/workflow-runs`, then runs a separate PostgreSQL worker process, transactional outbox dispatcher, JetStream publisher, and PostgreSQL inbox consumer against the restored PostgreSQL and NATS instances.
+- Confirms the task input was delivered unchanged, the task output was persisted, the workflow and task both reached `succeeded`, every new outbox event was published and committed to the inbox, and the three original restored JetStream messages remain present.
+- Removes the isolated restore database, temporary backup directory, server process, and restore container on exit.
 
-This rehearsal passed in PostgreSQL/NATS workflow [41670642489](https://github.com/pooya-labs/aetherflow/actions/runs/41670642489) on source `33070ede570b639e45a7feafe99ce92ddd682526`.
+The schema-only PostgreSQL/JetStream restore path previously passed in [41670642489](https://github.com/pooya-labs/aetherflow/actions/runs/41670642489) on source `33070ede570b639e45a7feafe99ce92ddd682526`. The expanded API-to-worker execution rehearsal is verified by the current PostgreSQL/NATS workflow associated with the implementation commit; its exact run link is recorded in the project roadmap after CI completes.
 
-**Scope boundary:** this is a CI integration rehearsal using representative test data. It is not a production maintenance-window recovery, does not prove a coordinated production recovery point, does not validate external secret restoration, and does not replace PostgreSQL physical backup/WAL archiving or point-in-time recovery. Keep the production policy boundary above in force.
+**Scope boundary:** this remains a CI integration rehearsal using disposable fixture data and a single local server/worker. It does not prove a coordinated production recovery point, external secret restoration, a live maintenance-window recovery, PostgreSQL physical backup/WAL archiving, or point-in-time recovery. Keep the production policy boundary above in force.
 

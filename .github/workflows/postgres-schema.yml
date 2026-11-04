@@ -652,6 +652,11 @@ jobs:
           sudo apt-get install --yes "$package"
           nats --version | grep --fixed-strings --quiet '0.4.0'
 
+      - name: Build restored server and execution verifier
+        run: |
+          cargo +1.99.1 build --locked --release -p aetherflow-server
+          cargo +1.99.1 build --locked --release -p aetherflow-transport-nats --example verify_restored_execution
+
       - name: Rehearse isolated PostgreSQL and JetStream backup and restore
         env:
           NATS_CLUSTER_URL: nats://127.0.0.1:4222
