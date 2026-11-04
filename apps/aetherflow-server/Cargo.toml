@@ -7,9 +7,9 @@ repository.workspace = true
 description = "Loopback-default HTTP/HTTPS control plane for AetherFlow."
 
 [dependencies]
-aetherflow-core = { path = "../../crates/aetherflow-core" }
-aetherflow-runtime = { path = "../../crates/aetherflow-runtime" }
-aetherflow-storage-postgres = { path = "../../crates/aetherflow-storage-postgres" }
+aetherflow-core = { version = "0.1.0", path = "../../crates/aetherflow-core" }
+aetherflow-runtime = { version = "0.1.0", path = "../../crates/aetherflow-runtime" }
+aetherflow-storage-postgres = { version = "0.1.0", path = "../../crates/aetherflow-storage-postgres" }
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", default-features = false, features = ["tls-rustls-no-provider"] }
 base64 = "=0.22.1"
