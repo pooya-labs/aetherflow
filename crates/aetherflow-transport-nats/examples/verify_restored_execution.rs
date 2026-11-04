@@ -21,7 +21,10 @@ use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
     NatsJetStreamPublisher,
 };
-use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
+use async_nats::jetstream::{
+    self,
+    consumer::{DeliverPolicy, pull::Config as PullConsumerConfig},
+};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::sync::watch;
 use tokio::time::{Instant, sleep, timeout};
@@ -176,6 +179,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let pull_consumer = stream
         .create_consumer(PullConsumerConfig {
             durable_name: Some(CONSUMER_NAME.to_owned()),
+            // The restored stream already contains retained fixture messages.
+            // This drill must count only events produced by the new workflow.
+            deliver_policy: DeliverPolicy::New,
             filter_subject: SUBJECT.to_owned(),
             ack_wait: Duration::from_secs(5),
             max_ack_pending: 128,
