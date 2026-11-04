@@ -1,0 +1,56 @@
+# SLO proposal
+
+**Status:** Draft for maintainer review; no objective or error budget in this document is approved or promised to users.
+
+## Why targets are not active yet
+
+The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge, and a bounded request-latency histogram. It deliberately avoids path, tenant, workflow, and task labels. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
+
+The proposal below defines the measurements and candidate objectives to review. Do not enforce alert thresholds or advertise an SLA until the missing instrumentation, deployment topology, exclusions, and owner-approved targets exist.
+
+## Proposed service indicators
+
+| SLI | Proposed measurement | Current status |
+|---|---|---|
+| API availability | Successful eligible API responses divided by eligible API requests; report 5xx and server-side timeouts separately | Aggregate request/5xx counters exist; route-level eligibility and timeout attribution need a documented collector |
+| API latency | p50/p95/p99 for read and submit classes, excluding client-side validation errors | One bounded aggregate request-latency histogram exists; route/operation classes are not separated |
+| Workflow completion | Workflows reaching a successful terminal state before their configured deadline divided by eligible accepted workflows | Requires a durable outcome metric or an external PostgreSQL-derived exporter |
+| Queue/transport health | Oldest unpublished outbox age, oldest unprocessed inbox age, and publish/consume error rate | Durable rows are queryable; production-safe metrics and alert rules are not yet implemented |
+| Recovery | Successful restore drills and measured time from recovery start to service acceptance | Isolated CI logical restore rehearsal exists; production RPO/RTO and WAL/PITR procedure are not established |
+
+## Candidate objectives for discussion
+
+These are deliberately provisional starting points, not accepted service commitments:
+
+| Objective candidate | Candidate window | Notes |
+|---|---|---|
+| API availability ≥ 99.5% | Rolling 30 days | Equivalent to at most 216 minutes of eligible unavailability per 30-day window; requires an agreed probe and maintenance policy |
+| API p95 latency ≤ 500 ms for ordinary reads/submissions | Rolling 30 days | Must define payload size, page size, tenant count, database/network location, and load profile before acceptance |
+| API p99 latency ≤ 2 s for ordinary reads/submissions | Rolling 30 days | Should be reviewed alongside p95 and saturation/timeout data |
+| Workflow success rate | TBD | Do not count user cancellation or task-handler business errors as platform failures without a separately agreed classification |
+| Outbox/inbox processing lag | TBD | Choose a target only after production event volume, broker retention, and consumer concurrency are measured |
+| Recovery point objective / recovery time objective | Owner decision | Requires a managed PostgreSQL/WAL policy, JetStream snapshot cadence, and a coordinated restore test on the target deployment |
+
+## Error-budget policy proposal
+
+For an approved availability objective, calculate the error budget over the same rolling window. A 99.5% target yields 0.5% unavailability, or 216 minutes in 30 days. Freeze risky changes only after an agreed burn-rate policy is defined; do not translate the illustrative target into an operational freeze rule today.
+
+Workflow completion and API availability must have separate budgets. A user-provided handler that returns a business error is not automatically an infrastructure availability failure. The event-delivery model is at-least-once and external side effects need their own idempotency boundary.
+
+## Instrumentation required before adoption
+
+1. Add bounded-cardinality API operation classes (not raw paths, tenant IDs, or workflow IDs) so read/submit latency and error classes can be measured separately.
+2. Add durable workflow terminal outcome and completion-latency observations, with explicit labels for platform error, handler error, cancellation, and deadline expiry.
+3. Add oldest pending outbox age, oldest unprocessed inbox age, retry/lease-expiry counters, and JetStream reconnect/error signals.
+4. Define black-box probes from the same network boundary as users; `GET /health` is process liveness only and must not be treated as API/database readiness.
+5. Add alert ownership, paging hours, maintenance exclusions, and a runbook link to every production alert.
+
+## Decisions required from maintainers
+
+- Confirm or replace the candidate API availability and latency objectives.
+- Define eligible traffic, maintenance exclusions, and how client 4xx/429, timeouts, and deployment restarts are counted.
+- Select production RPO/RTO and a storage/backup service that can actually meet them.
+- Decide whether workflow completion is a product promise or an execution-engine internal indicator.
+- Approve alert burn rates, on-call ownership, and a review cadence.
+
+Until those decisions and measurements are complete, this remains a proposal and not an SLA.

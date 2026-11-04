@@ -87,4 +87,54 @@ Each profile completed all 16 workflows and 64 tasks. All 224 outbox events were
 - One hosted CI run on a shared ephemeral runner is not a statistically stable baseline. These figures must not be used for production sizing, an SLO, or a regression threshold.
 - Delivery remains at-least-once. The inbox and JetStream message identity prevent duplicate logical processing within their stated boundaries; they do not make arbitrary external side effects exactly-once.
 
-Establish a reference baseline only after pinning runner class, CPU/memory, database and NATS versions/configuration, workload shape, producer rate, payload size, worker and consumer counts, and repeat count. Then collect repeated runs with variance before selecting any regression threshold.
+## Five-repeat reference baseline (2026-11-04)
+
+A five-repeat baseline was captured in PostgreSQL/NATS CI [41776885575](https://github.com/pooya-labs/aetherflow/actions/runs/41776885575) on exact source `b9d30659caed6c525ec6a245f5b8d44bf5cc2dd3`. The job ran five fan-out and five chain repetitions serially on one hosted VM; each repetition received a newly created PostgreSQL database and a unique JetStream stream. Each completed profile reconciled 896 published outbox events with 896 processed inbox rows, with zero duplicate events and zero errors.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24` / `20261026.354.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 9V45 96-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,344,576 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.6 (Debian 18.6-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte input |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+The runner label alone is not a hardware reservation. Treat the image version, CPU model, visible vCPU/memory, database versions, and workload parameters together as the comparison fingerprint. A later run with a changed fingerprint is a new baseline, not a directly comparable regression sample.
+
+### Summary
+
+All throughput values are whole-run rates, including setup and transport drain. Latency is submission-to-observed-workflow-success and includes the harness's PostgreSQL polling interval.
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 7.319 | 7.195 |
+| Mean workflows/s | 7.278 | 7.203 |
+| Sample standard deviation, workflows/s | 0.148 | 0.033 |
+| Observed range, workflows/s | 7.044–7.407 | 7.164–7.243 |
+| Median tasks/s | 29.278 | 28.778 |
+| Median JetStream events/s | 102.472 | 100.723 |
+| Median workflow p50 | 4,047.126 ms | 4,142.654 ms |
+| Median workflow p95 | 7,863.758 ms | 8,003.402 ms |
+| Sample standard deviation, p95 | 169.111 ms | 22.684 ms |
+| Median whole-run elapsed | 8,743.824 ms | 8,895.681 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The archived artifact is `aetherflow-end-to-end-baseline-b9d30659caed6c525ec6a245f5b8d44bf5cc2dd3` (90-day retention). It includes all ten per-run CSVs, a combined sample CSV, summary statistics, and `metadata.json` with the environment fingerprint.
+
+### Interpretation and remaining validation
+
+This is a repeat baseline on one ephemeral hosted VM, not a dedicated reserved performance host, production capacity result, or customer-facing SLO. The within-session variation is low for the chain profile and modest for fan-out, but one VM session cannot characterize day-to-day runner variance. Run the same profile in a second independent hosted session and compare the complete environment fingerprint before setting any regression threshold. No automated performance threshold is enabled yet.
+
+The harness still exercises the coordinator directly rather than HTTP/TLS/authentication, uses the `legacy-default` compatibility tenant path, one worker process, and one inbox consumer loop. It does not measure multi-process scaling, per-tenant authorization overhead, external side effects, or production sizing.

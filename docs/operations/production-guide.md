@@ -1,0 +1,112 @@
+# Operational guide
+
+**Status:** Operational guidance for controlled evaluation. AetherFlow remains experimental and is not approved as a production-ready service. This guide does not replace deployment-specific security, capacity, or recovery review.
+
+## 1. Deployment boundary
+
+The repository's Compose stack is for local development only:
+
+- PostgreSQL 18 and three NATS 2.12 JetStream nodes.
+- Ports published on loopback only.
+- Separate migration-owner and restricted runtime database logins.
+- Local PostgreSQL plaintext is explicitly enabled only for this disposable Compose environment.
+
+Do not expose Compose ports, reuse `.env.example` values, or copy `DATABASE_SSL_MODE=disable` into a network deployment. The sample NATS cluster is not a production authentication/TLS configuration.
+
+Before an externally reachable deployment exists, choose and validate a production topology for the API, workers, PostgreSQL, NATS, secret delivery, certificates, backups, and alert ownership. The current tests do not prove multi-region behavior or horizontal worker capacity.
+
+## 2. Configuration and secrets
+
+For a PostgreSQL-backed server, supply independent values through a secret manager or protected process environment:
+
+| Variable | Purpose |
+|---|---|
+| `AETHERFLOW_MIGRATION_DATABASE_URL` | DDL/migration-owner connection; used for startup migrations only |
+| `DATABASE_URL` | Restricted runtime database connection |
+| `AETHERFLOW_API_TOKEN` | High-entropy platform/operator Bearer credential |
+| `DATABASE_SSL_MODE` | Leave at verified TLS mode for remote PostgreSQL; `disable` is only for disposable local Compose |
+| `AETHERFLOW_BIND` | Listener address; plaintext is allowed only on loopback |
+| `AETHERFLOW_TLS_CERT_PATH`, `AETHERFLOW_TLS_KEY_PATH` | Required valid Rustls identity for non-loopback HTTP listener binds |
+| `AETHERFLOW_CORS_ALLOWED_ORIGINS` | Exact browser origins; CORS is not authentication |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional OTLP HTTP/protobuf destination |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Optional exporter credentials; protect and never log these values |
+
+Tenant credentials are provisioned and managed as tenant records, not as a substitute for the platform operator token. Generate credentials from a cryptographically secure source, keep the raw values out of source control and logs, and revoke them when no longer needed.
+
+The operator token is shared and rotating it requires process restart. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
+
+## 3. Database and transport
+
+1. Provision a dedicated database and PostgreSQL roles. Apply schema changes with the migration owner; connect the running service only with a restricted runtime role.
+2. Verify the runtime role is not SUPERUSER, BYPASSRLS, REPLICATION, CREATEROLE, CREATEDB, a member of another role, or owner of protected tables. Startup performs these checks and verifies FORCE RLS on ten tenant tables.
+3. Use certificate-validated PostgreSQL TLS for remote connections. Install private CA roots into the host's native trust store rather than bypassing certificate verification.
+4. Configure a production NATS JetStream cluster with its own credentials, access controls, transport encryption, retention, storage, monitoring, and failure policy. Do not infer that the local Compose cluster provides these controls.
+5. Keep API, worker, migration, and broker permissions separated. Never run the application as the database owner.
+
+## 4. Startup and health checks
+
+- `GET /health` is a public process-liveness endpoint only. It does not prove PostgreSQL migrations, NATS connectivity, or end-to-end workflow readiness.
+- API control routes require the operator Bearer token; tenant routes require a tenant credential with the appropriate role.
+- A non-loopback listener must have a valid certificate and private key before the server starts.
+- Run migrations as part of a controlled deployment window and verify the exact migration ledger after upgrade.
+- Use the PostgreSQL schema workflow and Rust CI as pre-deployment evidence, not as a substitute for a production canary.
+
+## 5. Telemetry and monitoring
+
+The process emits structured JSON logs. Keep `RUST_LOG` at an operationally appropriate level; review new log fields before allowing them to include user-controlled strings. The request spans intentionally omit raw URIs, query strings, request/response bodies, Bearer credentials, task payloads, and database URLs.
+
+`GET /api/v1/metrics` exposes aggregate HTTP request counters, in-flight requests, 5xx counts, and a bounded latency histogram. It is operator-authenticated and does not expose tenant/workflow/path labels. The OTLP exporter is opt-in and must use an access-controlled collector.
+
+Current instrumentation is not yet a complete workflow SLO dashboard. In particular, it does not directly provide workflow completion percentiles, oldest pending outbox age, oldest unprocessed inbox age, or platform-vs-handler failure attribution. See the [SLO proposal](slo-proposal.md) before designing alerts.
+
+## 6. Routine operations
+
+### Planned deployment
+
+1. Review the change, dependency updates, lockfile diff, and migration behavior.
+2. Take a coordinated backup using the [backup and restore runbook](backup-restore.md), or the equivalent managed-service backup policy.
+3. Apply the [schema upgrade runbook](schema-upgrades.md) with the migration owner; never edit an applied migration.
+4. Deploy the API and workers with the restricted runtime role and production TLS/secrets.
+5. Verify process liveness, authenticated API access, database connections, NATS cluster health, worker registrations/leases, and a controlled end-to-end workflow.
+6. Retain deployment revision, image digests, schema version, and operational evidence.
+
+### Database errors or failed startup
+
+- Check that the migration URL and runtime URL refer to the intended database and roles.
+- Confirm server certificate chain and hostname against native trusted roots.
+- Review the migration ledger; do not manually mark a migration as applied or edit an already-applied SQL file.
+- If the runtime-role guard fails, repair role ownership/attributes with a separate administrative session; do not relax the application check.
+
+### Stalled workflows or outbox/inbox lag
+
+- Inspect workflow/task status, attempt history, worker registrations, lease expiry, and redacted event history using the dashboard/API.
+- Confirm worker processes are alive and have the expected tenant grants.
+- Check the PostgreSQL outbox for pending/expired claims and JetStream stream/consumer health using authorized operator tools.
+- Avoid deleting inbox/outbox records or force-acking messages to make the dashboard look healthy. Preserve evidence and follow the delivery/idempotency contract.
+- External handlers must make side effects idempotent or transactionally coupled to their own state; the platform offers at-least-once delivery, not universal exactly-once effects.
+
+### NATS or PostgreSQL outage
+
+- Stop new submissions if the durable state/transport relationship cannot be trusted.
+- Preserve PostgreSQL and JetStream data and logs; do not independently restore one side to an arbitrary point.
+- Resume publishers/consumers only after following the coordinated recovery procedure and checking duplicate/replay implications.
+- The current CI rehearsal restores disposable fixture data only. It is not a production point-in-time recovery policy.
+
+## 7. Backup, restore, and schema changes
+
+Use [backup and restore](backup-restore.md) and [schema upgrades](schema-upgrades.md). They require a coordinated maintenance window and separate validation of PostgreSQL and JetStream state. Select RPO/RTO with the owner and validate them on the actual production services before relying on them.
+
+## 8. Capacity and scaling
+
+The current reference baseline is a single hosted VM session running one worker process and one inbox consumer. It is useful for regression comparison only when the runner/dependency fingerprint and workload are the same. It is not an estimate of production capacity.
+
+Before scaling:
+- benchmark multiple worker processes and consumer concurrency;
+- include the HTTP/TLS/auth path and tenant-grant checks;
+- test representative payload sizes, workflow DAGs, PostgreSQL sizing, NATS storage/replication and failure recovery;
+- track queue/lease age and resource saturation;
+- define concurrency and backpressure limits for untrusted workloads.
+
+## 9. Production-readiness gate
+
+Do not call the service production-ready until the following are completed and reviewed: independent security assessment; deployment-specific NATS and secret management; API rate limiting and audit identity; approved SLO/RPO/RTO; production backup/PITR and restore rehearsal; horizontal-load and failure-injection evidence; dependency license review and SBOM/provenance policy; and an owner-operated incident/on-call model.

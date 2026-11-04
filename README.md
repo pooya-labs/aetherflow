@@ -4,7 +4,7 @@
 
 AetherFlow is a public engineering project exploring reliable asynchronous execution across processes and machines. Its design centers on durable state transitions, explicit execution semantics, recoverable workers, and observable operations.
 
-> **Project status:** M00–M07 are complete; M08 is in progress. The server has structured JSON logs, request-scoped tracing, bounded Prometheus metrics, W3C trace-context propagation, and opt-in OpenTelemetry OTLP export. The local Compose environment provides PostgreSQL 18 and a three-node NATS JetStream cluster with separate migration/runtime database roles. Coordinated PostgreSQL/JetStream backup-restore and schema-upgrade runbooks are documented; a CI consistency check now validates the runbooks against the migration and RLS sources. The control plane remains experimental and is not production-ready.
+> **Project status:** M00–M07 are complete; M08 is in progress. The server has structured JSON logs, request-scoped tracing, bounded Prometheus metrics, W3C trace-context propagation, and opt-in OpenTelemetry OTLP export. The local Compose environment provides PostgreSQL 18 and a three-node NATS JetStream cluster with separate migration/runtime database roles. Coordinated PostgreSQL/JetStream backup-restore and schema-upgrade runbooks are documented; a CI consistency check now validates the runbooks against the migration and RLS sources. A five-repeat PostgreSQL/NATS reference baseline is recorded with its hosted-runner fingerprint; dependency advisory/source checks and full-history secret scanning are being added. A threat model, SLO proposal, and operational guide document the remaining gaps. The control plane remains experimental and is not production-ready.
 >
 > **Live overview:** [Open the AetherFlow GitHub Pages site](https://pooya16pg-spec.github.io/aetherflow/) · [Open the read-only dashboard](https://pooya16pg-spec.github.io/aetherflow/dashboard/).
 
@@ -78,6 +78,9 @@ Operational procedures are documented for a coordinated PostgreSQL/JetStream bac
 
 - [Backup and restore runbook](docs/operations/backup-restore.md)
 - [PostgreSQL schema upgrade runbook](docs/operations/schema-upgrades.md)
+- [Operational guide](docs/operations/production-guide.md)
+- [SLO proposal (draft)](docs/operations/slo-proposal.md)
+- [Security threat model](docs/security/threat-model.md)
 
 ## Operations telemetry
 
@@ -111,7 +114,7 @@ See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
 ## Reproducible scheduler benchmarks
 
-The repository includes two complementary performance tools: an in-memory scheduler/DAG benchmark and a PostgreSQL 18 + NATS 2.12 end-to-end load profile covering the durable worker, outbox, JetStream, and inbox path. Both report CSV metrics and run in CI. The end-to-end guide records the first fan-out/chain run; neither smoke is yet a stable regression baseline or production capacity claim. See the [in-memory benchmark guide](docs/performance/benchmarks.md) and the [end-to-end PostgreSQL/JetStream load guide](docs/performance/end-to-end-load.md).
+The repository includes two complementary performance tools: an in-memory scheduler/DAG benchmark and a PostgreSQL 18 + NATS 2.12 end-to-end load profile covering the durable worker, outbox, JetStream, and inbox path. Both report CSV metrics and run in CI. The end-to-end guide records the first run and a five-repeat reference baseline on a fingerprinted `ubuntu-24.04` runner. No regression threshold is enabled; the baseline is not a production capacity claim. See the [in-memory benchmark guide](docs/performance/benchmarks.md) and the [end-to-end PostgreSQL/JetStream load guide](docs/performance/end-to-end-load.md).
 
 ## Repository map
 
@@ -119,13 +122,15 @@ The repository is being built incrementally. See [ROADMAP.md](ROADMAP.md) for th
 
 ## Development status
 
-M00–M07 are complete. M08's observability baseline and Docker Compose development environment are hosted-verified. The Compose smoke job in Rust CI [41650421052](https://github.com/pooya-labs/aetherflow/actions/runs/41650421052) booted PostgreSQL 18 and the three-node NATS 2.12 JetStream cluster, confirmed the restricted `aetherflow_runtime` login has no elevated attributes or role memberships, verified all three nodes have two active routes, and cleaned up its temporary volumes. The same run completed formatting, Clippy, workspace tests, Release build, WASM lint and execution, docs, and the Cargo.lock artifact upload. Pages [41650418895](https://github.com/pooya-labs/aetherflow/actions/runs/41650418895) passed on the same exact source SHA `97aa0de79b86aed7435db755d75f65ea95f062b7`. The previous backend implementation source also passed PostgreSQL/NATS integration [41641975958](https://github.com/pooya-labs/aetherflow/actions/runs/41641975958), attempt 2.
+M00–M07 are complete. M08 now includes hosted-verified observability, the local PostgreSQL 18 / three-node NATS 2.12 Compose environment, runbook drift checks, an isolated PostgreSQL/JetStream restore rehearsal, in-memory and end-to-end benchmarks, and a five-repeat reference baseline. The latest exact-source verification is [Rust CI 41776885735](https://github.com/pooya-labs/aetherflow/actions/runs/41776885735), [PostgreSQL/NATS CI 41776885575](https://github.com/pooya-labs/aetherflow/actions/runs/41776885575), and [Pages 41776884802](https://github.com/pooya-labs/aetherflow/actions/runs/41776884802), all successful on `b9d30659caed6c525ec6a245f5b8d44bf5cc2dd3`.
 
-The tenant routes support workflow submission/read and task read/cancel with explicit Read/Submit/Cancel checks. Platform/operator routes remain separate. Workflow definitions are submitted as snapshots rather than stored as reusable versioned definitions. Duplicate workflow-run IDs return 409; v1 does not promise idempotent replay.
+The reference profile uses a single ephemeral `ubuntu-24.04` VM with an AMD EPYC 9V45 CPU, four visible logical CPUs, PostgreSQL 18.6, NATS 2.12.15, and Rust 1.99.1. It ran five fan-out and five chain repetitions of 64 workflows × 4 tasks, with fresh PostgreSQL databases for every repeat. Median throughput was 7.319 workflows/s for fan-out and 7.195 workflows/s for chain; all ten runs reconciled 896 outbox events with 896 inbox outcomes, with zero duplicates and errors. See the [baseline report](docs/performance/end-to-end-load.md). This is not production capacity or a performance SLO; a second independent runner session is still required before regression thresholds are selected.
 
-Database pools are deliberately separate: `AETHERFLOW_MIGRATION_DATABASE_URL` is the migration-owner URL; `DATABASE_URL` is the restricted runtime URL. Startup rejects SUPERUSER, BYPASSRLS, REPLICATION, CREATEROLE, CREATEDB, public-schema CREATE, protected-table ownership, or any role membership, and refuses startup unless all protected tables have FORCE RLS. Compose provisions these two roles independently; its plaintext database mode is strictly for the disposable loopback-only stack. Plain HTTP is loopback-only; remote binds require a valid Rustls certificate/key pair.
+The tenant routes derive tenant identity from tenant credentials and enforce Read/Submit/Cancel role permissions. PostgreSQL tenant data has forced RLS on ten tables. Migrations and application queries use separate database roles; startup rejects elevated runtime-role attributes, role memberships, protected-table ownership, or missing FORCE RLS. Plain HTTP is loopback-only; non-loopback binds require a valid Rustls certificate/key pair.
 
-The next M08 task is backup/restore and schema-upgrade runbooks. License selection remains an owner-only release decision, and property-based lifecycle tests remain deferred engineering debt. See the [development guide](docs/development.md) for Compose setup and test commands.
+Security and operations documentation describes the implemented boundaries and remaining risks. No independent production security audit has been completed. API rate limiting, per-principal audit identity, managed secret rotation, production NATS authentication/TLS, production PITR/RPO/RTO, horizontal scaling evidence, and complete workflow SLO instrumentation remain open.
+
+License selection remains an owner-only release decision; no project license file or third-party license allowlist has been added. M02 property-based lifecycle tests remain deferred, and WASM blocking work is bounded by fuel/epoch deadlines rather than force-aborted. The service remains experimental; see [ROADMAP.md](ROADMAP.md) for the authoritative remaining checklist.
 
 ## License
 
