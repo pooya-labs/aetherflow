@@ -7,8 +7,8 @@ repository.workspace = true
 description = "NATS JetStream transport adapters for AetherFlow durable events."
 
 [dependencies]
-aetherflow-core = { path = "../aetherflow-core" }
-aetherflow-storage-postgres = { path = "../aetherflow-storage-postgres" }
+aetherflow-core = { version = "0.1.0", path = "../aetherflow-core" }
+aetherflow-storage-postgres = { version = "0.1.0", path = "../aetherflow-storage-postgres" }
 async-nats = { version = "=0.51.0", default-features = false, features = ["jetstream", "ring", "server_2_12"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
@@ -16,7 +16,7 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["std
 tokio = { version = "=1.54.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
-aetherflow-runtime = { path = "../aetherflow-runtime" }
+aetherflow-runtime = { version = "0.1.0", path = "../aetherflow-runtime" }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1", "runtime"] }
 tokio-postgres = { version = "=0.7.18" }
 
