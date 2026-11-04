@@ -1,0 +1,326 @@
+//! Exercises a restored PostgreSQL database and JetStream target through the
+//! live control-plane API, durable worker, transactional outbox, and inbox.
+use std::error::Error;
+use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use aetherflow_core::domain::{
+    NodeId, NodeIncarnationId, TaskId, TaskRunId, TaskStatus, WorkerId, WorkflowRunId,
+    WorkflowStatus,
+};
+use aetherflow_runtime::repository::TaskOutput;
+use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
+use aetherflow_storage_postgres::{
+    OutboxDispatcherConfig, PgInboxRepository, PgMembershipRepository, PgTaskRepository,
+    PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig,
+};
+use aetherflow_transport_nats::{
+    EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
+    NatsJetStreamPublisher,
+};
+use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use tokio::sync::watch;
+use tokio::time::{Instant, sleep, timeout};
+use tokio_postgres::{Config as PostgresConfig, NoTls};
+
+const WORKER_ID: &str = "restore_smoke_worker";
+const NODE_ID: &str = "restore_smoke_node";
+const INCARNATION_ID: &str = "restore_smoke_incarnation";
+const CONSUMER_NAME: &str = "restore_smoke_consumer";
+const STREAM_NAME: &str = "AETHERFLOW_RECOVERY_EVENTS";
+const SUBJECT: &str = "aetherflow.recovery.events";
+const EXPECTED_INPUT: &[u8] = b"restore-smoke-input";
+const EXPECTED_OUTPUT: &[u8] = b"restore-smoke-output";
+
+#[derive(Clone, Default)]
+struct RecoveryEventHandler {
+    processed: Arc<AtomicUsize>,
+}
+
+impl JetStreamEventHandler for RecoveryEventHandler {
+    fn handle<'a>(&'a self, event: &'a JetStreamEvent) -> EventHandlerFuture<'a> {
+        let processed = Arc::clone(&self.processed);
+        Box::pin(async move {
+            if event.schema_version() != 1 {
+                return Err(format!(
+                    "unsupported event schema version {}",
+                    event.schema_version()
+                ));
+            }
+            processed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+    }
+}
+
+fn required_env(name: &str) -> Result<String, std::io::Error> {
+    std::env::var(name).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is required"),
+        )
+    })
+}
+
+fn postgres_pool(database_url: &str, max_size: usize) -> Result<Pool, Box<dyn Error>> {
+    let config: PostgresConfig = database_url.parse()?;
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    Ok(Pool::builder(manager).max_size(max_size).build()?)
+}
+
+async fn join_task<T>(
+    handle: tokio::task::JoinHandle<Result<(), String>>,
+    name: &str,
+) -> Result<(), Box<dyn Error>> {
+    timeout(Duration::from_secs(15), handle)
+        .await
+        .map_err(|_| format!("{name} did not stop within 15 seconds"))?
+        .map_err(|error| format!("{name} task panicked: {error}"))?
+        .map_err(|error| format!("{name} failed: {error}"))?;
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
+    let runtime_database_url = required_env("AETHERFLOW_RESTORE_DATABASE_URL")?;
+    let admin_database_url = required_env("AETHERFLOW_RESTORE_ADMIN_DATABASE_URL")?;
+    let nats_url = required_env("AETHERFLOW_RESTORE_NATS_URL")?;
+    let workflow_run_id =
+        WorkflowRunId::parse(required_env("AETHERFLOW_RESTORE_WORKFLOW_RUN_ID")?)?;
+    let task_run_id = TaskRunId::parse(required_env("AETHERFLOW_RESTORE_TASK_RUN_ID")?)?;
+
+    let runtime_pool = postgres_pool(&runtime_database_url, 16)?;
+    let admin_pool = postgres_pool(&admin_database_url, 4)?;
+    let repository = Arc::new(PgTaskRepository::from_pool(runtime_pool.clone()));
+    let membership = Arc::new(PgMembershipRepository::from_pool(runtime_pool.clone()));
+
+    let workflow = repository.get_workflow_run(&workflow_run_id).await?;
+    if workflow.status() != WorkflowStatus::Running {
+        return Err(format!(
+            "expected newly submitted workflow to be running, found {:?}",
+            workflow.status()
+        )
+        .into());
+    }
+    if workflow.task_runs().len() != 1
+        || workflow.task_runs()[0].task_run_id() != &task_run_id
+        || workflow.task_runs()[0].status() != TaskStatus::Pending
+    {
+        return Err("restored API submission did not materialize the expected pending task".into());
+    }
+
+    let task_id = TaskId::parse("restore_smoke_task")?;
+    let expected_input = EXPECTED_INPUT.to_vec();
+    let expected_output = TaskOutput::new(EXPECTED_OUTPUT.to_vec())?;
+    let mut registry = TaskRegistry::new();
+    registry.register(task_id, move |context: TaskContext| {
+        let expected_input = expected_input.clone();
+        let output = expected_output.clone();
+        async move {
+            if context.input().as_bytes() != expected_input.as_slice() {
+                return Err(TaskExecutionError::permanent(
+                    "restored task input did not match the API submission",
+                ));
+            }
+            Ok(output)
+        }
+    })?;
+
+    let node = membership
+        .join_node(
+            &NodeId::parse(NODE_ID)?,
+            &NodeIncarnationId::parse(INCARNATION_ID)?,
+            Duration::from_secs(90),
+        )
+        .await?;
+    let registration = membership
+        .register_worker(
+            &node,
+            &WorkerId::parse(WORKER_ID)?,
+            NonZeroU32::new(1).expect("one is non-zero"),
+            Duration::from_secs(60),
+        )
+        .await?;
+    let worker_config = PostgresWorkerConfig::new(
+        NonZeroUsize::new(1).expect("one is non-zero"),
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+        Duration::from_secs(5),
+        Some(Duration::from_secs(10)),
+    )?;
+    let worker = PostgresTaskWorker::new(
+        Arc::clone(&repository),
+        Arc::clone(&membership),
+        registration,
+        registry,
+        worker_config,
+    );
+
+    let nats_client = async_nats::connect(nats_url).await?;
+    let jetstream = jetstream::new(nats_client);
+    let stream = jetstream.get_stream(STREAM_NAME).await?;
+    let pull_consumer = stream
+        .create_consumer(PullConsumerConfig {
+            durable_name: Some(CONSUMER_NAME.to_owned()),
+            filter_subject: SUBJECT.to_owned(),
+            ack_wait: Duration::from_secs(5),
+            max_ack_pending: 128,
+            ..Default::default()
+        })
+        .await?;
+    let event_handler = Arc::new(RecoveryEventHandler::default());
+    let consumer = NatsJetStreamConsumer::new(
+        pull_consumer,
+        PgInboxRepository::from_pool(runtime_pool.clone()),
+        CONSUMER_NAME,
+        WorkerId::parse("restore_smoke_consumer_worker")?,
+        Duration::from_secs(30),
+        Arc::clone(&event_handler),
+    )?;
+    let consumer_metrics = consumer.metrics();
+
+    let publisher = Arc::new(NatsJetStreamPublisher::new(jetstream, SUBJECT));
+    let dispatcher = PostgresOutboxDispatcher::new(
+        Arc::clone(&repository),
+        WorkerId::parse("restore_smoke_publisher")?,
+        publisher,
+        OutboxDispatcherConfig::new(
+            32,
+            Duration::from_millis(5),
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+            Duration::from_secs(2),
+        )?,
+    );
+
+    let (worker_shutdown, worker_shutdown_rx) = watch::channel(false);
+    let worker_task = tokio::spawn(async move {
+        worker.run(worker_shutdown_rx)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    let (consumer_shutdown, consumer_shutdown_rx) = watch::channel(false);
+    let consumer_task = tokio::spawn(async move {
+        consumer.run(consumer_shutdown_rx)
+            .await
+            .map_err(|error| error.to_string())
+    });
+
+    let admin_client = admin_pool.get().await?;
+    let aggregate_ids = vec![
+        workflow_run_id.as_str().to_owned(),
+        task_run_id.as_str().to_owned(),
+    ];
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut final_counts = (0_i64, 0_i64, 0_i64);
+
+    loop {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "restore execution did not drain before the deadline; published={}, pending={}, inbox={}",
+                final_counts.0, final_counts.1, final_counts.2
+            )
+            .into());
+        }
+        if worker_task.is_finished() {
+            return Err("PostgreSQL worker exited before recovery verification completed".into());
+        }
+        if consumer_task.is_finished() {
+            return Err("JetStream inbox consumer exited before recovery verification completed".into());
+        }
+
+        dispatcher.dispatch_once().await?;
+
+        let workflow = repository.get_workflow_run(&workflow_run_id).await?;
+        match workflow.status() {
+            WorkflowStatus::Succeeded => {
+                if workflow.task_runs().len() != 1 {
+                    return Err("successful restore workflow has an unexpected task count".into());
+                }
+                let task = &workflow.task_runs()[0];
+                if task.task_run_id() != &task_run_id
+                    || task.status() != TaskStatus::Succeeded
+                    || task.output().map(|output| output.as_bytes()) != Some(EXPECTED_OUTPUT)
+                {
+                    return Err("restored task did not persist its expected successful output".into());
+                }
+
+                let outbox = admin_client
+                    .query_one(
+                        "SELECT count(*) FILTER (WHERE published_at IS NOT NULL)::BIGINT,
+                                count(*) FILTER (WHERE published_at IS NULL)::BIGINT
+                         FROM outbox_events
+                         WHERE tenant_id = 'legacy-default'
+                           AND aggregate_id = ANY($1::TEXT[])",
+                        &[&aggregate_ids],
+                    )
+                    .await?;
+                let published: i64 = outbox.get(0);
+                let pending: i64 = outbox.get(1);
+                let inbox: i64 = admin_client
+                    .query_one(
+                        "SELECT count(*)::BIGINT
+                         FROM consumer_inbox AS inbox
+                         JOIN outbox_events AS event
+                           ON event.tenant_id = inbox.tenant_id
+                          AND event.event_id::TEXT = inbox.event_id
+                         WHERE inbox.tenant_id = 'legacy-default'
+                           AND inbox.consumer_name = $2
+                           AND inbox.status = 'processed'
+                           AND event.aggregate_id = ANY($1::TEXT[])",
+                        &[&aggregate_ids, &CONSUMER_NAME],
+                    )
+                    .await?
+                    .get(0);
+                final_counts = (published, pending, inbox);
+                let in_process = i64::try_from(consumer_metrics.snapshot().processed)?;
+
+                if published > 0
+                    && pending == 0
+                    && inbox == published
+                    && in_process == published
+                {
+                    break;
+                }
+            }
+            WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::TimedOut => {
+                return Err(format!(
+                    "restored workflow reached terminal failure status {:?}",
+                    workflow.status()
+                )
+                .into());
+            }
+            WorkflowStatus::Running => {}
+        }
+
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    worker_shutdown.send(true).map_err(|_| "worker shutdown channel closed")?;
+    consumer_shutdown.send(true).map_err(|_| "consumer shutdown channel closed")?;
+    join_task(worker_task, "PostgreSQL worker").await?;
+    join_task(consumer_task, "JetStream consumer").await?;
+    membership.drain_node(&node).await?;
+
+    println!(
+        "PASS: restored API submission executed through PostgreSQL worker; task output persisted; {} outbox events were published and committed to the PostgreSQL inbox with zero duplicates.",
+        final_counts.0
+    );
+    Ok(())
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("restore recovery verification failed: {error:#}");
+        std::process::exit(1);
+    }
+}
