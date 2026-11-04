@@ -20,9 +20,8 @@ use aetherflow_runtime::repository::{TaskInput, TaskOutput};
 use aetherflow_runtime::scheduler::{TaskContext, TaskExecutionError, TaskRegistry};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
-    OutboxDispatcherConfig, PgInboxRepository, PgMembershipRepository, PgStore,
-    PgTaskRepository, PgWorkflowCoordinator, PostgresOutboxDispatcher, PostgresTaskWorker,
-    PostgresWorkerConfig,
+    OutboxDispatcherConfig, PgInboxRepository, PgMembershipRepository, PgStore, PgTaskRepository,
+    PgWorkflowCoordinator, PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig,
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
@@ -98,13 +97,17 @@ impl LoadConfig {
             return Err(invalid("total tasks per profile must not exceed 100000"));
         }
         if payload_bytes > 1_048_576 {
-            return Err(invalid("payload bytes must not exceed the 1 MiB task limit"));
+            return Err(invalid(
+                "payload bytes must not exceed the 1 MiB task limit",
+            ));
         }
         if worker_concurrency == 0 || worker_concurrency > 128 {
             return Err(invalid("workers must be between 1 and 128"));
         }
         if producer_rate == 0 || producer_rate > 10_000 {
-            return Err(invalid("producer rate must be between 1 and 10000 workflows/second"));
+            return Err(invalid(
+                "producer rate must be between 1 and 10000 workflows/second",
+            ));
         }
         if timeout_secs == 0 || timeout_secs > 3600 {
             return Err(invalid("timeout seconds must be between 1 and 3600"));
@@ -186,7 +189,9 @@ fn nats_seeds(urls: &str) -> Result<Vec<async_nats::ServerAddr>, Box<dyn Error>>
         .map(str::parse::<async_nats::ServerAddr>)
         .collect::<Result<Vec<_>, _>>()?;
     if seeds.is_empty() {
-        return Err(invalid("AETHERFLOW_LOAD_NATS_URL must contain at least one NATS URL"));
+        return Err(invalid(
+            "AETHERFLOW_LOAD_NATS_URL must contain at least one NATS URL",
+        ));
     }
     Ok(seeds)
 }
@@ -283,7 +288,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .register_worker(
             &node,
             &worker_id,
-            NonZeroU32::new(worker_capacity).ok_or_else(|| invalid("worker count must be positive"))?,
+            NonZeroU32::new(worker_capacity)
+                .ok_or_else(|| invalid("worker count must be positive"))?,
             Duration::from_secs(60),
         )
         .await?;
@@ -335,7 +341,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let (worker_shutdown, worker_shutdown_rx) = watch::channel(false);
     let worker_task = tokio::spawn(async move {
-        worker.run(worker_shutdown_rx)
+        worker
+            .run(worker_shutdown_rx)
             .await
             .map_err(|error| error.to_string())
     });
@@ -357,7 +364,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     });
     let (consumer_shutdown, consumer_shutdown_rx) = watch::channel(false);
     let consumer_task = tokio::spawn(async move {
-        consumer.run(consumer_shutdown_rx)
+        consumer
+            .run(consumer_shutdown_rx)
             .await
             .map_err(|error| error.to_string())
     });
@@ -365,7 +373,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Wait for the pull consumer to subscribe before creating the first outbox row.
     sleep(Duration::from_millis(100)).await;
 
-    let retry_policy = RetryPolicy::new(NonZeroU32::new(1).ok_or_else(|| invalid("invalid retry policy"))?, 0, 0)?;
+    let retry_policy = RetryPolicy::new(
+        NonZeroU32::new(1).ok_or_else(|| invalid("invalid retry policy"))?,
+        0,
+        0,
+    )?;
     let mut submissions = Vec::with_capacity(config.workflows);
     let producer_interval = Duration::from_secs_f64(1.0 / config.producer_rate as f64);
 
@@ -403,13 +415,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
             )));
         }
         if worker_task.is_finished() {
-            return Err(invalid("PostgreSQL task worker exited before the load profile completed"));
+            return Err(invalid(
+                "PostgreSQL task worker exited before the load profile completed",
+            ));
         }
         if consumer_task.is_finished() {
-            return Err(invalid("JetStream inbox consumer exited before the load profile completed"));
+            return Err(invalid(
+                "JetStream inbox consumer exited before the load profile completed",
+            ));
         }
         if dispatcher_task.is_finished() {
-            return Err(invalid("PostgreSQL outbox dispatcher exited before the load profile completed"));
+            return Err(invalid(
+                "PostgreSQL outbox dispatcher exited before the load profile completed",
+            ));
         }
 
         let rows = client
@@ -429,8 +447,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 "succeeded" => {
                     if completed.insert(workflow_id.clone()) {
                         if let Some(submission) = submitted_at.get(&workflow_id) {
-                            completion_latencies_ms
-                                .push(observed_at.duration_since(*submission).as_secs_f64() * 1000.0);
+                            completion_latencies_ms.push(
+                                observed_at.duration_since(*submission).as_secs_f64() * 1000.0,
+                            );
                         }
                     }
                 }
@@ -454,7 +473,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             return Err(invalid("outbox or inbox drain timed out"));
         }
         if consumer_task.is_finished() || dispatcher_task.is_finished() {
-            return Err(invalid("transport loop stopped before all events were processed"));
+            return Err(invalid(
+                "transport loop stopped before all events were processed",
+            ));
         }
 
         let outbox = client
@@ -522,9 +543,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let _ = worker_shutdown.send(true);
     let _ = dispatcher_shutdown.send(true);
     let _ = consumer_shutdown.send(true);
-    timeout(Duration::from_secs(20), worker_task).await??.map_err(invalid)?;
-    timeout(Duration::from_secs(10), dispatcher_task).await??.map_err(invalid)?;
-    timeout(Duration::from_secs(10), consumer_task).await??.map_err(invalid)?;
+    timeout(Duration::from_secs(20), worker_task)
+        .await??
+        .map_err(invalid)?;
+    timeout(Duration::from_secs(10), dispatcher_task)
+        .await??
+        .map_err(invalid)?;
+    timeout(Duration::from_secs(10), consumer_task)
+        .await??
+        .map_err(invalid)?;
 
     println!(
         "PASS: shape={}, workflows={}, tasks={}, events={}, {:.2} workflows/s, {:.2} tasks/s, p95={:.2} ms; CSV={}",
