@@ -1,6 +1,7 @@
 //! Exercises a restored PostgreSQL database and JetStream target through the
 //! live control-plane API, durable worker, transactional outbox, and inbox.
 use std::error::Error;
+use std::io;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,6 +57,10 @@ impl JetStreamEventHandler for RecoveryEventHandler {
     }
 }
 
+fn failure(message: impl Into<String>) -> Box<dyn Error> {
+    io::Error::other(message.into()).into()
+}
+
 fn required_env(name: &str) -> Result<String, std::io::Error> {
     std::env::var(name).map_err(|_| {
         std::io::Error::new(
@@ -81,11 +86,11 @@ async fn join_task<T>(
     handle: tokio::task::JoinHandle<Result<(), String>>,
     name: &str,
 ) -> Result<(), Box<dyn Error>> {
-    timeout(Duration::from_secs(15), handle)
+    let joined = timeout(Duration::from_secs(15), handle)
         .await
-        .map_err(|_| format!("{name} did not stop within 15 seconds"))?
-        .map_err(|error| format!("{name} task panicked: {error}"))?
-        .map_err(|error| format!("{name} failed: {error}"))?;
+        .map_err(|_| failure(format!("{name} did not stop within 15 seconds")))?;
+    let result = joined.map_err(|error| failure(format!("{name} task panicked: {error}")))?;
+    result.map_err(failure)?;
     Ok(())
 }
 
@@ -104,17 +109,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let workflow = repository.get_workflow_run(&workflow_run_id).await?;
     if workflow.status() != WorkflowStatus::Running {
-        return Err(format!(
+        return Err(failure(format!(
             "expected newly submitted workflow to be running, found {:?}",
             workflow.status()
-        )
-        .into());
+        )));
     }
     if workflow.task_runs().len() != 1
         || workflow.task_runs()[0].task_run_id() != &task_run_id
         || workflow.task_runs()[0].status() != TaskStatus::Pending
     {
-        return Err("restored API submission did not materialize the expected pending task".into());
+        return Err(failure(
+            "restored API submission did not materialize the expected pending task",
+        ));
     }
 
     let task_id = TaskId::parse("restore_smoke_task")?;
@@ -226,19 +232,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     loop {
         if Instant::now() >= deadline {
-            return Err(format!(
+            return Err(failure(format!(
                 "restore execution did not drain before the deadline; published={}, pending={}, inbox={}",
                 final_counts.0, final_counts.1, final_counts.2
-            )
-            .into());
+            )));
         }
         if worker_task.is_finished() {
-            return Err("PostgreSQL worker exited before recovery verification completed".into());
+            return Err(failure(
+                "PostgreSQL worker exited before recovery verification completed",
+            ));
         }
         if consumer_task.is_finished() {
-            return Err(
-                "JetStream inbox consumer exited before recovery verification completed".into(),
-            );
+            return Err(failure(
+                "JetStream inbox consumer exited before recovery verification completed",
+            ));
         }
 
         dispatcher.dispatch_once().await?;
@@ -247,16 +254,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
         match workflow.status() {
             WorkflowStatus::Succeeded => {
                 if workflow.task_runs().len() != 1 {
-                    return Err("successful restore workflow has an unexpected task count".into());
+                    return Err(failure(
+                        "successful restore workflow has an unexpected task count",
+                    ));
                 }
                 let task = &workflow.task_runs()[0];
                 if task.task_run_id() != &task_run_id
                     || task.status() != TaskStatus::Succeeded
                     || task.output().map(|output| output.as_bytes()) != Some(EXPECTED_OUTPUT)
                 {
-                    return Err(
-                        "restored task did not persist its expected successful output".into(),
-                    );
+                    return Err(failure(
+                        "restored task did not persist its expected successful output",
+                    ));
                 }
 
                 let outbox = admin_client
@@ -294,11 +303,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
             WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::TimedOut => {
-                return Err(format!(
+                return Err(failure(format!(
                     "restored workflow reached terminal failure status {:?}",
                     workflow.status()
-                )
-                .into());
+                )));
             }
             WorkflowStatus::Running => {}
         }
@@ -308,10 +316,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     worker_shutdown
         .send(true)
-        .map_err(|_| "worker shutdown channel closed")?;
+        .map_err(|_| failure("worker shutdown channel closed"))?;
     consumer_shutdown
         .send(true)
-        .map_err(|_| "consumer shutdown channel closed")?;
+        .map_err(|_| failure("consumer shutdown channel closed"))?;
     join_task(worker_task, "PostgreSQL worker").await?;
     join_task(consumer_task, "JetStream consumer").await?;
     membership.drain_node(&node).await?;
