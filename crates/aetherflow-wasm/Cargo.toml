@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Versioned WebAssembly plugin ABI and capability contracts for AetherFlow."
 
 [dependencies]
-aetherflow-core = { path = "../aetherflow-core" }
+aetherflow-core = { version = "0.1.0", path = "../aetherflow-core" }
 wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std", "wit-parser"] }
 
 [dev-dependencies]
