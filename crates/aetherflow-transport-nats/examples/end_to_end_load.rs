@@ -445,12 +445,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let status: String = row.get(1);
             match status.as_str() {
                 "succeeded" => {
-                    if completed.insert(workflow_id.clone()) {
-                        if let Some(submission) = submitted_at.get(&workflow_id) {
-                            completion_latencies_ms.push(
-                                observed_at.duration_since(*submission).as_secs_f64() * 1000.0,
-                            );
-                        }
+                    if completed.insert(workflow_id.clone())
+                        && let Some(submission) = submitted_at.get(&workflow_id)
+                    {
+                        completion_latencies_ms.push(
+                            observed_at.duration_since(*submission).as_secs_f64() * 1000.0,
+                        );
                     }
                 }
                 "failed" | "cancelled" | "timed_out" => {
