@@ -85,7 +85,7 @@ fn postgres_pool(database_url: &str, max_size: usize) -> Result<Pool, Box<dyn Er
     Ok(Pool::builder(manager).max_size(max_size).build()?)
 }
 
-async fn join_task<T>(
+async fn join_task(
     handle: tokio::task::JoinHandle<Result<(), String>>,
     name: &str,
 ) -> Result<(), Box<dyn Error>> {
