@@ -106,6 +106,8 @@ fi
 if ! grep -Fq 'while the durable task handler is in flight' "$restore_script" ||
    ! grep -Fq 'PASS: durable worker completed its in-flight task while the API remained offline after SIGKILL.' "$restore_script" ||
    ! grep -Fq 'five-second wait' "$backup_doc" ||
+   ! grep -Fq 'handler itself writes its dedicated start marker' "$backup_doc" ||
+   ! grep -Fq 'AETHERFLOW_RESTORE_HANDLER_STARTED_FILE' "$restore_example" ||
    ! grep -Fq 'while the handler is in flight' "$production_doc"; then
   echo "The restore rehearsal must kill the API during an in-flight durable task and document worker completion while it is offline." >&2
   exit 1

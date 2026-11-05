@@ -140,6 +140,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         ));
     }
 
+    let handler_started_file = std::path::PathBuf::from(required_env(
+        "AETHERFLOW_RESTORE_HANDLER_STARTED_FILE",
+    )?);
     let task_id = TaskId::parse("restore_smoke_task")?;
     let expected_input = EXPECTED_INPUT.to_vec();
     let expected_output = TaskOutput::new(EXPECTED_OUTPUT.to_vec())?;
@@ -147,14 +150,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
     registry.register(task_id, move |context: TaskContext| {
         let expected_input = expected_input.clone();
         let output = expected_output.clone();
+        let handler_started_file = handler_started_file.clone();
         async move {
             if context.input().as_bytes() != expected_input.as_slice() {
                 return Err(TaskExecutionError::permanent(
                     "restored task input did not match the API submission",
                 ));
             }
-            // Keep the durable attempt visibly in flight while the CI orchestrator
-            // kills the independent API process; the worker must finish without it.
+            // Confirm handler entry to the independent CI orchestrator before it
+            // kills the API; the worker must finish without the control plane.
+            std::fs::write(&handler_started_file, b"started").map_err(|_| {
+                TaskExecutionError::permanent("could not create the in-flight handler marker")
+            })?;
             tokio::time::sleep(Duration::from_secs(5)).await;
             Ok(output)
         }

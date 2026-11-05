@@ -319,6 +319,8 @@ jq --exit-status \
 echo "PASS: accepted workflow and pending task remained readable after abrupt API termination and restart."
 
 echo "Starting the durable PostgreSQL worker, outbox publisher, and JetStream inbox consumer in an independent process..."
+handler_started_file="$work_dir/handler-started.marker"
+AETHERFLOW_RESTORE_HANDLER_STARTED_FILE="$handler_started_file" \\
 AETHERFLOW_RESTORE_DATABASE_URL="$restore_runtime_url" \
 AETHERFLOW_RESTORE_ADMIN_DATABASE_URL="$restore_admin_url" \
 AETHERFLOW_RESTORE_NATS_URL="$NATS_RESTORE_URL" \
@@ -351,7 +353,7 @@ for attempt in $(seq 1 100); do
       AND task_run_id = '$task_run_id'
       AND outcome = 'running'
   ")"
-  if [[ "$running_attempt_count" == "1" ]]; then
+  if [[ "$running_attempt_count" == "1" && -f "$handler_started_file" ]]; then
     in_flight_attempt=true
     break
   fi
@@ -363,8 +365,6 @@ if [[ "$in_flight_attempt" != "true" ]]; then
   exit 1
 fi
 
-# Let the handler enter its deliberate five-second wait before removing the API.
-sleep 1
 stop_restored_api_abruptly "while the durable task handler is in flight"
 if wait "$verifier_pid"; then
   verifier_pid=""
