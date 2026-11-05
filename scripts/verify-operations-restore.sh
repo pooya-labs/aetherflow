@@ -33,6 +33,67 @@ psql_restore() {
     --host "$PGHOST" --port "$PGPORT" --username "$PGUSER" --dbname "$restore_database" "$@"
 }
 
+start_restored_api() {
+  local startup_message="$1"
+  local api_ready=false
+  echo "$startup_message"
+  DATABASE_URL="$restore_runtime_url" \
+  AETHERFLOW_MIGRATION_DATABASE_URL="$restore_admin_url" \
+  AETHERFLOW_API_TOKEN="$api_token" \
+  DATABASE_SSL_MODE=disable \
+  AETHERFLOW_BIND="$api_bind" \
+  OTEL_TRACES_EXPORTER=none \
+    "$repo_root/target/release/aetherflow-server" >>"$work_dir/aetherflow-server.log" 2>&1 &
+  server_pid=$!
+
+  for attempt in $(seq 1 60); do
+    if curl --silent --fail --output /dev/null \
+      --header "Authorization: Bearer $api_token" \
+      "$api_base_url/api/v1/workers"; then
+      api_ready=true
+      break
+    fi
+    if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+      cat "$work_dir/aetherflow-server.log" >&2
+      echo "AetherFlow exited before the restored API became ready." >&2
+      return 1
+    fi
+    sleep 1
+  done
+  if [[ "$api_ready" != "true" ]]; then
+    cat "$work_dir/aetherflow-server.log" >&2
+    echo "AetherFlow did not become ready against the restored PostgreSQL database." >&2
+    return 1
+  fi
+}
+
+stop_restored_api_abruptly() {
+  if [[ -z "$server_pid" ]] || ! kill -0 "$server_pid" >/dev/null 2>&1; then
+    echo "Cannot inject API process loss because the restored API is not running." >&2
+    return 1
+  fi
+
+  echo "Injecting abrupt API process loss after workflow acceptance and before worker startup..."
+  kill -KILL "$server_pid"
+  wait "$server_pid" >/dev/null 2>&1 || true
+  server_pid=""
+
+  local api_stopped=false
+  for attempt in $(seq 1 30); do
+    if ! curl --silent --fail --output /dev/null \
+      --header "Authorization: Bearer $api_token" \
+      "$api_base_url/api/v1/workers"; then
+      api_stopped=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$api_stopped" != "true" ]]; then
+    echo "The restored API endpoint remained reachable after SIGKILL." >&2
+    return 1
+  fi
+}
+
 echo "Checking the source PostgreSQL schema before backup..."
 source_migrations="$(psql_source --command "SELECT count(*) || ':' || max(version) FROM aetherflow_schema_migrations")"
 if [[ "$source_migrations" != "8:8" ]]; then
@@ -195,36 +256,7 @@ restore_runtime_url="postgres://$runtime_role:$runtime_password@$PGHOST:$PGPORT/
 api_token="$(openssl rand -hex 32)"
 api_base_url="http://$api_bind"
 
-echo "Starting AetherFlow against the restored database with the restricted runtime role..."
-DATABASE_URL="$restore_runtime_url" \
-AETHERFLOW_MIGRATION_DATABASE_URL="$restore_admin_url" \
-AETHERFLOW_API_TOKEN="$api_token" \
-DATABASE_SSL_MODE=disable \
-AETHERFLOW_BIND="$api_bind" \
-OTEL_TRACES_EXPORTER=none \
-  "$repo_root/target/release/aetherflow-server" >"$work_dir/aetherflow-server.log" 2>&1 &
-server_pid=$!
-
-api_ready=false
-for attempt in $(seq 1 60); do
-  if curl --silent --fail --output /dev/null \
-    --header "Authorization: Bearer $api_token" \
-    "$api_base_url/api/v1/workers"; then
-    api_ready=true
-    break
-  fi
-  if ! kill -0 "$server_pid" >/dev/null 2>&1; then
-    cat "$work_dir/aetherflow-server.log" >&2
-    echo "AetherFlow exited before the restored API became ready." >&2
-    exit 1
-  fi
-  sleep 1
-done
-if [[ "$api_ready" != "true" ]]; then
-  cat "$work_dir/aetherflow-server.log" >&2
-  echo "AetherFlow did not become ready against the restored PostgreSQL database." >&2
-  exit 1
-fi
+start_restored_api "Starting AetherFlow against the restored database with the restricted runtime role..."
 
 echo "Submitting a real workflow through the restored HTTP control plane..."
 input_base64="$(printf '%s' 'restore-smoke-input' | base64 --wrap=0)"
@@ -265,6 +297,20 @@ jq --exit-status \
    and .task_runs[0].status == "pending"' \
   "$work_dir/workflow-receipt.json" >/dev/null
 task_run_id="$(jq --exit-status --raw-output '.task_runs[0].task_run_id' "$work_dir/workflow-receipt.json")"
+
+stop_restored_api_abruptly
+start_restored_api "Restarting AetherFlow against the same restored PostgreSQL database after abrupt API termination..."
+
+workflow_after_restart="$work_dir/workflow-after-api-restart.json"
+curl --silent --show-error --fail \
+  --header "Authorization: Bearer $api_token" \
+  "$api_base_url/api/v1/workflow-runs/restore_smoke_run" >"$workflow_after_restart"
+jq --exit-status \
+  '.status == "running"
+   and (.task_runs | length) == 1
+   and .task_runs[0].status == "pending"' \
+  "$workflow_after_restart" >/dev/null
+echo "PASS: accepted workflow and pending task remained readable after abrupt API termination and restart."
 
 echo "Running the durable PostgreSQL worker, outbox publisher, and JetStream inbox consumer..."
 AETHERFLOW_RESTORE_DATABASE_URL="$restore_runtime_url" \
