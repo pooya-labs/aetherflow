@@ -8,12 +8,13 @@ migration_dir="crates/aetherflow-runtime/migrations/postgres"
 migration_source="crates/aetherflow-storage-postgres/src/lib.rs"
 rls_source="$migration_dir/0006_force_tenant_row_level_security.sql"
 backup_doc="docs/operations/backup-restore.md"
+production_doc="docs/operations/production-guide.md"
 upgrade_doc="docs/operations/schema-upgrades.md"
 restore_script="scripts/verify-operations-restore.sh"
 restore_example="crates/aetherflow-transport-nats/examples/verify_restored_execution.rs"
 postgres_workflow=".github/workflows/postgres-schema.yml"
 
-for path in "$migration_source" "$rls_source" "$backup_doc" "$upgrade_doc" "$restore_script" "$restore_example" "$postgres_workflow"; do
+for path in "$migration_source" "$rls_source" "$backup_doc" "$production_doc" "$upgrade_doc" "$restore_script" "$restore_example" "$postgres_workflow"; do
   if [[ ! -f "$path" ]]; then
     printf 'Missing operations validation input: %s\n' "$path" >&2
     exit 1
@@ -109,7 +110,7 @@ fi
 if ! grep -Fq 'POST /api/v1/workflow-runs' "$backup_doc" ||
    ! grep -Fq 'PostgreSQL worker process' "$backup_doc" ||
    ! grep -Fq 'PostgreSQL inbox consumer' "$backup_doc" ||
-   ! grep -Fq 'before worker startup' "$prod_doc"; then
+   ! grep -Fq 'before worker startup' "$production_doc"; then
   echo "Operations runbooks must describe the HTTP-to-worker-to-inbox and control-plane restart rehearsal." >&2
   exit 1
 fi
