@@ -95,15 +95,23 @@ if ! grep -Fq 'target/release/aetherflow-server' "$restore_script" ||
   echo "The restore rehearsal must start the server and execute its dedicated runtime verifier." >&2
   exit 1
 fi
+if ! grep -Fq 'kill -KILL "$server_pid"' "$restore_script" ||
+   ! grep -Fq 'PASS: accepted workflow and pending task remained readable after abrupt API termination and restart.' "$restore_script" ||
+   ! grep -Fq 'SIGKILL' "$backup_doc" ||
+   ! grep -Fq 'before worker startup' "$backup_doc"; then
+  echo "The restore rehearsal must inject and document API process restart after workflow acceptance and before worker startup." >&2
+  exit 1
+fi
 if ! grep -Fq 'Build restored server and execution verifier' "$postgres_workflow"; then
   echo "PostgreSQL CI must build the restored server and execution verifier before the rehearsal." >&2
   exit 1
 fi
 if ! grep -Fq 'POST /api/v1/workflow-runs' "$backup_doc" ||
    ! grep -Fq 'PostgreSQL worker process' "$backup_doc" ||
-   ! grep -Fq 'PostgreSQL inbox consumer' "$backup_doc"; then
-  echo "Backup/restore runbook must describe the HTTP-to-worker-to-inbox rehearsal." >&2
+   ! grep -Fq 'PostgreSQL inbox consumer' "$backup_doc" ||
+   ! grep -Fq 'before worker startup' "$prod_doc"; then
+  echo "Operations runbooks must describe the HTTP-to-worker-to-inbox and control-plane restart rehearsal." >&2
   exit 1
 fi
 
-echo "Operations runbooks match migration v${schema_version}, all 10 forced-RLS tables, the NATS CLI pin, and the post-restore application execution drill."
+echo "Operations runbooks match migration v${schema_version}, all 10 forced-RLS tables, the NATS CLI pin, and the restore/restart application recovery drills."
