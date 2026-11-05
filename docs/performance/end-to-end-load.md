@@ -174,9 +174,56 @@ A second PostgreSQL/NATS five-repeat session completed in CI [41860721271](https
 
 The archived artifact is `aetherflow-end-to-end-baseline-db204488edc219d105552ee646245054ac9ed913` (run [41860721271](https://github.com/pooya-labs/aetherflow/actions/runs/41860721271), attempt 2). It contains all ten per-run CSVs, a combined sample CSV, summary statistics, and `metadata.json`.
 
-**Comparison boundary:** the first session ran on an AMD EPYC 9V45 host; this session ran on an AMD EPYC 7763 host. The runner image, kernel, vCPU allocation, memory, Rust/PostgreSQL/NATS versions, and workload match, but the CPU model does not. Keep these as separate fingerprinted baselines; do not pool the samples or interpret the throughput difference as a regression. A further independent session matching the full CPU fingerprint is still required before setting automated regression thresholds.
+**Comparison boundary:** the first session ran on an AMD EPYC 9V45 host; this session ran on an AMD EPYC 7763 host. The runner image, kernel, vCPU allocation, memory, Rust/PostgreSQL/NATS versions, and workload match, but the CPU model does not. Keep these as separate fingerprinted baselines; do not pool the samples or interpret the throughput difference as a regression. An independent repeat on the same practical AMD EPYC 9V45 fingerprint is now archived in the third-session section. Automated thresholds remain disabled until a conservative, fingerprint-aware comparison policy is implemented.
+## Third five-repeat session — repeated AMD EPYC 9V45 fingerprint (2026-11-05)
+
+An independent five-repeat session completed in [PostgreSQL/NATS CI 42011508896](https://github.com/pooya-labs/aetherflow/actions/runs/42011508896) on exact source e112fa44bfb50da4bc60087ef6be6e0370826cae. It ran five fan-out and five chain repetitions, each using a fresh PostgreSQL database and unique JetStream stream. Every repetition reconciled 896 published outbox events with 896 processed inbox rows; duplicate and error counts were zero.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | ubuntu-24.04 |
+| Hosted image | ubuntu24 / 20261026.354.1 |
+| Kernel | 7.0.0-1017-azure |
+| CPU | AMD EPYC 9V45 96-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,340,480 bytes (about 15.6 GiB) |
+| Rust toolchain | 1.99.1 |
+| PostgreSQL | 18.6 (Debian 18.6-1.pgdg13+2) |
+| NATS Server | 2.12.15 |
+| Workload | 64 workflows × 4 tasks; 256-byte input |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+Compared with the first AMD EPYC 9V45 reference, all recorded hardware/software/workload fields match except memory_bytes, which is 4,096 bytes (one 4 KiB page) lower. Both values normalize to the same whole MiB. This is treated as the same practical runner fingerprint, while the raw metadata difference remains explicit. The archived artifact is aetherflow-end-to-end-baseline-e112fa44bfb50da4bc60087ef6be6e0370826cae (90-day retention); it contains all ten per-run CSVs, combined samples, summary statistics, and metadata.json.
+
+### Results (third session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 7.415 | 7.298 |
+| Mean workflows/s | 7.347 | 7.301 |
+| Sample standard deviation, workflows/s | 0.139 | 0.038 |
+| Observed range, workflows/s | 7.112–7.447 | 7.250–7.340 |
+| Median tasks/s | 29.659 | 29.193 |
+| Median workflow p50 | 4,026.491 ms | 4,083.682 ms |
+| Median workflow p95 | 7,798.545 ms | 7,899.231 ms |
+| Sample standard deviation, p95 | 171.279 ms | 38.213 ms |
+| Median whole-run elapsed | 8,631.509 ms | 8,769.294 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+Relative to the first 9V45 session, median throughput is 1.31% higher for fan-out and 1.43% higher for chain; median p95 is 0.83% lower and 1.30% lower respectively. These are descriptive repeatability results, not evidence of a performance improvement: both sessions ran on shared ephemeral hosted VMs.
+
+### Matched-fingerprint interpretation
+
+The first and third sessions provide ten repetitions per workload shape across two independent sessions on the same practical AMD EPYC 9V45 runner fingerprint. Their distributions are close and all event reconciliation/duplicate/error checks pass. The AMD EPYC 7763 session remains a separate baseline and must not be pooled with these samples. The one-page memory delta is documented rather than hidden; no automated performance threshold is enabled until the repository has a conservative, fingerprint-aware comparison policy.
+
 ### Interpretation and remaining validation
 
-Both archived profiles are five-repeat baselines on ephemeral hosted VMs, not dedicated reserved performance hosts, production capacity results, or customer-facing SLOs. Within-session variation is recorded for each fingerprint. Because the CPU model differs between the two sessions, their throughput values are not a matched day-to-day repeatability comparison and must not be pooled. Run the same profile in an independent session that matches the complete CPU/environment fingerprint before setting any automated regression threshold. No automated performance threshold is enabled.
+Both archived profiles are five-repeat baselines on ephemeral hosted VMs, not dedicated reserved performance hosts, production capacity results, or customer-facing SLOs. Within-session variation is recorded for each fingerprint. Because the CPU model differs between the two sessions, their throughput values are not a matched day-to-day repeatability comparison and must not be pooled. The same practical CPU/environment fingerprint now has two independent five-repeat sessions (ten samples per shape), with a one-page visible-memory difference documented. A future threshold must compare only compatible fingerprints and must not pool the EPYC 7763 samples. No automated performance threshold is enabled.
 
 The harness still exercises the coordinator directly rather than HTTP/TLS/authentication, uses the `legacy-default` compatibility tenant path, one worker process, and one inbox consumer loop. It does not measure multi-process scaling, per-tenant authorization overhead, external side effects, or production sizing.
