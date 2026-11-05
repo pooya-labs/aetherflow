@@ -11,8 +11,13 @@ readonly runtime_role="aetherflow_runtime_test"
 readonly runtime_password="aetherflow-runtime-ci-password"
 readonly api_bind="127.0.0.1:8081"
 server_pid=""
+verifier_pid=""
 
 cleanup() {
+  if [[ -n "$verifier_pid" ]]; then
+    kill "$verifier_pid" >/dev/null 2>&1 || true
+    wait "$verifier_pid" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" >/dev/null 2>&1 || true
     wait "$server_pid" >/dev/null 2>&1 || true
@@ -68,12 +73,13 @@ start_restored_api() {
 }
 
 stop_restored_api_abruptly() {
+  local injection_context="$1"
   if [[ -z "$server_pid" ]] || ! kill -0 "$server_pid" >/dev/null 2>&1; then
     echo "Cannot inject API process loss because the restored API is not running." >&2
     return 1
   fi
 
-  echo "Injecting abrupt API process loss after workflow acceptance and before worker startup..."
+  echo "Injecting abrupt API process loss $injection_context..."
   kill -KILL "$server_pid"
   wait "$server_pid" >/dev/null 2>&1 || true
   server_pid=""
@@ -298,7 +304,7 @@ jq --exit-status \
   "$work_dir/workflow-receipt.json" >/dev/null
 task_run_id="$(jq --exit-status --raw-output '.task_runs[0].task_run_id' "$work_dir/workflow-receipt.json")"
 
-stop_restored_api_abruptly
+stop_restored_api_abruptly "after workflow acceptance and before worker startup"
 start_restored_api "Restarting AetherFlow against the same restored PostgreSQL database after abrupt API termination..."
 
 workflow_after_restart="$work_dir/workflow-after-api-restart.json"
@@ -312,13 +318,66 @@ jq --exit-status \
   "$workflow_after_restart" >/dev/null
 echo "PASS: accepted workflow and pending task remained readable after abrupt API termination and restart."
 
-echo "Running the durable PostgreSQL worker, outbox publisher, and JetStream inbox consumer..."
+echo "Starting the durable PostgreSQL worker, outbox publisher, and JetStream inbox consumer in an independent process..."
 AETHERFLOW_RESTORE_DATABASE_URL="$restore_runtime_url" \
 AETHERFLOW_RESTORE_ADMIN_DATABASE_URL="$restore_admin_url" \
 AETHERFLOW_RESTORE_NATS_URL="$NATS_RESTORE_URL" \
 AETHERFLOW_RESTORE_WORKFLOW_RUN_ID="restore_smoke_run" \
 AETHERFLOW_RESTORE_TASK_RUN_ID="$task_run_id" \
-  "$repo_root/target/release/examples/verify_restored_execution"
+  "$repo_root/target/release/examples/verify_restored_execution" \
+  >"$work_dir/verify-restored-execution.log" 2>&1 &
+verifier_pid=$!
+
+in_flight_attempt=false
+for attempt in $(seq 1 100); do
+  if ! kill -0 "$verifier_pid" >/dev/null 2>&1; then
+    if wait "$verifier_pid"; then
+      verifier_pid=""
+      cat "$work_dir/verify-restored-execution.log"
+      echo "The recovery verifier exited before an in-flight task attempt was observed." >&2
+      exit 1
+    else
+      verifier_status=$?
+      verifier_pid=""
+      cat "$work_dir/verify-restored-execution.log" >&2
+      printf 'The recovery verifier exited early with status %s.\\n' "$verifier_status" >&2
+      exit 1
+    fi
+  fi
+  running_attempt_count="$(psql_restore --command "
+    SELECT count(*)
+    FROM task_attempts
+    WHERE tenant_id = 'legacy-default'
+      AND task_run_id = '$task_run_id'
+      AND outcome = 'running'
+  ")"
+  if [[ "$running_attempt_count" == "1" ]]; then
+    in_flight_attempt=true
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$in_flight_attempt" != "true" ]]; then
+  cat "$work_dir/verify-restored-execution.log" >&2
+  echo "The durable worker did not expose an in-flight task attempt before the orchestration deadline." >&2
+  exit 1
+fi
+
+# Let the handler enter its deliberate five-second wait before removing the API.
+sleep 1
+stop_restored_api_abruptly "while the durable task handler is in flight"
+if ! wait "$verifier_pid"; then
+  verifier_status=$?
+  cat "$work_dir/verify-restored-execution.log" >&2
+  verifier_pid=""
+  printf 'The durable worker/consumer verifier failed while the API was offline (status %s).\\n' "$verifier_status" >&2
+  exit 1
+fi
+verifier_pid=""
+cat "$work_dir/verify-restored-execution.log"
+echo "PASS: durable worker completed its in-flight task while the API remained offline after SIGKILL."
+
+start_restored_api "Restarting the API after the durable worker completed while the control plane was offline..."
 
 workflow_snapshot="$work_dir/workflow-snapshot.json"
 curl --silent --show-error --fail \

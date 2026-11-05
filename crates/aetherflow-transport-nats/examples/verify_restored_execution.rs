@@ -153,6 +153,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "restored task input did not match the API submission",
                 ));
             }
+            // Keep the durable attempt visibly in flight while the CI orchestrator
+            // kills the independent API process; the worker must finish without it.
+            tokio::time::sleep(Duration::from_secs(5)).await;
             Ok(output)
         }
     })?;

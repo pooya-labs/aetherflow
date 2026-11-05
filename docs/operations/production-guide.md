@@ -90,7 +90,7 @@ Current instrumentation is not yet a complete workflow SLO dashboard. In particu
 - Stop new submissions if the durable state/transport relationship cannot be trusted.
 - Preserve PostgreSQL and JetStream data and logs; do not independently restore one side to an arbitrary point.
 - Resume publishers/consumers only after following the coordinated recovery procedure and checking duplicate/replay implications.
-- The CI rehearsal restores disposable PostgreSQL/JetStream fixtures, starts the actual control plane with a restricted runtime role, submits a workflow over HTTP, forcibly terminates and restarts the API before worker startup, verifies the accepted pending workflow remains visible, then executes it through a separate durable worker and verifies outbox publication plus inbox completion. This is a single-process restart/persistence check, not an HA/failover or production point-in-time recovery policy.
+- The CI rehearsal restores disposable PostgreSQL/JetStream fixtures, starts the actual control plane with a restricted runtime role, submits a workflow over HTTP, and first forcibly terminates/restarts the API before worker startup to verify accepted state persistence. It then starts the durable worker in a separate process, waits for a running task attempt, kills the API again while the handler is in flight, and verifies the worker still completes the task and event delivery while the control plane is offline. The API is restarted afterward to read the terminal state. This proves only the tested process separation/persistence path, not HA/failover or production point-in-time recovery.
 
 ## 7. Backup, restore, and schema changes
 
