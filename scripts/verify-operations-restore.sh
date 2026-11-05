@@ -366,14 +366,15 @@ fi
 # Let the handler enter its deliberate five-second wait before removing the API.
 sleep 1
 stop_restored_api_abruptly "while the durable task handler is in flight"
-if ! wait "$verifier_pid"; then
+if wait "$verifier_pid"; then
+  verifier_pid=""
+else
   verifier_status=$?
   cat "$work_dir/verify-restored-execution.log" >&2
   verifier_pid=""
   printf 'The durable worker/consumer verifier failed while the API was offline (status %s).\\n' "$verifier_status" >&2
   exit 1
 fi
-verifier_pid=""
 cat "$work_dir/verify-restored-execution.log"
 echo "PASS: durable worker completed its in-flight task while the API remained offline after SIGKILL."
 
