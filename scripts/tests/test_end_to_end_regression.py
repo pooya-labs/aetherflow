@@ -3,13 +3,13 @@ import json
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "check_end_to_end_regression", ROOT / "check-end-to-end-regression.py"
+    "check_end_to_end_regression", REPO_ROOT / "scripts/check-end-to-end-regression.py"
 )
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
-REFERENCE = json.loads((ROOT / "docs/performance/reference/amd-epyc-9v45.json").read_text())
+REFERENCE = json.loads((REPO_ROOT / "docs/performance/reference/amd-epyc-9v45.json").read_text())
 
 
 def fixture():
