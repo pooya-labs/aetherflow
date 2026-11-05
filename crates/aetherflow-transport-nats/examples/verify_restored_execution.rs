@@ -140,9 +140,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         ));
     }
 
-    let handler_started_file = std::path::PathBuf::from(required_env(
-        "AETHERFLOW_RESTORE_HANDLER_STARTED_FILE",
-    )?);
+    let handler_started_file =
+        std::path::PathBuf::from(required_env("AETHERFLOW_RESTORE_HANDLER_STARTED_FILE")?);
     let task_id = TaskId::parse("restore_smoke_task")?;
     let expected_input = EXPECTED_INPUT.to_vec();
     let expected_output = TaskOutput::new(EXPECTED_OUTPUT.to_vec())?;
