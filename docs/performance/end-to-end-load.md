@@ -174,7 +174,7 @@ A second PostgreSQL/NATS five-repeat session completed in CI [41860721271](https
 
 The archived artifact is `aetherflow-end-to-end-baseline-db204488edc219d105552ee646245054ac9ed913` (run [41860721271](https://github.com/pooya-labs/aetherflow/actions/runs/41860721271), attempt 2). It contains all ten per-run CSVs, a combined sample CSV, summary statistics, and `metadata.json`.
 
-**Comparison boundary:** the first session ran on an AMD EPYC 9V45 host; this session ran on an AMD EPYC 7763 host. The runner image, kernel, vCPU allocation, memory, Rust/PostgreSQL/NATS versions, and workload match, but the CPU model does not. Keep these as separate fingerprinted baselines; do not pool the samples or interpret the throughput difference as a regression. An independent repeat on the same practical AMD EPYC 9V45 fingerprint is now archived in the third-session section. Automated thresholds remain disabled until a conservative, fingerprint-aware comparison policy is implemented.
+**Comparison boundary:** the first session ran on an AMD EPYC 9V45 host; this session ran on an AMD EPYC 7763 host. The runner image, kernel, vCPU allocation, memory, Rust/PostgreSQL/NATS versions, and workload match, but the CPU model does not. Keep these as separate fingerprinted baselines; do not pool the samples or interpret the throughput difference as a regression. An independent repeat on the same practical AMD EPYC 9V45 fingerprint is now archived in the third-session section. The conservative fingerprint-aware CI gate is described above; thresholds remain limited to the matching 9V45 environment and are not SLOs.
 ## Third five-repeat session — repeated AMD EPYC 9V45 fingerprint (2026-11-05)
 
 An independent five-repeat session completed in [PostgreSQL/NATS CI 42011508896](https://github.com/pooya-labs/aetherflow/actions/runs/42011508896) on exact source e112fa44bfb50da4bc60087ef6be6e0370826cae. It ran five fan-out and five chain repetitions, each using a fresh PostgreSQL database and unique JetStream stream. Every repetition reconciled 896 published outbox events with 896 processed inbox rows; duplicate and error counts were zero.
@@ -220,7 +220,20 @@ Relative to the first 9V45 session, median throughput is 1.31% higher for fan-ou
 
 ### Matched-fingerprint interpretation
 
-The first and third sessions provide ten repetitions per workload shape across two independent sessions on the same practical AMD EPYC 9V45 runner fingerprint. Their distributions are close and all event reconciliation/duplicate/error checks pass. The AMD EPYC 7763 session remains a separate baseline and must not be pooled with these samples. The one-page memory delta is documented rather than hidden; no automated performance threshold is enabled until the repository has a conservative, fingerprint-aware comparison policy.
+The first and third sessions provide ten repetitions per workload shape across two independent sessions on the same practical AMD EPYC 9V45 runner fingerprint. Their distributions are close and all event reconciliation/duplicate/error checks pass. The AMD EPYC 7763 session remains a separate baseline and must not be pooled with these samples. The one-page memory delta is documented rather than hidden; the comparator now applies broad 10% throughput and 15% p95 regression limits only to that matching normalized fingerprint.
+
+## Matched-fingerprint CI regression gate
+
+The PostgreSQL/NATS workflow runs a standard-library Python comparator after uploading each raw benchmark artifact. The committed reference in docs/performance/reference/amd-epyc-9v45.json pools ten samples per shape from two independent five-repeat sessions on AMD EPYC 9V45.
+
+The comparator applies these deliberately broad limits only when the current runner fingerprint and workload match the reference:
+- Median whole-run throughput must remain at or above 90% of the reference median.
+- Median workflow p95 must remain at or below 115% of the reference median.
+- Every profile must still have five repeats, reconciled outbox/inbox counts, zero duplicate events, and zero errors.
+
+The fingerprint includes runner label/OS/architecture, hosted image and version, kernel, CPU model, logical CPU count, Rust toolchain, PostgreSQL/NATS versions, and workload settings. Memory is normalized down to whole MiB because the two 9V45 sessions differed by only one 4 KiB page in /proc/meminfo. If any other fingerprint or workload field differs, the comparator reports SKIP and CI retains the uploaded artifact without applying a threshold. In particular, the AMD EPYC 7763 host is not compared with the 9V45 reference until its own matched repeat is available.
+
+These limits are regression tripwires, not SLOs, production-capacity claims, or a substitute for dedicated performance infrastructure. The comparator's unit tests cover matching and mismatching fingerprints, workload drift, incomplete samples, event reconciliation, duplicate detection, throughput regression, and p95 regression.
 
 ### Interpretation and remaining validation
 

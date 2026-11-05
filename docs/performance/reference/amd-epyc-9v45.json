@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "Conservative matched-fingerprint reference pooled from two independent five-repeat sessions on AMD EPYC 9V45. Memory is normalized to whole MiB because /proc/meminfo is page-granular.",
+  "source_runs": [41776885575, 42011508896],
+  "source_shas": [
+    "b9d30659caed6c525ec6a245f5b8d44bf5cc2dd3",
+    "e112fa44bfb50da4bc60087ef6be6e0370826cae"
+  ],
+  "sample_count_per_shape": 10,
+  "repeat_count_per_shape": 5,
+  "environment": {
+    "runner_label": "ubuntu-24.04",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "runner_image_os": "ubuntu24",
+    "runner_image_version": "20261026.354.1",
+    "kernel_release": "7.0.0-1017-azure",
+    "machine_architecture": "x86_64",
+    "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+    "logical_cpus": 4,
+    "memory_mib": 15983,
+    "rust_toolchain": "1.99.1",
+    "postgres_server_version": "18.6 (Debian 18.6-1.pgdg13+2)",
+    "nats_server_version": "2.12.15"
+  },
+  "workload": {
+    "workflows_per_repeat": 64,
+    "tasks_per_workflow": 4,
+    "payload_bytes": 256,
+    "worker_concurrency": 4,
+    "offered_workflow_rate_per_second": 8,
+    "handler_delay_ms": 1,
+    "timeout_seconds": 240,
+    "shapes": ["fan_out", "chain"]
+  },
+  "shapes": {
+    "fan_out": {
+      "median_workflows_per_second": 7.3615,
+      "median_p95_workflow_ms": 7847.1675,
+      "max_throughput_drop_percent": 10,
+      "max_p95_increase_percent": 15
+    },
+    "chain": {
+      "median_workflows_per_second": 7.2465,
+      "median_p95_workflow_ms": 7965.2355,
+      "max_throughput_drop_percent": 10,
+      "max_p95_increase_percent": 15
+    }
+  }
+}

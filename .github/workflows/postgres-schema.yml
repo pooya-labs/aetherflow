@@ -11,6 +11,10 @@ on:
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - "apps/aetherflow-server/**"
       - "scripts/verify-operations-restore.sh"
+      - "scripts/run-end-to-end-baseline.py"
+      - "scripts/check-end-to-end-regression.py"
+      - "scripts/tests/**"
+      - "docs/performance/reference/**"
       - ".github/workflows/postgres-schema.yml"
   pull_request:
     paths:
@@ -21,6 +25,10 @@ on:
       - "crates/aetherflow-runtime/migrations/postgres/**"
       - "apps/aetherflow-server/**"
       - "scripts/verify-operations-restore.sh"
+      - "scripts/run-end-to-end-baseline.py"
+      - "scripts/check-end-to-end-regression.py"
+      - "scripts/tests/**"
+      - "docs/performance/reference/**"
       - ".github/workflows/postgres-schema.yml"
   workflow_dispatch:
 
@@ -417,6 +425,9 @@ jobs:
           createdb --host 127.0.0.1 --username aetherflow aetherflow_nats_test
           cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
 
+      - name: Test fingerprint-aware end-to-end regression comparator
+        run: python3 -m unittest discover -s scripts/tests -p 'test_end_to_end_regression.py' -v
+
       - name: Capture fixed performance-baseline environment
         shell: bash
         run: |
@@ -454,6 +465,12 @@ jobs:
           path: target/aetherflow-end-to-end-baseline/
           if-no-files-found: error
           retention-days: 90
+
+      - name: Enforce matched-fingerprint end-to-end regression limits
+        run: |
+          python3 scripts/check-end-to-end-regression.py \
+            --results target/aetherflow-end-to-end-baseline \
+            --reference docs/performance/reference/amd-epyc-9v45.json
 
       - name: Verify schema records and reject invalid invariants
         run: |
