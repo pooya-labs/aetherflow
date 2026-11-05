@@ -9,7 +9,7 @@ Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation
 
 ## Current checkpoint
 
-**Current main HEAD:** 166e64fb4d1dad736484f8e2f0072cefaa8fe8e9. The application/recovery and matched-repeat benchmark source is e112fa44bfb50da4bc60087ef6be6e0370826cae; later commits through HEAD update operations documentation and the documentation drift checker.
+**Current application/recovery source:** e112fa44bfb50da4bc60087ef6be6e0370826cae. The current main branch also contains the subsequent documentation/runbook drift-checker refresh recorded in this checkpoint; those later changes do not alter application behavior or the restore/restart drill.
 
 **Restore-to-runtime verification is complete and hosted-verified.**
 - scripts/verify-operations-restore.sh restores PostgreSQL and JetStream into isolated targets, verifies migration ledger v8, ten FORCE-RLS tables and twelve policies, starts the real API with the restricted runtime role, submits a workflow over HTTP, and runs the separate durable worker/outbox/JetStream/inbox verifier.
@@ -27,7 +27,7 @@ Overall status: **M00–M07 complete; M08 is in progress.** M07 tenant isolation
 - Both sessions reconcile 896 outbox/inbox events per shape with zero duplicates/errors. Median throughput in the repeat: fan-out 7.415 workflows/s, chain 7.298 workflows/s. The EPYC 7763 samples remain a separate fingerprint and are not pooled.
 - Automated performance thresholds remain disabled. Next performance task is to implement a conservative comparator that only evaluates matching fingerprints and otherwise records a new baseline without failing CI.
 
-**Latest main-head CI:** Rust CI [42012409459](https://github.com/pooya-labs/aetherflow/actions/runs/42012409459), supply-chain/secret checks [42012409240](https://github.com/pooya-labs/aetherflow/actions/runs/42012409240), and Pages [42012408687](https://github.com/pooya-labs/aetherflow/actions/runs/42012408687) all passed on exact HEAD 166e64fb4d1dad736484f8e2f0072cefaa8fe8e9. The PostgreSQL/NATS run above is on the exact source containing the restore/API-restart script and benchmark; later HEAD commits in this checkpoint are docs and drift-checker changes.
+**Latest completed application/code CI:** Rust CI [42012409459](https://github.com/pooya-labs/aetherflow/actions/runs/42012409459), supply-chain/secret checks [42012409240](https://github.com/pooya-labs/aetherflow/actions/runs/42012409240), and Pages [42012408687](https://github.com/pooya-labs/aetherflow/actions/runs/42012408687) passed on source 166e64fb4d1dad736484f8e2f0072cefaa8fe8e9. The subsequent documentation-only refresh is being checked by the current Rust/security/Pages runs; it does not change the tested application or restore/restart script. PostgreSQL/NATS [42011508896](https://github.com/pooya-labs/aetherflow/actions/runs/42011508896) passed on the exact source containing that script and benchmark.
 
 **Remaining M08 work:** add at least one further non-duplicative recovery scenario beyond M05 and the API restart drill; implement an environment-aware performance comparator before enabling thresholds. M00 license selection remains an owner-only decision. M02 property-based transition tests remain deferred. Do not claim production readiness.
 
