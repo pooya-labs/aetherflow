@@ -98,7 +98,7 @@ fi
 if ! grep -Fq 'kill -KILL "$server_pid"' "$restore_script" ||
    ! grep -Fq 'PASS: accepted workflow and pending task remained readable after abrupt API termination and restart.' "$restore_script" ||
    ! grep -Fq 'SIGKILL' "$backup_doc" ||
-   ! grep -Fq 'before worker startup' "$backup_doc"; then
+   ! grep -Fq 'before any worker starts' "$backup_doc"; then
   echo "The restore rehearsal must inject and document API process restart after workflow acceptance and before worker startup." >&2
   exit 1
 fi
