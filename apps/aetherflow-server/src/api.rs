@@ -2504,9 +2504,7 @@ mod tests {
         assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static(
-                "https://pooya-labs.github.io"
-            ))
+            Some(&HeaderValue::from_static("https://pooya-labs.github.io"))
         );
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_METHODS),
