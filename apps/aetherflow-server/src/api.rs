@@ -310,8 +310,17 @@ impl HttpMetrics {
         )
         .expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_abandoned_total HTTP handler futures dropped before a response was observed.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_requests_abandoned_total counter").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_abandoned_total {}", self.requests_abandoned_total.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_requests_abandoned_total counter"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_abandoned_total {}",
+            self.requests_abandoned_total.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter.").expect("write metrics");
         writeln!(
             output,
@@ -515,7 +524,6 @@ impl Drop for InFlightRequestGuard {
         }
     }
 }
-
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PrincipalRateLimitKey {
@@ -834,8 +842,7 @@ async fn observe_http_request(
     let operation = HttpOperation::classify(request.method(), request.uri().path());
     let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let started = Instant::now();
-    let in_flight_guard =
-        InFlightRequestGuard::new(Arc::clone(&state.metrics), operation);
+    let in_flight_guard = InFlightRequestGuard::new(Arc::clone(&state.metrics), operation);
 
     // Deliberately omit URI, query, headers, and body: these may contain
     // resource identifiers, credentials, or customer payloads.
@@ -2224,22 +2231,12 @@ mod tests {
     fn dropped_http_request_guard_releases_capacity_and_records_abandonment() {
         let metrics = Arc::new(HttpMetrics::default());
         {
-            let _guard =
-                InFlightRequestGuard::new(Arc::clone(&metrics), HttpOperation::TenantRead);
-            assert_eq!(
-                metrics.requests_in_flight.load(Ordering::Relaxed),
-                1
-            );
+            let _guard = InFlightRequestGuard::new(Arc::clone(&metrics), HttpOperation::TenantRead);
+            assert_eq!(metrics.requests_in_flight.load(Ordering::Relaxed), 1);
         }
 
-        assert_eq!(
-            metrics.requests_in_flight.load(Ordering::Relaxed),
-            0
-        );
-        assert_eq!(
-            metrics.requests_abandoned_total.load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(metrics.requests_in_flight.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.requests_abandoned_total.load(Ordering::Relaxed), 1);
         assert_eq!(
             metrics.operations[HttpOperation::TenantRead as usize]
                 .requests_abandoned_total
@@ -2258,14 +2255,8 @@ mod tests {
         let metrics = Arc::new(HttpMetrics::default());
         InFlightRequestGuard::new(Arc::clone(&metrics), HttpOperation::OperatorRead).complete();
 
-        assert_eq!(
-            metrics.requests_in_flight.load(Ordering::Relaxed),
-            0
-        );
-        assert_eq!(
-            metrics.requests_abandoned_total.load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(metrics.requests_in_flight.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.requests_abandoned_total.load(Ordering::Relaxed), 0);
     }
 
     #[test]
