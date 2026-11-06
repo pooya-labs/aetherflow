@@ -213,21 +213,19 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
     Ok(tracer_provider)
 }
 
-fn positive_u32_environment(name: &str, default: u32) -> Result<u32, std::io::Error> {
-    let value = match std::env::var(name) {
-        Ok(value) => value.parse::<u32>().map_err(|_| {
+fn parse_positive_u32(
+    name: &str,
+    value: Option<&str>,
+    default: u32,
+) -> Result<u32, std::io::Error> {
+    let value = match value {
+        Some(value) => value.parse::<u32>().map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("{name} must be a positive integer"),
             )
         })?,
-        Err(std::env::VarError::NotPresent) => default,
-        Err(error) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("unable to read {name}: {error}"),
-            ));
-        }
+        None => default,
     };
     if value == 0 {
         return Err(std::io::Error::new(
@@ -236,6 +234,17 @@ fn positive_u32_environment(name: &str, default: u32) -> Result<u32, std::io::Er
         ));
     }
     Ok(value)
+}
+
+fn positive_u32_environment(name: &str, default: u32) -> Result<u32, std::io::Error> {
+    match std::env::var(name) {
+        Ok(value) => parse_positive_u32(name, Some(&value), default),
+        Err(std::env::VarError::NotPresent) => parse_positive_u32(name, None, default),
+        Err(error) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unable to read {name}: {error}"),
+        )),
+    }
 }
 
 /// Loads a complete server certificate/key pair and enforces TLS for external binds.
@@ -502,20 +511,18 @@ mod tests {
 
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
-        positive_u32_environment, postgres_pool_with_ssl_mode, should_export_otlp,
+        parse_positive_u32, positive_u32_environment, postgres_pool_with_ssl_mode,
+        should_export_otlp,
         validate_http_transport, verify_runtime_database_role,
     };
 
     #[test]
     fn rate_limit_environment_values_are_positive_integers() {
-        assert_eq!(
-            positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_MISSING", 30).unwrap(),
-            30
-        );
-        assert_eq!(
-            positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_ZERO", 0).is_err(),
-            true
-        );
+        assert_eq!(parse_positive_u32("rate", None, 30).unwrap(), 30);
+        assert_eq!(parse_positive_u32("rate", Some("12"), 30).unwrap(), 12);
+        assert!(parse_positive_u32("rate", Some("0"), 30).is_err());
+        assert!(parse_positive_u32("rate", Some("many"), 30).is_err());
+        assert!(parse_positive_u32("rate", None, 0).is_err());
     }
 
     #[test]

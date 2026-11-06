@@ -2214,6 +2214,47 @@ mod tests {
 
         let state = AppState::from_pool(pool.clone(), TEST_API_TOKEN)
             .expect("configure integration API token");
+        let limited_operator_state = AppState::from_pool(pool.clone(), TEST_API_TOKEN)
+            .expect("configure limited operator API state")
+            .with_api_rate_limit(1, 1)
+            .expect("configure one-request operator burst");
+        let operator_metrics = Arc::clone(&limited_operator_state.metrics);
+        let operator_first = router(limited_operator_state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri("/api/v1/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid first limited operator request"),
+            )
+            .await
+            .expect("first limited operator response");
+        assert_eq!(operator_first.status(), StatusCode::OK);
+        let operator_second = router(limited_operator_state)
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri("/api/v1/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid second limited operator request"),
+            )
+            .await
+            .expect("second limited operator response");
+        assert_eq!(operator_second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            operator_second.headers().get("retry-after"),
+            Some(&HeaderValue::from_static("1"))
+        );
+        let operator_limited_body = to_bytes(operator_second.into_body(), 1024)
+            .await
+            .expect("read operator rate-limit response");
+        let operator_limited_json: serde_json::Value =
+            serde_json::from_slice(&operator_limited_body).expect("valid rate-limit JSON");
+        assert_eq!(operator_limited_json["error"]["code"], "rate_limited");
+        assert!(operator_metrics.render_prometheus().contains(
+            "aetherflow_http_requests_rate_limited_total 1"
+        ));
+
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock after Unix epoch")
@@ -2627,6 +2668,44 @@ mod tests {
             )
             .await
             .expect("seed tenant operator and reader credentials");
+
+        let limited_tenant_state = AppState::from_pool(pool.clone(), TEST_API_TOKEN)
+            .expect("configure limited tenant API state")
+            .with_api_rate_limit(1, 1)
+            .expect("configure one-request tenant burst");
+        let tenant_first = router(limited_tenant_state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri("/api/v1/tenant/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid first limited tenant request"),
+            )
+            .await
+            .expect("first limited tenant response");
+        assert_eq!(tenant_first.status(), StatusCode::OK);
+        let tenant_second = router(limited_tenant_state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {tenant_token}"))
+                    .uri("/api/v1/tenant/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid second limited tenant request"),
+            )
+            .await
+            .expect("second limited tenant response");
+        assert_eq!(tenant_second.status(), StatusCode::TOO_MANY_REQUESTS);
+        let independent_reader = router(limited_tenant_state)
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {reader_token}"))
+                    .uri("/api/v1/tenant/workflow-runs?limit=1")
+                    .body(Body::empty())
+                    .expect("valid independent-principal request"),
+            )
+            .await
+            .expect("independent-principal response");
+        assert_eq!(independent_reader.status(), StatusCode::OK);
 
         let foreign_workflow_run_id = format!("foreign-api-run-{suffix}");
         let foreign_workflow_id = format!("foreign-api-workflow-{suffix}");
