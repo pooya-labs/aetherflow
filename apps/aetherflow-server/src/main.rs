@@ -76,6 +76,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let rate_limit_burst = positive_u32_environment("AETHERFLOW_API_RATE_LIMIT_BURST", 30)?;
+    let rate_limit_per_second =
+        positive_u32_environment("AETHERFLOW_API_RATE_LIMIT_PER_SECOND", 2)?;
+    let state = state.with_api_rate_limit(rate_limit_burst, rate_limit_per_second)?;
+
     let cors_origins = std::env::var("AETHERFLOW_CORS_ALLOWED_ORIGINS").unwrap_or_default();
     let state = state.with_cors_allowed_origins(&cors_origins)?;
     let router = api::router(state);
@@ -206,6 +211,33 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
     }
 
     Ok(tracer_provider)
+}
+
+
+
+fn positive_u32_environment(name: &str, default: u32) -> Result<u32, std::io::Error> {
+    let value = match std::env::var(name) {
+        Ok(value) => value.parse::<u32>().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{name} must be a positive integer"),
+            )
+        })?,
+        Err(std::env::VarError::NotPresent) => default,
+        Err(error) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unable to read {name}: {error}"),
+            ));
+        }
+    };
+    if value == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must be greater than zero"),
+        ));
+    }
+    Ok(value)
 }
 
 /// Loads a complete server certificate/key pair and enforces TLS for external binds.
@@ -472,9 +504,16 @@ mod tests {
 
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
+        positive_u32_environment,
         postgres_pool_with_ssl_mode, should_export_otlp, validate_http_transport,
         verify_runtime_database_role,
     };
+
+    #[test]
+    fn rate_limit_environment_values_are_positive_integers() {
+        assert_eq!(positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_MISSING", 30).unwrap(), 30);
+        assert_eq!(positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_ZERO", 0).is_err(), true);
+    }
 
     #[test]
     fn rustls_provider_initialization_is_safe_under_concurrency() {

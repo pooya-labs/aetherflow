@@ -4,10 +4,10 @@
 //! routes, with tenant identity enforced by storage authorization and RLS.
 //! Payload bytes are accepted on submission but never included in inspection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,7 +16,8 @@ use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{
     ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
     ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS,
-    ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE, ORIGIN, VARY, WWW_AUTHENTICATE,
+    ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE, ORIGIN, RETRY_AFTER, VARY,
+    WWW_AUTHENTICATE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -69,6 +70,7 @@ pub struct AppState {
     database: Option<Arc<AppDatabase>>,
     api_token_hash: Option<[u8; 32]>,
     cors_allowed_origins: Arc<HashSet<String>>,
+    principal_rate_limiter: Arc<PrincipalRateLimiter>,
     metrics: Arc<HttpMetrics>,
 }
 
@@ -76,6 +78,7 @@ pub struct AppState {
 struct HttpMetrics {
     requests_total: AtomicU64,
     requests_failed_total: AtomicU64,
+    requests_rate_limited_total: AtomicU64,
     requests_in_flight: AtomicU64,
     request_duration_sum_micros: AtomicU64,
     request_duration_buckets: [AtomicU64; 10],
@@ -86,6 +89,10 @@ impl HttpMetrics {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
         if status_code >= 500 {
             self.requests_failed_total.fetch_add(1, Ordering::Relaxed);
+        }
+        if status_code == StatusCode::TOO_MANY_REQUESTS.as_u16() {
+            self.requests_rate_limited_total
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         let elapsed_micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
@@ -128,6 +135,19 @@ impl HttpMetrics {
             output,
             "aetherflow_http_requests_failed_total {}",
             self.requests_failed_total.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter."
+        )
+        .expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_requests_rate_limited_total counter")
+            .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_rate_limited_total {}",
+            self.requests_rate_limited_total.load(Ordering::Relaxed)
         )
         .expect("write metrics");
         writeln!(
@@ -180,6 +200,143 @@ impl HttpMetrics {
         .expect("write metrics");
         output
     }
+}
+
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum PrincipalRateLimitKey {
+    Operator,
+    Tenant {
+        tenant_id: String,
+        principal_id: String,
+    },
+}
+
+struct TokenBucket {
+    tokens: f64,
+    updated_at: Instant,
+    last_seen: Instant,
+}
+
+struct PrincipalRateLimiterState {
+    buckets: HashMap<PrincipalRateLimitKey, TokenBucket>,
+    last_cleanup: Instant,
+}
+
+/// Bounded token buckets keyed only by identities already authenticated by the
+/// control plane. This avoids trusting forwarded-IP headers and prevents an
+/// arbitrary Authorization value from allocating a bucket.
+struct PrincipalRateLimiter {
+    burst_capacity: f64,
+    refill_per_second: f64,
+    buckets: Mutex<PrincipalRateLimiterState>,
+}
+
+impl Default for PrincipalRateLimiter {
+    fn default() -> Self {
+        Self::new(30, 2).expect("the built-in API rate-limit defaults are valid")
+    }
+}
+
+impl PrincipalRateLimiter {
+    const MAX_BUCKETS: usize = 4_096;
+    const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
+    const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+    fn new(burst_capacity: u32, refill_per_second: u32) -> Result<Self, std::io::Error> {
+        if burst_capacity == 0 || refill_per_second == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "API rate-limit burst and refill rate must both be positive integers",
+            ));
+        }
+
+        Ok(Self {
+            burst_capacity: f64::from(burst_capacity),
+            refill_per_second: f64::from(refill_per_second),
+            buckets: Mutex::new(PrincipalRateLimiterState {
+                buckets: HashMap::new(),
+                last_cleanup: Instant::now(),
+            }),
+        })
+    }
+
+    fn check(&self, key: PrincipalRateLimitKey) -> Option<Duration> {
+        self.check_at(key, Instant::now())
+    }
+
+    fn check_at(&self, key: PrincipalRateLimitKey, now: Instant) -> Option<Duration> {
+        let mut state = self
+            .buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if now.saturating_duration_since(state.last_cleanup) >= Self::CLEANUP_INTERVAL {
+            state
+                .buckets
+                .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < Self::IDLE_TTL);
+            state.last_cleanup = now;
+        }
+
+        if !state.buckets.contains_key(&key) && state.buckets.len() >= Self::MAX_BUCKETS {
+            // The map is bounded even when the service has many active tenant
+            // principals. Evict the least-recently-used bucket for a new valid
+            // identity rather than allowing unbounded memory growth.
+            if let Some(oldest_key) = state
+                .buckets
+                .iter()
+                .min_by_key(|(_, bucket)| bucket.last_seen)
+                .map(|(key, _)| key.clone())
+            {
+                state.buckets.remove(&oldest_key);
+            }
+        }
+
+        let bucket = state.buckets.entry(key).or_insert_with(|| TokenBucket {
+            tokens: self.burst_capacity,
+            updated_at: now,
+            last_seen: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.updated_at).as_secs_f64();
+        bucket.tokens =
+            (bucket.tokens + elapsed * self.refill_per_second).min(self.burst_capacity);
+        bucket.updated_at = now;
+        bucket.last_seen = now;
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            None
+        } else {
+            let wait_seconds = (1.0 - bucket.tokens) / self.refill_per_second;
+            Some(Duration::from_secs_f64(wait_seconds.max(0.001)))
+        }
+    }
+
+    #[cfg(test)]
+    fn bucket_count(&self) -> usize {
+        self.buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .buckets
+            .len()
+    }
+}
+
+fn rate_limited_response(retry_after: Duration) -> Response {
+    let mut response = ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        "the authenticated principal has exceeded the API request rate",
+    )
+    .into_response();
+    let retry_after_seconds = retry_after
+        .as_secs()
+        .saturating_add(u64::from(retry_after.subsec_nanos() > 0))
+        .max(1);
+    if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
 }
 
 struct AppDatabase {
@@ -239,8 +396,26 @@ impl AppState {
             })),
             api_token_hash: Some(api_token_hash),
             cors_allowed_origins: Arc::default(),
+            principal_rate_limiter: Arc::default(),
             metrics: Arc::default(),
         })
+    }
+
+    /// Replaces the per-authenticated-principal token-bucket limits.
+    ///
+    /// The burst is the maximum immediate request allowance; the refill rate
+    /// is applied continuously in requests per second. Each tenant principal
+    /// and the platform operator share separate bounded buckets.
+    pub fn with_api_rate_limit(
+        mut self,
+        burst_capacity: u32,
+        refill_per_second: u32,
+    ) -> Result<Self, std::io::Error> {
+        self.principal_rate_limiter = Arc::new(PrincipalRateLimiter::new(
+            burst_capacity,
+            refill_per_second,
+        )?);
+        Ok(self)
     }
 
     fn database(&self) -> Result<&AppDatabase, ApiError> {
@@ -581,6 +756,13 @@ async fn require_bearer_token(
         return response;
     }
 
+    if let Some(retry_after) = state
+        .principal_rate_limiter
+        .check(PrincipalRateLimitKey::Operator)
+    {
+        return rate_limited_response(retry_after);
+    }
+
     next.run(request).await
 }
 
@@ -610,6 +792,14 @@ async fn require_tenant_bearer(
         }
         Err(error) => return ApiError::from_storage(error).into_response(),
     };
+
+    let key = PrincipalRateLimitKey::Tenant {
+        tenant_id: context.tenant_id().as_str().to_owned(),
+        principal_id: context.principal_id().as_str().to_owned(),
+    };
+    if let Some(retry_after) = state.principal_rate_limiter.check(key) {
+        return rate_limited_response(retry_after);
+    }
 
     request.extensions_mut().insert(context);
     next.run(request).await
@@ -1591,7 +1781,10 @@ fn format_timestamp(value: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, HttpMetrics, authorization_matches, hash_api_token, router};
+    use super::{
+        AppState, HttpMetrics, PrincipalRateLimitKey, PrincipalRateLimiter,
+        authorization_matches, hash_api_token, router,
+    };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_HEADERS,
@@ -1613,6 +1806,7 @@ mod tests {
         let output = metrics.render_prometheus();
         assert!(output.contains("aetherflow_http_requests_total 2"));
         assert!(output.contains("aetherflow_http_requests_failed_total 1"));
+        assert!(output.contains("aetherflow_http_requests_rate_limited_total 0"));
         assert!(
             output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.005"} 1"#)
         );
@@ -1620,6 +1814,55 @@ mod tests {
         assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 2"#));
         assert!(!output.contains("workflow_run_id"));
         assert!(!output.contains("authorization"));
+    }
+
+
+    #[test]
+    fn principal_rate_limiter_enforces_burst_refill_and_identity_isolation() {
+        let limiter = PrincipalRateLimiter::new(2, 1).expect("valid test rate-limit policy");
+        let now = std::time::Instant::now();
+        let operator = PrincipalRateLimitKey::Operator;
+        let tenant_a = PrincipalRateLimitKey::Tenant {
+            tenant_id: "tenant-a".to_owned(),
+            principal_id: "principal-a".to_owned(),
+        };
+        let tenant_b = PrincipalRateLimitKey::Tenant {
+            tenant_id: "tenant-a".to_owned(),
+            principal_id: "principal-b".to_owned(),
+        };
+
+        assert_eq!(limiter.check_at(operator.clone(), now), None);
+        assert_eq!(limiter.check_at(operator.clone(), now), None);
+        assert_eq!(
+            limiter.check_at(operator.clone(), now),
+            Some(Duration::from_secs(1))
+        );
+        // Tenant principals and the operator never consume one another's quota.
+        assert_eq!(limiter.check_at(tenant_a.clone(), now), None);
+        assert_eq!(limiter.check_at(tenant_b, now), None);
+        // A token is replenished continuously at the configured rate.
+        assert_eq!(
+            limiter.check_at(operator, now + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(limiter.bucket_count(), 3);
+    }
+
+    #[test]
+    fn principal_rate_limiter_rejects_zero_configuration_and_bounds_identity_storage() {
+        assert!(PrincipalRateLimiter::new(0, 1).is_err());
+        assert!(PrincipalRateLimiter::new(1, 0).is_err());
+
+        let limiter = PrincipalRateLimiter::new(1, 1).expect("valid rate-limit policy");
+        let now = std::time::Instant::now();
+        for index in 0..(PrincipalRateLimiter::MAX_BUCKETS + 32) {
+            let key = PrincipalRateLimitKey::Tenant {
+                tenant_id: "tenant-bounded".to_owned(),
+                principal_id: format!("principal-{index}"),
+            };
+            let _ = limiter.check_at(key, now);
+        }
+        assert_eq!(limiter.bucket_count(), PrincipalRateLimiter::MAX_BUCKETS);
     }
 
     #[tokio::test]
