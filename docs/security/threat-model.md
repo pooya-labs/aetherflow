@@ -35,7 +35,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 
 | Threat | Existing mitigation | Residual risk / required follow-up |
 |---|---|---|
-| Unauthenticated remote caller | Bearer auth on durable routes; health is liveness-only; non-loopback plaintext HTTP is rejected; authenticated operator/tenant principals have bounded process-local token buckets and receive 429/Retry-After | Invalid/missing credentials are not source-IP throttled; operator credential is shared; quotas are not coordinated across replicas; no external penetration test |
+| Unauthenticated remote caller | Bearer auth on durable routes; health is liveness-only; non-loopback plaintext HTTP is rejected; authenticated operator/tenant principals have bounded process-local token buckets and receive 429/Retry-After; production guide now defines a mandatory shared ingress control for externally reachable deployments | The ingress policy is not enforced by the binary and has not been deployed/verified; invalid/missing credentials are not source-throttled by the application; direct-origin bypass must be prevented by network policy; operator credential is shared; no external penetration test |
 | Tenant attempts to read or mutate another tenant | Credential-derived tenant context, permission checks, composite tenant ownership, forced RLS | RLS is not a defense against arbitrary SQL execution or a compromised runtime process; continue negative cross-tenant tests |
 | Stolen tenant/operator token | Only digests are stored; raw tokens are not logged; tenant credentials can be revoked | No managed secret store, no operator identity separation, no non-disruptive operator-token rotation |
 | Malicious workflow or plugin | Bounded payloads/retries/concurrency; WASM capability default deny and resource/fuel limits | Engine bugs, host bugs, process-wide resource pressure, and OS isolation remain deployment concerns |
@@ -57,7 +57,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 ## Priority gaps before production
 
 1. Complete independent security review/penetration test and a production deployment architecture review.
-2. Add trusted-source throttling for unauthenticated/invalid credentials, cluster-wide rate-limit enforcement or an approved edge-gateway policy for multiple API replicas, per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
+2. Deploy and verify the production-guide ingress policy: a shared gateway must rate-limit missing/malformed/invalid credentials by actual connection source before forwarding, cover all replicas, strip untrusted forwarding headers, and make direct-origin bypass impossible. The policy is documented but is not implemented by the API binary. Then add per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
 3. Decide and test production backup/WAL archiving, restore ownership, RPO, and RTO; the current rehearsal is isolated CI only.
 4. Add workflow/outbox/inbox SLIs and alerting, then approve SLOs and error budgets.
 5. Complete dependency license review, SBOM generation and release provenance/attestation policy.
