@@ -1710,8 +1710,6 @@ impl Drop for RestartNatsContainer {
     }
 }
 
-
-
 /// Stops every member in the CI JetStream cluster and restores every member
 /// on normal completion or unwinding. The stopped list is drained in reverse
 /// order so a partially stopped cluster can always be brought back.
@@ -1722,7 +1720,11 @@ struct RestartNatsCluster {
 
 impl RestartNatsCluster {
     fn new(members: Vec<String>) -> Self {
-        assert_eq!(members.len(), 3, "the full-outage drill requires all three NATS members");
+        assert_eq!(
+            members.len(),
+            3,
+            "the full-outage drill requires all three NATS members"
+        );
         Self {
             members,
             stopped: Vec::new(),
@@ -1836,8 +1838,7 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
         WorkflowId::parse(format!("full-outage-workflow-{suffix}")).expect("valid workflow ID");
     let task_run_id =
         TaskRunId::parse(format!("full-outage-task-run-{suffix}")).expect("valid task-run ID");
-    let task_id =
-        TaskId::parse(format!("full-outage-task-{suffix}")).expect("valid task ID");
+    let task_id = TaskId::parse(format!("full-outage-task-{suffix}")).expect("valid task ID");
     let retry_policy = RetryPolicy::new(NonZeroU32::new(1).expect("one attempt"), 0, 0)
         .expect("valid retry policy");
 
