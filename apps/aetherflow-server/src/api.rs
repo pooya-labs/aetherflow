@@ -2251,9 +2251,11 @@ mod tests {
         let operator_limited_json: serde_json::Value =
             serde_json::from_slice(&operator_limited_body).expect("valid rate-limit JSON");
         assert_eq!(operator_limited_json["error"]["code"], "rate_limited");
-        assert!(operator_metrics.render_prometheus().contains(
-            "aetherflow_http_requests_rate_limited_total 1"
-        ));
+        assert!(
+            operator_metrics
+                .render_prometheus()
+                .contains("aetherflow_http_requests_rate_limited_total 1")
+        );
 
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

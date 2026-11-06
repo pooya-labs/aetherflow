@@ -512,8 +512,7 @@ mod tests {
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
         parse_positive_u32, positive_u32_environment, postgres_pool_with_ssl_mode,
-        should_export_otlp,
-        validate_http_transport, verify_runtime_database_role,
+        should_export_otlp, validate_http_transport, verify_runtime_database_role,
     };
 
     #[test]
