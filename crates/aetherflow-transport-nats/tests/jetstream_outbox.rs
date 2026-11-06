@@ -2001,7 +2001,6 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     let consumer_task = tokio::spawn(async move { consumer.run(shutdown_rx).await });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let recovered_attempts = Mutex::new(Vec::new());
     let recovered_publisher = Arc::new(BrokerUnavailablePublisher {
         inner: NatsJetStreamPublisher::new(restored_jetstream, subject),
         broker_available: Arc::new(AtomicBool::new(true)),
