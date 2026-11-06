@@ -962,7 +962,7 @@ components:
             code:
               type: string
               enum:
-                [invalid_request, invalid_identifier, invalid_cursor, invalid_workflow, payload_too_large, not_found, conflict, stale_version, unauthorized, forbidden, auth_not_configured, database_unavailable, internal]
+                [invalid_request, invalid_identifier, invalid_cursor, invalid_workflow, payload_too_large, not_found, conflict, stale_version, unauthorized, forbidden, auth_not_configured, database_unavailable, rate_limited, internal]
             message:
               type: string
               maxLength: 512
