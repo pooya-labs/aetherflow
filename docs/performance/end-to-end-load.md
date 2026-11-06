@@ -240,3 +240,46 @@ These limits are regression tripwires, not SLOs, production-capacity claims, or 
 Both archived profiles are five-repeat baselines on ephemeral hosted VMs, not dedicated reserved performance hosts, production capacity results, or customer-facing SLOs. Within-session variation is recorded for each fingerprint. Because the CPU model differs between the two sessions, their throughput values are not a matched day-to-day repeatability comparison and must not be pooled. The same practical CPU/environment fingerprint now has two independent five-repeat sessions (ten samples per shape), with a one-page visible-memory difference documented. A future threshold must compare only compatible fingerprints and must not pool the EPYC 7763 samples. No automated performance threshold is enabled.
 
 The harness still exercises the coordinator directly rather than HTTP/TLS/authentication, uses the `legacy-default` compatibility tenant path, one worker process, and one inbox consumer loop. It does not measure multi-process scaling, per-tenant authorization overhead, external side effects, or production sizing.
+
+## Fourth five-repeat session — AMD EPYC 7763 on a newer hosted image (2026-11-06)
+
+PostgreSQL/NATS CI [42206174582](https://github.com/pooya-labs/aetherflow/actions/runs/42206174582) completed ten isolated samples on exact source `204df18cd33ef69eb972ca88e166668ed407b4d4`: five fan-out and five chain repetitions. Every repetition used 64 workflows × 4 tasks, a 256-byte input, one worker process at concurrency 4, an offered rate of 8 workflows/s, and a 1 ms handler delay. Each run reconciled 896 outbox events with 896 inbox rows and recorded zero duplicates or errors.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24 / 20261101.360.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 7763 64-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,344,576 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.6 (Debian 18.6-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte input |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+### Results (fourth session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 5.674 | 5.208 |
+| Mean workflows/s | 5.597 | 5.200 |
+| Sample standard deviation, workflows/s | 0.236 | 0.058 |
+| Observed range, workflows/s | 5.187–5.785 | 5.102–5.256 |
+| Median tasks/s | 22.696 | 20.834 |
+| Median workflow p50 | 4,241.814 ms | 4,354.051 ms |
+| Median workflow p95 | 8,202.453 ms | 8,453.043 ms |
+| Sample standard deviation, p95 | 52.715 ms | 41.253 ms |
+| Median whole-run elapsed | 11,279.364 ms | 12,287.806 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The artifact is `aetherflow-end-to-end-baseline-204df18cd33ef69eb972ca88e166668ed407b4d4` (artifact ID `13496912829`; 90-day retention). It contains ten per-run CSVs, combined samples, summary statistics, and `metadata.json`.
+
+**Comparison boundary:** this host uses the AMD EPYC 7763 CPU, but its hosted image is `20261101.360.1`, not the earlier `20261026.354.1` image. The fingerprint-aware comparator correctly reported `SKIP: runner fingerprint does not match the stored reference; no threshold was applied.` Keep this session as a separate fingerprinted observation. Do not pool it with the earlier EPYC 7763 session or interpret the difference as a regression/improvement. The run verifies the comparator's mismatch/skip path, not the matched EPYC 9V45 threshold path.
