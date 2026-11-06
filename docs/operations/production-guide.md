@@ -37,6 +37,14 @@ Tenant credentials are provisioned and managed as tenant records, not as a subst
 
 The operator token is shared and rotating it requires process restart. Authenticated operator requests use one process-local token bucket; tenant requests use separate buckets keyed by the credential-derived tenant and principal. The in-memory limiter is capped at 4,096 buckets and emits 429 with `Retry-After`; it does not provide a cluster-wide quota across API replicas, and it does not throttle unauthenticated or invalid credentials by source IP. Put trusted edge protection in front of externally reachable deployments and do not trust arbitrary forwarded-IP headers. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
 
+### Required ingress policy for external deployments
+
+Until the application has a verified peer-address limiter, an externally reachable deployment must sit behind a managed ingress/API gateway that is the only public route to the API. Enforce a shared, distributed source-address rate limit there **before** forwarding requests, including missing/malformed/invalid Bearer credentials on both operator and tenant routes. Return `429` with a bounded `Retry-After`; keep `401` for requests below the throttle threshold. Apply request-size and connection/concurrency limits at the same boundary. Tune thresholds from expected legitimate NAT concentration and load tests rather than copying arbitrary per-IP values.
+
+The gateway must derive the source key from the actual client connection, not a caller-supplied `X-Forwarded-For`, `Forwarded`, or similar header. Strip incoming forwarding/identity headers and, only if the deployment later adds an explicitly configured trusted-proxy integration, inject a canonical value from the gateway. The API must not treat arbitrary forwarded headers as identity. Restrict the API listener/security group to gateway egress so clients cannot bypass the shared limiter by reaching an origin or alternate replica directly. Verify this bypass protection and aggregate enforcement across all API replicas during deployment acceptance.
+
+This is an operational architecture requirement, not a feature provided by the current binary. The authenticated-principal limiter remains process-local and does not replace the shared ingress control. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
+
 ## 3. Database and transport
 
 1. Provision a dedicated database and PostgreSQL roles. Apply schema changes with the migration owner; connect the running service only with a restricted runtime role.
