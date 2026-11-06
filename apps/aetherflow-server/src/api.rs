@@ -244,47 +244,135 @@ impl HttpMetrics {
                 .as_secs_f64();
         let mut output = String::new();
 
-        writeln!(output, "# HELP aetherflow_http_requests_total Completed HTTP requests.").expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_requests_total Completed HTTP requests."
+        )
+        .expect("write metrics");
         writeln!(output, "# TYPE aetherflow_http_requests_total counter").expect("write metrics");
         writeln!(output, "aetherflow_http_requests_total {requests_total}").expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_failed_total HTTP requests completed with a 5xx response.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_requests_failed_total counter").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_failed_total {}", self.requests_failed_total.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_requests_failed_total counter"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_failed_total {}",
+            self.requests_failed_total.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_requests_rate_limited_total counter").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_rate_limited_total {}", self.requests_rate_limited_total.load(Ordering::Relaxed)).expect("write metrics");
-        writeln!(output, "# HELP aetherflow_http_requests_in_flight HTTP requests currently being handled.").expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_requests_rate_limited_total counter"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_rate_limited_total {}",
+            self.requests_rate_limited_total.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_requests_in_flight HTTP requests currently being handled."
+        )
+        .expect("write metrics");
         writeln!(output, "# TYPE aetherflow_http_requests_in_flight gauge").expect("write metrics");
-        writeln!(output, "aetherflow_http_requests_in_flight {}", self.requests_in_flight.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_requests_in_flight {}",
+            self.requests_in_flight.load(Ordering::Relaxed)
+        )
+        .expect("write metrics");
 
-        writeln!(output, "# HELP aetherflow_http_request_duration_seconds HTTP request latency distribution.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_request_duration_seconds histogram").expect("write metrics");
-        for ((_, bound), bucket) in HTTP_LATENCY_BUCKETS.iter().zip(self.request_duration_buckets.iter()) {
-            writeln!(output, "aetherflow_http_request_duration_seconds_bucket{{le=\"{bound}\"}} {}", bucket.load(Ordering::Relaxed)).expect("write metrics");
+        writeln!(
+            output,
+            "# HELP aetherflow_http_request_duration_seconds HTTP request latency distribution."
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_request_duration_seconds histogram"
+        )
+        .expect("write metrics");
+        for ((_, bound), bucket) in HTTP_LATENCY_BUCKETS
+            .iter()
+            .zip(self.request_duration_buckets.iter())
+        {
+            writeln!(
+                output,
+                "aetherflow_http_request_duration_seconds_bucket{{le=\"{bound}\"}} {}",
+                bucket.load(Ordering::Relaxed)
+            )
+            .expect("write metrics");
         }
-        writeln!(output, "aetherflow_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {requests_total}").expect("write metrics");
-        writeln!(output, "aetherflow_http_request_duration_seconds_sum {duration_sum:.6}").expect("write metrics");
-        writeln!(output, "aetherflow_http_request_duration_seconds_count {requests_total}").expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_bucket{{le=\"+Inf\"}} {requests_total}"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_sum {duration_sum:.6}"
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "aetherflow_http_request_duration_seconds_count {requests_total}"
+        )
+        .expect("write metrics");
 
         // Labels are selected from a fixed enum. Never add raw paths, tenant
         // IDs, workflow IDs, query strings, or caller-controlled values here.
         writeln!(output, "# HELP aetherflow_http_operation_requests_total Completed requests by bounded operation class.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_operation_requests_total counter").expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_operation_requests_total counter"
+        )
+        .expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_operation_requests_failed_total HTTP requests by operation class completed with a 5xx response.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_operation_requests_failed_total counter").expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_operation_requests_failed_total counter"
+        )
+        .expect("write metrics");
         for operation in HttpOperation::ALL {
             let metrics = &self.operations[operation as usize];
-            writeln!(output, "aetherflow_http_operation_requests_total{{operation=\"{}\"}} {}", operation.label(), metrics.requests_total.load(Ordering::Relaxed)).expect("write metrics");
-            writeln!(output, "aetherflow_http_operation_requests_failed_total{{operation=\"{}\"}} {}", operation.label(), metrics.requests_failed_total.load(Ordering::Relaxed)).expect("write metrics");
+            writeln!(
+                output,
+                "aetherflow_http_operation_requests_total{{operation=\"{}\"}} {}",
+                operation.label(),
+                metrics.requests_total.load(Ordering::Relaxed)
+            )
+            .expect("write metrics");
+            writeln!(
+                output,
+                "aetherflow_http_operation_requests_failed_total{{operation=\"{}\"}} {}",
+                operation.label(),
+                metrics.requests_failed_total.load(Ordering::Relaxed)
+            )
+            .expect("write metrics");
         }
 
         writeln!(output, "# HELP aetherflow_http_operation_request_duration_seconds HTTP request latency by bounded operation class.").expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_operation_request_duration_seconds histogram").expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_operation_request_duration_seconds histogram"
+        )
+        .expect("write metrics");
         for operation in HttpOperation::ALL {
             let metrics = &self.operations[operation as usize];
             let count = metrics.requests_total.load(Ordering::Relaxed);
-            let sum = Duration::from_micros(metrics.request_duration_sum_micros.load(Ordering::Relaxed)).as_secs_f64();
-            for ((_, bound), bucket) in HTTP_LATENCY_BUCKETS.iter().zip(metrics.request_duration_buckets.iter()) {
+            let sum =
+                Duration::from_micros(metrics.request_duration_sum_micros.load(Ordering::Relaxed))
+                    .as_secs_f64();
+            for ((_, bound), bucket) in HTTP_LATENCY_BUCKETS
+                .iter()
+                .zip(metrics.request_duration_buckets.iter())
+            {
                 writeln!(output, "aetherflow_http_operation_request_duration_seconds_bucket{{operation=\"{}\",le=\"{bound}\"}} {}", operation.label(), bucket.load(Ordering::Relaxed)).expect("write metrics");
             }
             writeln!(output, "aetherflow_http_operation_request_duration_seconds_bucket{{operation=\"{}\",le=\"+Inf\"}} {count}", operation.label()).expect("write metrics");
@@ -1943,8 +2031,8 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, HttpMetrics, HttpOperation, PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches,
-        hash_api_token, router,
+        AppState, HttpMetrics, HttpOperation, PrincipalRateLimitKey, PrincipalRateLimiter,
+        authorization_matches, hash_api_token, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -1973,8 +2061,14 @@ mod tests {
         );
         assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.5"} 2"#));
         assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 2"#));
-        assert!(output.contains(r#"aetherflow_http_operation_requests_total{operation="operator_read"} 1"#));
-        assert!(output.contains(r#"aetherflow_http_operation_requests_failed_total{operation="tenant_submit"} 1"#));
+        assert!(
+            output.contains(
+                r#"aetherflow_http_operation_requests_total{operation="operator_read"} 1"#
+            )
+        );
+        assert!(output.contains(
+            r#"aetherflow_http_operation_requests_failed_total{operation="tenant_submit"} 1"#
+        ));
         assert!(output.contains(r#"aetherflow_http_operation_request_duration_seconds_bucket{operation="tenant_submit",le="0.5"} 1"#));
         assert!(output.contains(r#"aetherflow_http_operation_request_duration_seconds_count{operation="tenant_submit"} 1"#));
         assert!(!output.contains("workflow_run_id"));
@@ -1984,16 +2078,55 @@ mod tests {
 
     #[test]
     fn http_operation_classification_uses_only_bounded_route_classes() {
-        assert_eq!(HttpOperation::classify(&Method::GET, "/health"), HttpOperation::Health);
-        assert_eq!(HttpOperation::classify(&Method::GET, "/api/v1/metrics"), HttpOperation::Metrics);
-        assert_eq!(HttpOperation::classify(&Method::POST, "/api/v1/workflow-runs"), HttpOperation::OperatorSubmit);
-        assert_eq!(HttpOperation::classify(&Method::GET, "/api/v1/workflow-runs/workflow-private-123/events"), HttpOperation::OperatorRead);
-        assert_eq!(HttpOperation::classify(&Method::POST, "/api/v1/task-runs/task-private-456/cancel"), HttpOperation::OperatorMutation);
-        assert_eq!(HttpOperation::classify(&Method::POST, "/api/v1/tenant/workflow-runs"), HttpOperation::TenantSubmit);
-        assert_eq!(HttpOperation::classify(&Method::GET, "/api/v1/tenant/workflow-runs/tenant-private-789/events"), HttpOperation::TenantRead);
-        assert_eq!(HttpOperation::classify(&Method::POST, "/api/v1/tenant/task-runs/task-private-abc/cancel"), HttpOperation::TenantMutation);
-        assert_eq!(HttpOperation::classify(&Method::GET, "/unmatched/customer-private"), HttpOperation::Other);
-        assert_eq!(HttpOperation::classify(&Method::OPTIONS, "/api/v1/workflow-runs"), HttpOperation::Other);
+        assert_eq!(
+            HttpOperation::classify(&Method::GET, "/health"),
+            HttpOperation::Health
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::GET, "/api/v1/metrics"),
+            HttpOperation::Metrics
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::POST, "/api/v1/workflow-runs"),
+            HttpOperation::OperatorSubmit
+        );
+        assert_eq!(
+            HttpOperation::classify(
+                &Method::GET,
+                "/api/v1/workflow-runs/workflow-private-123/events"
+            ),
+            HttpOperation::OperatorRead
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::POST, "/api/v1/task-runs/task-private-456/cancel"),
+            HttpOperation::OperatorMutation
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::POST, "/api/v1/tenant/workflow-runs"),
+            HttpOperation::TenantSubmit
+        );
+        assert_eq!(
+            HttpOperation::classify(
+                &Method::GET,
+                "/api/v1/tenant/workflow-runs/tenant-private-789/events"
+            ),
+            HttpOperation::TenantRead
+        );
+        assert_eq!(
+            HttpOperation::classify(
+                &Method::POST,
+                "/api/v1/tenant/task-runs/task-private-abc/cancel"
+            ),
+            HttpOperation::TenantMutation
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::GET, "/unmatched/customer-private"),
+            HttpOperation::Other
+        );
+        assert_eq!(
+            HttpOperation::classify(&Method::OPTIONS, "/api/v1/workflow-runs"),
+            HttpOperation::Other
+        );
     }
 
     #[test]
