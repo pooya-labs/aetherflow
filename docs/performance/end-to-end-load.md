@@ -283,3 +283,46 @@ PostgreSQL/NATS CI [42206174582](https://github.com/pooya-labs/aetherflow/action
 The artifact is `aetherflow-end-to-end-baseline-204df18cd33ef69eb972ca88e166668ed407b4d4` (artifact ID `13496912829`; 90-day retention). It contains ten per-run CSVs, combined samples, summary statistics, and `metadata.json`.
 
 **Comparison boundary:** this host uses the AMD EPYC 7763 CPU, but its hosted image is `20261101.360.1`, not the earlier `20261026.354.1` image. The fingerprint-aware comparator correctly reported `SKIP: runner fingerprint does not match the stored reference; no threshold was applied.` Keep this session as a separate fingerprinted observation. Do not pool it with the earlier EPYC 7763 session or interpret the difference as a regression/improvement. The run verifies the comparator's mismatch/skip path, not the matched EPYC 9V45 threshold path.
+
+## Fifth five-repeat session — AMD EPYC 9V74 (2026-11-06)
+
+PostgreSQL/NATS CI [42211375628](https://github.com/pooya-labs/aetherflow/actions/runs/42211375628) completed ten isolated samples on exact source `c5543d96913fbef356fc7856486feb43ea52c71d`: five fan-out and five chain repetitions. Every repetition used 64 workflows × 4 tasks, 256-byte input, one worker at concurrency 4, an offered rate of 8 workflows/s, and a 1 ms handler delay. Each run reconciled 896 outbox events with 896 inbox rows, with zero duplicates or errors.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24 / 20261101.360.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 9V74 80-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,348,672 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.6 (Debian 18.6-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte input |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+### Results (fifth session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 6.173 | 5.893 |
+| Mean workflows/s | 5.998 | 5.886 |
+| Sample standard deviation, workflows/s | 0.561 | 0.231 |
+| Observed range, workflows/s | 5.047–6.525 | 5.634–6.151 |
+| Median tasks/s | 24.691 | 23.570 |
+| Median workflow p50 | 4,494.423 ms | 4,476.312 ms |
+| Median workflow p95 | 8,491.263 ms | 8,729.661 ms |
+| Sample standard deviation, p95 | 743.928 ms | 260.230 ms |
+| Median whole-run elapsed | 10,368.177 ms | 10,861.183 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The artifact is `aetherflow-end-to-end-baseline-c5543d96913fbef356fc7856486feb43ea52c71d` (artifact ID `13498664032`; 90-day retention). It contains ten per-run CSVs, combined samples, summary statistics, and `metadata.json`.
+
+**Comparison boundary:** this host uses AMD EPYC 9V74, not the stored AMD EPYC 9V45 reference. The comparator correctly reported `SKIP: runner fingerprint does not match the stored reference; no threshold was applied.` Keep this run as a separate observation and do not pool it with the 9V45 sessions or interpret the different throughput/latency as a regression or improvement. The session verifies the mismatch/skip path, not the numeric matched-fingerprint regression thresholds.
