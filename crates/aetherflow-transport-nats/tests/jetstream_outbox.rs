@@ -1710,6 +1710,393 @@ impl Drop for RestartNatsContainer {
     }
 }
 
+
+
+/// Stops every member in the CI JetStream cluster and restores every member
+/// on normal completion or unwinding. The stopped list is drained in reverse
+/// order so a partially stopped cluster can always be brought back.
+struct RestartNatsCluster {
+    members: Vec<String>,
+    stopped: Vec<String>,
+}
+
+impl RestartNatsCluster {
+    fn new(members: Vec<String>) -> Self {
+        assert_eq!(members.len(), 3, "the full-outage drill requires all three NATS members");
+        Self {
+            members,
+            stopped: Vec::new(),
+        }
+    }
+
+    fn stop_all(&mut self) {
+        for member in &self.members {
+            let result = Command::new("docker")
+                .args(["stop", member.as_str()])
+                .output()
+                .expect("stop NATS member for full-cluster outage");
+            assert!(
+                result.status.success(),
+                "stop NATS member {member}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            self.stopped.push(member.clone());
+        }
+    }
+
+    fn restore_all(&mut self) {
+        while let Some(member) = self.stopped.last().cloned() {
+            let result = Command::new("docker")
+                .args(["start", member.as_str()])
+                .output()
+                .expect("restart NATS member after full-cluster outage");
+            assert!(
+                result.status.success(),
+                "restart NATS member {member}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            self.stopped.pop();
+        }
+    }
+}
+
+impl Drop for RestartNatsCluster {
+    fn drop(&mut self) {
+        while let Some(member) = self.stopped.last().cloned() {
+            let _ = Command::new("docker")
+                .args(["start", member.as_str()])
+                .output();
+            self.stopped.pop();
+        }
+    }
+}
+
+/// Verifies that the PostgreSQL outbox remains authoritative across a complete
+/// three-member JetStream outage, then publishes and consumes the event once
+/// quorum is restored. This is distinct from the M05 single-member-loss drill.
+#[tokio::test]
+async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
+    let (Ok(database_url), Ok(nats_url), Ok(container_names)) = (
+        std::env::var("AETHERFLOW_TEST_NATS_DATABASE_URL"),
+        std::env::var("AETHERFLOW_TEST_NATS_URL"),
+        std::env::var("AETHERFLOW_TEST_NATS_CONTAINERS"),
+    ) else {
+        eprintln!("full JetStream outage test requires the PostgreSQL/NATS CI fixture; skipping");
+        return;
+    };
+
+    let _cluster_fault_guard = NATS_CLUSTER_FAULT_LOCK.lock().await;
+    let members = container_names
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let mut nats_cluster = RestartNatsCluster::new(members);
+
+    let suffix = unique_suffix();
+    let subject = format!("aetherflow.integration.{suffix}.full-outage");
+    let stream_name = format!("AFLOW_FULL_OUTAGE_{}", suffix.replace('_', ""));
+    let durable_name = format!("aflow_full_outage_{}", suffix.replace('_', ""));
+    let consumer_name = format!("full_outage_{}", suffix.replace('_', ""));
+
+    let config: Config = database_url.parse().expect("valid PostgreSQL URL");
+    let manager = Manager::from_config(
+        config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager)
+        .max_size(4)
+        .build()
+        .expect("build full-outage PostgreSQL pool");
+    let store = PgStore::from_pool(pool.clone());
+    assert!(matches!(
+        store.migrate().await.expect("apply PostgreSQL schema"),
+        MigrationOutcome::Applied { version: 8, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 8, .. }
+    ));
+
+    // This test uses the global outbox dispatcher, so start from an isolated
+    // outbox snapshot. The cluster-fault mutex and serial CI test binary keep
+    // the shared integration fixture exclusive for the duration of the drill.
+    pool.get()
+        .await
+        .expect("get full-outage outbox setup connection")
+        .batch_execute("TRUNCATE TABLE outbox_events RESTART IDENTITY")
+        .await
+        .expect("clear outbox rows before full-outage test");
+
+    let repository = Arc::new(PgTaskRepository::from_pool(pool.clone()));
+    let workflow_run_id =
+        WorkflowRunId::parse(format!("full-outage-run-{suffix}")).expect("valid workflow-run ID");
+    let workflow_id =
+        WorkflowId::parse(format!("full-outage-workflow-{suffix}")).expect("valid workflow ID");
+    let task_run_id =
+        TaskRunId::parse(format!("full-outage-task-run-{suffix}")).expect("valid task-run ID");
+    let task_id =
+        TaskId::parse(format!("full-outage-task-{suffix}")).expect("valid task ID");
+    let retry_policy = RetryPolicy::new(NonZeroU32::new(1).expect("one attempt"), 0, 0)
+        .expect("valid retry policy");
+
+    repository
+        .create_workflow(
+            &workflow_run_id,
+            &workflow_id,
+            None,
+            &[NewTaskRun::new(
+                task_run_id,
+                task_id,
+                TaskInput::empty(),
+                Vec::new(),
+                retry_policy,
+                SystemTime::now() + Duration::from_secs(300),
+            )],
+        )
+        .await
+        .expect("create workflow and transactional outbox event");
+
+    let outbox_row = pool
+        .get()
+        .await
+        .expect("get full-outage event connection")
+        .query_one(
+            "SELECT event_id FROM outbox_events
+             WHERE aggregate_id = $1 AND published_at IS NULL",
+            &[&workflow_run_id.as_str()],
+        )
+        .await
+        .expect("find the uncommitted-to-broker outbox event");
+    let event_id: i64 = outbox_row.get(0);
+
+    let nats_client = connect_to_nats(&nats_url)
+        .await
+        .expect("connect to all-member NATS seed pool before outage");
+    let jetstream = jetstream::new(nats_client);
+    let stream = jetstream
+        .create_stream(jetstream::stream::Config {
+            name: stream_name.clone(),
+            subjects: vec![subject.clone()],
+            duplicate_window: Duration::from_secs(120),
+            num_replicas: 3,
+            ..Default::default()
+        })
+        .await
+        .expect("create three-replica full-outage stream");
+    stream
+        .create_consumer(PullConsumerConfig {
+            durable_name: Some(durable_name.clone()),
+            filter_subject: subject.clone(),
+            ack_wait: Duration::from_secs(2),
+            max_ack_pending: 16,
+            ..Default::default()
+        })
+        .await
+        .expect("create durable full-outage consumer");
+
+    // Take down all three JetStream servers, not just one member. Confirm a
+    // fresh client cannot connect before asking the outbox to publish.
+    nats_cluster.stop_all();
+    let down_probe = timeout(Duration::from_secs(3), connect_to_nats(&nats_url)).await;
+    assert!(
+        matches!(down_probe, Err(_) | Ok(Err(_))),
+        "the NATS seed pool unexpectedly accepted a connection during full-cluster outage"
+    );
+
+    let unavailable = Arc::new(AtomicBool::new(false));
+    let outage_attempts = Mutex::new(Vec::new());
+    let outage_publisher = Arc::new(BrokerUnavailablePublisher {
+        inner: NatsJetStreamPublisher::new(jetstream, subject.clone()),
+        broker_available: Arc::clone(&unavailable),
+        attempted_event_ids: Mutex::new(Vec::new()),
+    });
+    let outage_dispatcher = PostgresOutboxDispatcher::new(
+        Arc::clone(&repository),
+        WorkerId::parse(format!("full-outage-publisher-{suffix}"))
+            .expect("valid full-outage publisher ID"),
+        outage_publisher.clone(),
+        OutboxDispatcherConfig::new(
+            1,
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid full-outage dispatcher config"),
+    );
+    let outage_report = outage_dispatcher
+        .dispatch_once()
+        .await
+        .expect("record failed publication while all JetStream members are offline");
+    assert_eq!(outage_report.claimed(), 1);
+    assert_eq!(outage_report.acknowledged(), 0);
+    assert_eq!(outage_report.rescheduled(), 1);
+    assert_eq!(
+        outage_publisher
+            .attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_slice(),
+        &[event_id]
+    );
+
+    let pending_state = pool
+        .get()
+        .await
+        .expect("get pending outbox verification connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts, claim_owner IS NULL
+             FROM outbox_events WHERE event_id = $1",
+            &[&event_id],
+        )
+        .await
+        .expect("verify event remains durable in PostgreSQL");
+    assert!(!pending_state.get::<_, bool>(0));
+    assert_eq!(pending_state.get::<_, i32>(1), 1);
+    assert!(pending_state.get::<_, bool>(2));
+
+    // Bring every member back and wait for the persisted three-replica stream
+    // and durable consumer to become available again.
+    nats_cluster.restore_all();
+    let (restored_jetstream, restored_consumer) = timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(Ok(client)) =
+                timeout(Duration::from_secs(2), connect_to_nats(&nats_url)).await
+            {
+                let context = jetstream::new(client);
+                if let Ok(restored_stream) = context.get_stream(stream_name.clone()).await {
+                    let consumer: Result<PullConsumer, _> =
+                        restored_stream.get_consumer(&durable_name).await;
+                    if let Ok(consumer) = consumer {
+                        break (context, consumer);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("three-member JetStream quorum and durable consumer should recover");
+
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let handler = Arc::new(CountingHandler {
+        calls: Arc::clone(&handler_calls),
+        delay: Duration::from_millis(20),
+    });
+    let inbox = PgInboxRepository::from_pool(pool.clone());
+    let consumer = NatsJetStreamConsumer::new(
+        restored_consumer,
+        inbox.clone(),
+        consumer_name.clone(),
+        WorkerId::parse(format!("full-outage-consumer-{suffix}"))
+            .expect("valid full-outage consumer worker ID"),
+        Duration::from_secs(2),
+        handler,
+    )
+    .expect("create inbox-backed consumer after cluster recovery");
+    let consumer_metrics = consumer.metrics();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let consumer_task = tokio::spawn(async move { consumer.run(shutdown_rx).await });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let recovered_attempts = Mutex::new(Vec::new());
+    let recovered_publisher = Arc::new(BrokerUnavailablePublisher {
+        inner: NatsJetStreamPublisher::new(restored_jetstream, subject),
+        broker_available: Arc::new(AtomicBool::new(true)),
+        attempted_event_ids: Mutex::new(Vec::new()),
+    });
+    let recovered_dispatcher = PostgresOutboxDispatcher::new(
+        Arc::clone(&repository),
+        WorkerId::parse(format!("full-outage-retry-publisher-{suffix}"))
+            .expect("valid full-outage retry publisher ID"),
+        recovered_publisher.clone(),
+        OutboxDispatcherConfig::new(
+            1,
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        )
+        .expect("valid recovered dispatcher config"),
+    );
+    let recovered_report = timeout(Duration::from_secs(15), async {
+        loop {
+            let report = recovered_dispatcher
+                .dispatch_once()
+                .await
+                .expect("dispatch pending event after JetStream recovery");
+            if report.acknowledged() == 1 {
+                break report;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("outbox event should publish after JetStream quorum is restored");
+    assert_eq!(recovered_report.claimed(), 1);
+    assert_eq!(recovered_report.acknowledged(), 1);
+    assert_eq!(recovered_report.rescheduled(), 0);
+
+    timeout(Duration::from_secs(10), async {
+        while consumer_metrics.snapshot().processed == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("recovered durable consumer should process the retained outbox event");
+
+    shutdown_tx
+        .send(true)
+        .expect("signal full-outage consumer shutdown");
+    consumer_task
+        .await
+        .expect("join full-outage consumer")
+        .expect("full-outage consumer should stop cleanly");
+
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(consumer_metrics.snapshot().processed, 1);
+    assert_eq!(consumer_metrics.snapshot().duplicates, 0);
+    assert_eq!(
+        recovered_publisher
+            .attempted_event_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_slice(),
+        &[event_id]
+    );
+
+    let final_state = pool
+        .get()
+        .await
+        .expect("get final outbox verification connection")
+        .query_one(
+            "SELECT published_at IS NOT NULL, publish_attempts, claim_owner IS NULL
+             FROM outbox_events WHERE event_id = $1",
+            &[&event_id],
+        )
+        .await
+        .expect("inspect recovered outbox event");
+    assert!(final_state.get::<_, bool>(0));
+    assert_eq!(final_state.get::<_, i32>(1), 2);
+    assert!(final_state.get::<_, bool>(2));
+
+    let inbox_state = pool
+        .get()
+        .await
+        .expect("get full-outage inbox verification connection")
+        .query_one(
+            "SELECT status, attempts FROM consumer_inbox
+             WHERE consumer_name = $1 AND event_id = $2",
+            &[&consumer_name, &event_id.to_string()],
+        )
+        .await
+        .expect("inspect inbox row after cluster recovery");
+    assert_eq!(inbox_state.get::<_, String>(0), "processed");
+    assert_eq!(inbox_state.get::<_, i64>(1), 1);
+}
+
 /// Runs two bounded end-to-end M05 iterations. Each iteration overlaps a
 /// worker-only PostgreSQL packet partition, one JetStream member outage, and
 /// an abrupt worker-process kill; then checks durable recovery and inbox dedup.

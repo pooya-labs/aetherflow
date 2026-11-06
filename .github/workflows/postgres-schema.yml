@@ -67,6 +67,7 @@ jobs:
       AETHERFLOW_TEST_NATS_DATABASE_URL: postgres://aetherflow:aetherflow-ci-password@127.0.0.1:5432/aetherflow_nats_test
       AETHERFLOW_TEST_NATS_URL: nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224
       AETHERFLOW_TEST_NATS_CONTAINER: aetherflow-nats-1
+      AETHERFLOW_TEST_NATS_CONTAINERS: aetherflow-nats-1,aetherflow-nats-2,aetherflow-nats-3
       AETHERFLOW_TEST_PACKET_PARTITION: "1"
       AETHERFLOW_TLS_TEST_DATABASE_URL: postgres://aetherflow_tls:aetherflow-tls-ci-password@127.0.0.1:5433/aetherflow_tls_test
       AETHERFLOW_TLS_HOSTNAME_MISMATCH_DATABASE_URL: postgres://aetherflow_tls:aetherflow-tls-ci-password@aetherflow-wrong-host.invalid:5433/aetherflow_tls_test
