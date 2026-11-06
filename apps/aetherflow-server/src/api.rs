@@ -1865,7 +1865,10 @@ mod tests {
             };
             assert_eq!(limiter.check_at(key, now), None);
         }
-        assert_eq!(limiter.bucket_count(), PrincipalRateLimiter::MAX_BUCKETS - 1);
+        assert_eq!(
+            limiter.bucket_count(),
+            PrincipalRateLimiter::MAX_BUCKETS - 1
+        );
 
         // The first identity beyond the cap creates the shared overflow
         // bucket. Every later overflow identity shares its depleted allowance.
