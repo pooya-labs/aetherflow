@@ -165,10 +165,52 @@ impl HttpOperation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum HttpResponseClass {
+    Success = 0,
+    Redirect,
+    ClientError,
+    ServerError,
+    Other,
+}
+
+impl HttpResponseClass {
+    const COUNT: usize = 5;
+    const ALL: [Self; Self::COUNT] = [
+        Self::Success,
+        Self::Redirect,
+        Self::ClientError,
+        Self::ServerError,
+        Self::Other,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "2xx",
+            Self::Redirect => "3xx",
+            Self::ClientError => "4xx",
+            Self::ServerError => "5xx",
+            Self::Other => "other",
+        }
+    }
+
+    const fn classify(status_code: u16) -> Self {
+        match status_code {
+            200..=299 => Self::Success,
+            300..=399 => Self::Redirect,
+            400..=499 => Self::ClientError,
+            500..=599 => Self::ServerError,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Default)]
 struct HttpOperationMetrics {
     requests_total: AtomicU64,
     requests_failed_total: AtomicU64,
+    responses_by_class: [AtomicU64; HttpResponseClass::COUNT],
     request_duration_sum_micros: AtomicU64,
     request_duration_buckets: [AtomicU64; 10],
 }
@@ -179,6 +221,8 @@ impl HttpOperationMetrics {
         if status_code >= 500 {
             self.requests_failed_total.fetch_add(1, Ordering::Relaxed);
         }
+        self.responses_by_class[HttpResponseClass::classify(status_code) as usize]
+            .fetch_add(1, Ordering::Relaxed);
 
         let elapsed_micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
         let _ = self.request_duration_sum_micros.try_update(
@@ -355,6 +399,30 @@ impl HttpMetrics {
                 metrics.requests_failed_total.load(Ordering::Relaxed)
             )
             .expect("write metrics");
+        }
+
+        writeln!(
+            output,
+            "# HELP aetherflow_http_operation_responses_total Completed HTTP responses by bounded operation and status class."
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_operation_responses_total counter"
+        )
+        .expect("write metrics");
+        for operation in HttpOperation::ALL {
+            let metrics = &self.operations[operation as usize];
+            for response_class in HttpResponseClass::ALL {
+                writeln!(
+                    output,
+                    "aetherflow_http_operation_responses_total{{operation=\"{}\",status_class=\"{}\"}} {}",
+                    operation.label(),
+                    response_class.label(),
+                    metrics.responses_by_class[response_class as usize].load(Ordering::Relaxed)
+                )
+                .expect("write metrics");
+            }
         }
 
         writeln!(output, "# HELP aetherflow_http_operation_request_duration_seconds HTTP request latency by bounded operation class.").expect("write metrics");
@@ -2031,8 +2099,8 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, HttpMetrics, HttpOperation, PrincipalRateLimitKey, PrincipalRateLimiter,
-        authorization_matches, hash_api_token, router,
+        AppState, HttpMetrics, HttpOperation, HttpResponseClass, PrincipalRateLimitKey,
+        PrincipalRateLimiter, authorization_matches, hash_api_token, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -2051,16 +2119,17 @@ mod tests {
         let metrics = HttpMetrics::default();
         metrics.observe(HttpOperation::OperatorRead, 200, Duration::from_millis(3));
         metrics.observe(HttpOperation::TenantSubmit, 503, Duration::from_millis(300));
+        metrics.observe(HttpOperation::TenantMutation, 429, Duration::from_millis(10));
 
         let output = metrics.render_prometheus();
-        assert!(output.contains("aetherflow_http_requests_total 2"));
+        assert!(output.contains("aetherflow_http_requests_total 3"));
         assert!(output.contains("aetherflow_http_requests_failed_total 1"));
-        assert!(output.contains("aetherflow_http_requests_rate_limited_total 0"));
+        assert!(output.contains("aetherflow_http_requests_rate_limited_total 1"));
         assert!(
             output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.005"} 1"#)
         );
-        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.5"} 2"#));
-        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 2"#));
+        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="0.5"} 3"#));
+        assert!(output.contains(r#"aetherflow_http_request_duration_seconds_bucket{le="+Inf"} 3"#));
         assert!(
             output.contains(
                 r#"aetherflow_http_operation_requests_total{operation="operator_read"} 1"#
@@ -2069,11 +2138,29 @@ mod tests {
         assert!(output.contains(
             r#"aetherflow_http_operation_requests_failed_total{operation="tenant_submit"} 1"#
         ));
+        assert!(output.contains(
+            r#"aetherflow_http_operation_responses_total{operation="operator_read",status_class="2xx"} 1"#
+        ));
+        assert!(output.contains(
+            r#"aetherflow_http_operation_responses_total{operation="tenant_submit",status_class="5xx"} 1"#
+        ));
+        assert!(output.contains(
+            r#"aetherflow_http_operation_responses_total{operation="tenant_mutation",status_class="4xx"} 1"#
+        ));
         assert!(output.contains(r#"aetherflow_http_operation_request_duration_seconds_bucket{operation="tenant_submit",le="0.5"} 1"#));
         assert!(output.contains(r#"aetherflow_http_operation_request_duration_seconds_count{operation="tenant_submit"} 1"#));
         assert!(!output.contains("workflow_run_id"));
         assert!(!output.contains("authorization"));
         assert!(!output.contains("tenant-private"));
+    }
+
+    #[test]
+    fn http_response_classes_are_fixed_and_cover_all_status_ranges() {
+        assert_eq!(HttpResponseClass::classify(200), HttpResponseClass::Success);
+        assert_eq!(HttpResponseClass::classify(302), HttpResponseClass::Redirect);
+        assert_eq!(HttpResponseClass::classify(429), HttpResponseClass::ClientError);
+        assert_eq!(HttpResponseClass::classify(503), HttpResponseClass::ServerError);
+        assert_eq!(HttpResponseClass::classify(600), HttpResponseClass::Other);
     }
 
     #[test]

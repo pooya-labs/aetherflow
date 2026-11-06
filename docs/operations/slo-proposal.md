@@ -4,7 +4,7 @@
 
 ## Why targets are not active yet
 
-The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge, and bounded operation-class request/5xx counters and latency histograms. The operation label is selected from a fixed enum (health, metrics, operator/tenant read, submit, mutation, or other); raw paths and tenant, workflow, and task identifiers are deliberately excluded. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
+The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge, and bounded operation-class request/5xx counters, 2xx/3xx/4xx/5xx/other response-class counters, and latency histograms. The operation label is selected from a fixed enum (health, metrics, operator/tenant read, submit, mutation, or other); raw paths and tenant, workflow, and task identifiers are deliberately excluded. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
 
 The proposal below defines the measurements and candidate objectives to review. Do not enforce alert thresholds or advertise an SLA until the missing instrumentation, deployment topology, exclusions, and owner-approved targets exist.
 
@@ -12,7 +12,7 @@ The proposal below defines the measurements and candidate objectives to review. 
 
 | SLI | Proposed measurement | Current status |
 |---|---|---|
-| API availability | Successful eligible API responses divided by eligible API requests; report 5xx and server-side timeouts separately | Aggregate and fixed operation-class request/5xx counters exist; eligible traffic and timeout attribution need a documented collector |
+| API availability | Successful eligible API responses divided by eligible API requests; report 5xx and server-side timeouts separately | Aggregate and fixed operation-class request/response counters and 5xx counters exist; eligible traffic and timeout attribution need a documented collector |
 | API latency | p50/p95/p99 for read and submit classes, excluding client-side validation errors | Bounded histograms exist per fixed operation class; query the read/submit classes separately, but confirm bucket precision and collector quantile rules before adopting targets |
 | Workflow completion | Workflows reaching a successful terminal state before their configured deadline divided by eligible accepted workflows | Requires a durable outcome metric or an external PostgreSQL-derived exporter |
 | Queue/transport health | Oldest unpublished outbox age, oldest unprocessed inbox age, and publish/consume error rate | Durable rows are queryable; production-safe metrics and alert rules are not yet implemented |
@@ -39,7 +39,7 @@ Workflow completion and API availability must have separate budgets. A user-prov
 
 ## Instrumentation required before adoption
 
-1. Define the eligible-request denominator and collector rules for each bounded operation class; specify how client 4xx/429, server timeouts, cancellations, and deployment restarts are counted. Do not add raw path, tenant, workflow, or task labels.
+1. Define the eligible-request denominator and collector rules for each bounded operation class; response classes are available, but server timeouts, client cancellations, and deployment restarts still need explicit attribution. Decide whether 4xx/429 responses count as unavailable for each SLI. Do not add raw path, tenant, workflow, or task labels.
 2. Add durable workflow terminal outcome and completion-latency observations, with explicit labels for platform error, handler error, cancellation, and deadline expiry.
 3. Add oldest pending outbox age, oldest unprocessed inbox age, retry/lease-expiry counters, and JetStream reconnect/error signals.
 4. Define black-box probes from the same network boundary as users; `GET /health` is process liveness only and must not be treated as API/database readiness.
