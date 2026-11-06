@@ -2483,14 +2483,14 @@ mod tests {
     #[tokio::test]
     async fn cors_requires_an_exact_allowlisted_origin_and_bounded_preflight() {
         let state = AppState::without_database()
-            .with_cors_allowed_origins("https://pooya16pg-spec.github.io")
+            .with_cors_allowed_origins("https://pooya-labs.github.io")
             .expect("valid exact Pages origin");
         let preflight = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
                     .uri("/api/v1/workflow-runs")
-                    .header(ORIGIN, "https://pooya16pg-spec.github.io")
+                    .header(ORIGIN, "https://pooya-labs.github.io")
                     .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
                     .header(
                         ACCESS_CONTROL_REQUEST_HEADERS,
@@ -2505,7 +2505,7 @@ mod tests {
         assert_eq!(
             preflight.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&HeaderValue::from_static(
-                "https://pooya16pg-spec.github.io"
+                "https://pooya-labs.github.io"
             ))
         );
         assert_eq!(
@@ -2554,7 +2554,7 @@ mod tests {
                 Request::builder()
                     .method("OPTIONS")
                     .uri("/api/v1/workflow-runs")
-                    .header(ORIGIN, "https://pooya16pg-spec.github.io")
+                    .header(ORIGIN, "https://pooya-labs.github.io")
                     .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
                     .header(
                         ACCESS_CONTROL_REQUEST_HEADERS,

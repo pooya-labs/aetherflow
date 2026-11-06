@@ -106,7 +106,7 @@ export AETHERFLOW_API_TOKEN="$(openssl rand -hex 32)"
 export AETHERFLOW_MIGRATION_DATABASE_URL='postgres://aetherflow_migrator:YOUR_MIGRATION_PASSWORD@127.0.0.1:5432/aetherflow_dev'
 export DATABASE_URL='postgres://aetherflow_runtime:YOUR_RUNTIME_PASSWORD@127.0.0.1:5432/aetherflow_dev'
 # Browser access is disabled unless an exact allowed origin is configured.
-export AETHERFLOW_CORS_ALLOWED_ORIGINS='https://pooya16pg-spec.github.io'
+export AETHERFLOW_CORS_ALLOWED_ORIGINS='https://pooya-labs.github.io'
 # Optional authenticated-principal limiter settings (defaults shown).
 export AETHERFLOW_API_RATE_LIMIT_BURST=30
 export AETHERFLOW_API_RATE_LIMIT_PER_SECOND=2
@@ -152,7 +152,7 @@ The OpenAPI 3.1 source of truth is docs/api/openapi.yaml.
 
 The submit request carries a caller-supplied unique workflow_run_id, a workflow ID, task IDs/dependencies, a retry policy, and optional base64 task input. Input is limited to 1 MiB after base64 decoding; the HTTP request body is limited to 2 MiB. A reused workflow-run ID returns 409 Conflict; no idempotent replay contract is implemented. Workflow and task inspection never return input/output bytes.
 
-The responsive read-only dashboard is published at https://pooya16pg-spec.github.io/aetherflow/dashboard/. Set `AETHERFLOW_CORS_ALLOWED_ORIGINS` to that exact origin before using it against a remote API. Operator dashboard queries intentionally see only `legacy-default`; tenant credentials remain tenant-scoped. The dashboard pages event history with an opaque cursor and never renders raw outbox payloads.
+The responsive read-only dashboard is published at https://pooya-labs.github.io/aetherflow/dashboard/. Set `AETHERFLOW_CORS_ALLOWED_ORIGINS` to that exact origin before using it against a remote API. Operator dashboard queries intentionally see only `legacy-default`; tenant credentials remain tenant-scoped. The dashboard pages event history with an opaque cursor and never renders raw outbox payloads.
 
 The HTTP process does not launch a worker. Run durable workers separately through the PostgreSQL runtime. Workflow definitions are currently submitted per run and are not persisted as reusable versioned definitions.
 
