@@ -1907,7 +1907,6 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     );
 
     let unavailable = Arc::new(AtomicBool::new(false));
-    let outage_attempts = Mutex::new(Vec::new());
     let outage_publisher = Arc::new(BrokerUnavailablePublisher {
         inner: NatsJetStreamPublisher::new(jetstream, subject.clone()),
         broker_available: Arc::clone(&unavailable),
