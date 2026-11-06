@@ -2177,8 +2177,8 @@ mod tests {
         ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN, WWW_AUTHENTICATE,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tower::ServiceExt;
 
