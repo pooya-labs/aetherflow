@@ -35,7 +35,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 
 | Threat | Existing mitigation | Residual risk / required follow-up |
 |---|---|---|
-| Unauthenticated remote caller | Bearer auth on API routes; health is liveness-only; non-loopback plaintext HTTP is rejected | Shared operator token, no API rate limiter, no external penetration test |
+| Unauthenticated remote caller | Bearer auth on durable routes; health is liveness-only; non-loopback plaintext HTTP is rejected; authenticated operator/tenant principals have bounded process-local token buckets and receive 429/Retry-After | Invalid/missing credentials are not source-IP throttled; operator credential is shared; quotas are not coordinated across replicas; no external penetration test |
 | Tenant attempts to read or mutate another tenant | Credential-derived tenant context, permission checks, composite tenant ownership, forced RLS | RLS is not a defense against arbitrary SQL execution or a compromised runtime process; continue negative cross-tenant tests |
 | Stolen tenant/operator token | Only digests are stored; raw tokens are not logged; tenant credentials can be revoked | No managed secret store, no operator identity separation, no non-disruptive operator-token rotation |
 | Malicious workflow or plugin | Bounded payloads/retries/concurrency; WASM capability default deny and resource/fuel limits | Engine bugs, host bugs, process-wide resource pressure, and OS isolation remain deployment concerns |
@@ -51,13 +51,13 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 - The application uses parameterized SQL. RLS is an additional database guardrail, not an SQL injection mitigation.
 - PostgreSQL TLS uses the platform native trust roots and validates the server name. `DATABASE_SSL_MODE=disable` is only for the disposable loopback Compose environment. A non-loopback HTTP listener requires a valid Rustls certificate/key pair.
 - Compose NATS endpoints are local development services. Do not expose the loopback-only ports or treat the development cluster configuration as a production-authenticated NATS deployment.
-- Metrics expose aggregate request counts and bounded latency buckets under operator authentication. They are not yet workflow-level SLO instrumentation.
+- Metrics expose aggregate request counts, a bounded latency histogram, and an authenticated-principal rate-limit counter under operator authentication. The in-memory limiter defaults to burst 30/refill 2 per second, is capped at 4,096 buckets per process, and does not provide a cluster-wide quota. These are request controls, not workflow-level SLO instrumentation.
 - At-least-once event delivery means external task handlers must use stable idempotency keys or their own transactional boundary.
 
 ## Priority gaps before production
 
 1. Complete independent security review/penetration test and a production deployment architecture review.
-2. Add API rate limiting, per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
+2. Add trusted-source throttling for unauthenticated/invalid credentials, cluster-wide rate-limit enforcement or an approved edge-gateway policy for multiple API replicas, per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
 3. Decide and test production backup/WAL archiving, restore ownership, RPO, and RTO; the current rehearsal is isolated CI only.
 4. Add workflow/outbox/inbox SLIs and alerting, then approve SLOs and error budgets.
 5. Complete dependency license review, SBOM generation and release provenance/attestation policy.

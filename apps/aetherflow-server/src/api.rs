@@ -208,6 +208,8 @@ impl HttpMetrics {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PrincipalRateLimitKey {
     Operator,
+    /// Shared fallback for authenticated identities beyond the per-process cap.
+    Overflow,
     Tenant {
         tenant_id: String,
         principal_id: String,
@@ -280,19 +282,18 @@ impl PrincipalRateLimiter {
             state.last_cleanup = now;
         }
 
-        if !state.buckets.contains_key(&key) && state.buckets.len() >= Self::MAX_BUCKETS {
-            // The map is bounded even when the service has many active tenant
-            // principals. Evict the least-recently-used bucket for a new valid
-            // identity rather than allowing unbounded memory growth.
-            if let Some(oldest_key) = state
-                .buckets
-                .iter()
-                .min_by_key(|(_, bucket)| bucket.last_seen)
-                .map(|(key, _)| key.clone())
-            {
-                state.buckets.remove(&oldest_key);
-            }
-        }
+        // Reserve one slot for a shared overflow bucket. Never evict an
+        // established principal bucket: doing so would reset that principal's
+        // burst allowance when it returns. New authenticated identities beyond
+        // the cap share one conservative bucket instead.
+        let key = if !state.buckets.contains_key(&key)
+            && !matches!(&key, PrincipalRateLimitKey::Overflow)
+            && state.buckets.len() >= Self::MAX_BUCKETS - 1
+        {
+            PrincipalRateLimitKey::Overflow
+        } else {
+            key
+        };
 
         let bucket = state.buckets.entry(key).or_insert_with(|| TokenBucket {
             tokens: self.burst_capacity,
@@ -1857,13 +1858,42 @@ mod tests {
 
         let limiter = PrincipalRateLimiter::new(1, 1).expect("valid rate-limit policy");
         let now = std::time::Instant::now();
-        for index in 0..(PrincipalRateLimiter::MAX_BUCKETS + 32) {
+        for index in 0..(PrincipalRateLimiter::MAX_BUCKETS - 1) {
             let key = PrincipalRateLimitKey::Tenant {
                 tenant_id: "tenant-bounded".to_owned(),
                 principal_id: format!("principal-{index}"),
             };
-            let _ = limiter.check_at(key, now);
+            assert_eq!(limiter.check_at(key, now), None);
         }
+        assert_eq!(limiter.bucket_count(), PrincipalRateLimiter::MAX_BUCKETS - 1);
+
+        // The first identity beyond the cap creates the shared overflow
+        // bucket. Every later overflow identity shares its depleted allowance.
+        let first_overflow = PrincipalRateLimitKey::Tenant {
+            tenant_id: "tenant-overflow".to_owned(),
+            principal_id: "overflow-a".to_owned(),
+        };
+        let second_overflow = PrincipalRateLimitKey::Tenant {
+            tenant_id: "tenant-overflow".to_owned(),
+            principal_id: "overflow-b".to_owned(),
+        };
+        assert_eq!(limiter.check_at(first_overflow, now), None);
+        assert_eq!(limiter.bucket_count(), PrincipalRateLimiter::MAX_BUCKETS);
+        assert_eq!(
+            limiter.check_at(second_overflow, now),
+            Some(Duration::from_secs(1))
+        );
+
+        // A previously admitted principal keeps its exhausted bucket instead
+        // of receiving a fresh burst through an eviction/reset cycle.
+        let established = PrincipalRateLimitKey::Tenant {
+            tenant_id: "tenant-bounded".to_owned(),
+            principal_id: "principal-0".to_owned(),
+        };
+        assert_eq!(
+            limiter.check_at(established, now),
+            Some(Duration::from_secs(1))
+        );
         assert_eq!(limiter.bucket_count(), PrincipalRateLimiter::MAX_BUCKETS);
     }
 

@@ -28,12 +28,14 @@ For a PostgreSQL-backed server, supply independent values through a secret manag
 | `AETHERFLOW_BIND` | Listener address; plaintext is allowed only on loopback |
 | `AETHERFLOW_TLS_CERT_PATH`, `AETHERFLOW_TLS_KEY_PATH` | Required valid Rustls identity for non-loopback HTTP listener binds |
 | `AETHERFLOW_CORS_ALLOWED_ORIGINS` | Exact browser origins; CORS is not authentication |
+| `AETHERFLOW_API_RATE_LIMIT_BURST` | Positive integer; default 30 authenticated requests per process-local principal bucket |
+| `AETHERFLOW_API_RATE_LIMIT_PER_SECOND` | Positive integer; default 2 token refills per second per process-local principal bucket |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional OTLP HTTP/protobuf destination |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Optional exporter credentials; protect and never log these values |
 
 Tenant credentials are provisioned and managed as tenant records, not as a substitute for the platform operator token. Generate credentials from a cryptographically secure source, keep the raw values out of source control and logs, and revoke them when no longer needed.
 
-The operator token is shared and rotating it requires process restart. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
+The operator token is shared and rotating it requires process restart. Authenticated operator requests use one process-local token bucket; tenant requests use separate buckets keyed by the credential-derived tenant and principal. The in-memory limiter is capped at 4,096 buckets and emits 429 with `Retry-After`; it does not provide a cluster-wide quota across API replicas, and it does not throttle unauthenticated or invalid credentials by source IP. Put trusted edge protection in front of externally reachable deployments and do not trust arbitrary forwarded-IP headers. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
 
 ## 3. Database and transport
 
@@ -109,4 +111,4 @@ Before scaling:
 
 ## 9. Production-readiness gate
 
-Do not call the service production-ready until the following are completed and reviewed: independent security assessment; deployment-specific NATS and secret management; API rate limiting and audit identity; approved SLO/RPO/RTO; production backup/PITR and restore rehearsal; horizontal-load and failure-injection evidence; dependency license review and SBOM/provenance policy; and an owner-operated incident/on-call model.
+Do not call the service production-ready until the following are completed and reviewed: independent security assessment; trusted-source throttling for unauthenticated/invalid credentials; cluster-wide rate-limit enforcement or an approved edge-gateway policy for multi-replica deployments; per-principal audit identity; deployment-specific NATS and secret management; approved SLO/RPO/RTO; production backup/PITR and restore rehearsal; horizontal-load and failure-injection evidence; dependency license review and SBOM/provenance policy; and an owner-operated incident/on-call model.

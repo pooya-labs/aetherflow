@@ -107,10 +107,13 @@ export AETHERFLOW_MIGRATION_DATABASE_URL='postgres://aetherflow_migrator:YOUR_MI
 export DATABASE_URL='postgres://aetherflow_runtime:YOUR_RUNTIME_PASSWORD@127.0.0.1:5432/aetherflow_dev'
 # Browser access is disabled unless an exact allowed origin is configured.
 export AETHERFLOW_CORS_ALLOWED_ORIGINS='https://pooya16pg-spec.github.io'
+# Optional authenticated-principal limiter settings (defaults shown).
+export AETHERFLOW_API_RATE_LIMIT_BURST=30
+export AETHERFLOW_API_RATE_LIMIT_PER_SECOND=2
 cargo run -p aetherflow-server
 ~~~
 
-When DATABASE_URL is set, both database URLs and AETHERFLOW_API_TOKEN are mandatory. `AETHERFLOW_CORS_ALLOWED_ORIGINS` is optional; an empty or unset value disables browser cross-origin access. AETHERFLOW_API_TOKEN must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
+When DATABASE_URL is set, both database URLs and AETHERFLOW_API_TOKEN are mandatory. `AETHERFLOW_CORS_ALLOWED_ORIGINS` is optional; an empty or unset value disables browser cross-origin access. `AETHERFLOW_API_RATE_LIMIT_BURST` and `AETHERFLOW_API_RATE_LIMIT_PER_SECOND` configure the authenticated-principal token bucket and default to 30 and 2 respectively; both must be positive integers. Operator traffic has one shared bucket, while tenant traffic is keyed by authenticated tenant/principal identity. The limiter is bounded to 4,096 per-process buckets and returns HTTP 429 with `Retry-After` when exhausted. It does not coordinate quotas across server replicas or throttle unauthenticated/invalid credentials by source IP. AETHERFLOW_API_TOKEN must be 32–256 ASCII letters, digits, hyphens or underscores. The server stores only its SHA-256 digest in memory. Do not commit the token, paste it into issue reports, or enable shell tracing while exporting it. Rotate it by replacing the environment value and restarting the process.
 
 `AETHERFLOW_MIGRATION_DATABASE_URL` is used only by the migration/DDL owner pool. `DATABASE_URL` is used only by the API runtime pool and must authenticate as a restricted non-owner role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, or membership in any other PostgreSQL role. Startup checks all ten protected tables for both ENABLE and FORCE ROW LEVEL SECURITY and fails closed if the runtime role is too privileged. Grant the runtime role only USAGE on schema public, DML on the required tables, and USAGE/SELECT on required sequences; do not grant it membership in the migration role. The migration role needs the DDL privileges required to apply the versioned schema.
 
