@@ -210,6 +210,7 @@ impl HttpResponseClass {
 struct HttpOperationMetrics {
     requests_total: AtomicU64,
     requests_failed_total: AtomicU64,
+    requests_abandoned_total: AtomicU64,
     responses_by_class: [AtomicU64; HttpResponseClass::COUNT],
     request_duration_sum_micros: AtomicU64,
     request_duration_buckets: [AtomicU64; 10],
@@ -246,6 +247,7 @@ struct HttpMetrics {
     requests_total: AtomicU64,
     requests_failed_total: AtomicU64,
     requests_rate_limited_total: AtomicU64,
+    requests_abandoned_total: AtomicU64,
     requests_in_flight: AtomicU64,
     request_duration_sum_micros: AtomicU64,
     request_duration_buckets: [AtomicU64; 10],
@@ -307,6 +309,9 @@ impl HttpMetrics {
             self.requests_failed_total.load(Ordering::Relaxed)
         )
         .expect("write metrics");
+        writeln!(output, "# HELP aetherflow_http_requests_abandoned_total HTTP handler futures dropped before a response was observed.").expect("write metrics");
+        writeln!(output, "# TYPE aetherflow_http_requests_abandoned_total counter").expect("write metrics");
+        writeln!(output, "aetherflow_http_requests_abandoned_total {}", self.requests_abandoned_total.load(Ordering::Relaxed)).expect("write metrics");
         writeln!(output, "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter.").expect("write metrics");
         writeln!(
             output,
@@ -403,6 +408,27 @@ impl HttpMetrics {
 
         writeln!(
             output,
+            "# HELP aetherflow_http_operation_requests_abandoned_total HTTP handler futures dropped before a response was observed, by bounded operation."
+        )
+        .expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_operation_requests_abandoned_total counter"
+        )
+        .expect("write metrics");
+        for operation in HttpOperation::ALL {
+            let metrics = &self.operations[operation as usize];
+            writeln!(
+                output,
+                "aetherflow_http_operation_requests_abandoned_total{{operation=\"{}\"}} {}",
+                operation.label(),
+                metrics.requests_abandoned_total.load(Ordering::Relaxed)
+            )
+            .expect("write metrics");
+        }
+
+        writeln!(
+            output,
             "# HELP aetherflow_http_operation_responses_total Completed HTTP responses by bounded operation and status class."
         )
         .expect("write metrics");
@@ -450,6 +476,47 @@ impl HttpMetrics {
         output
     }
 }
+/// Tracks an HTTP handler future and releases its in-flight slot on every drop.
+/// Dropping before a response is observed is recorded separately from a 5xx.
+#[must_use = "dropping the guard early records an abandoned HTTP request"]
+struct InFlightRequestGuard {
+    metrics: Arc<HttpMetrics>,
+    operation: HttpOperation,
+    completed: bool,
+}
+
+impl InFlightRequestGuard {
+    fn new(metrics: Arc<HttpMetrics>, operation: HttpOperation) -> Self {
+        metrics.requests_in_flight.fetch_add(1, Ordering::Relaxed);
+        Self {
+            metrics,
+            operation,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for InFlightRequestGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .requests_in_flight
+            .fetch_sub(1, Ordering::Relaxed);
+        if !self.completed {
+            self.metrics
+                .requests_abandoned_total
+                .fetch_add(1, Ordering::Relaxed);
+            self.metrics.operations[self.operation as usize]
+                .requests_abandoned_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PrincipalRateLimitKey {
     Operator,
@@ -767,10 +834,8 @@ async fn observe_http_request(
     let operation = HttpOperation::classify(request.method(), request.uri().path());
     let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let started = Instant::now();
-    state
-        .metrics
-        .requests_in_flight
-        .fetch_add(1, Ordering::Relaxed);
+    let in_flight_guard =
+        InFlightRequestGuard::new(Arc::clone(&state.metrics), operation);
 
     // Deliberately omit URI, query, headers, and body: these may contain
     // resource identifiers, credentials, or customer payloads.
@@ -799,16 +864,13 @@ async fn observe_http_request(
     let status_code = response.status().as_u16();
 
     state.metrics.observe(operation, status_code, elapsed);
-    state
-        .metrics
-        .requests_in_flight
-        .fetch_sub(1, Ordering::Relaxed);
     tracing::info!(
         parent: &span,
         status_code,
         latency_ms = elapsed.as_secs_f64() * 1_000.0,
         "request completed"
     );
+    in_flight_guard.complete();
     response
 }
 
@@ -2099,8 +2161,8 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, HttpMetrics, HttpOperation, HttpResponseClass, PrincipalRateLimitKey,
-        PrincipalRateLimiter, authorization_matches, hash_api_token, router,
+        AppState, HttpMetrics, HttpOperation, HttpResponseClass, InFlightRequestGuard,
+        PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches, hash_api_token, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -2156,6 +2218,54 @@ mod tests {
         assert!(!output.contains("workflow_run_id"));
         assert!(!output.contains("authorization"));
         assert!(!output.contains("tenant-private"));
+    }
+
+    #[test]
+    fn dropped_http_request_guard_releases_capacity_and_records_abandonment() {
+        let metrics = Arc::new(HttpMetrics::default());
+        {
+            let _guard =
+                InFlightRequestGuard::new(Arc::clone(&metrics), HttpOperation::TenantRead);
+            assert_eq!(
+                metrics.requests_in_flight.load(Ordering::Relaxed),
+                1
+            );
+        }
+
+        assert_eq!(
+            metrics.requests_in_flight.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics.requests_abandoned_total.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.operations[HttpOperation::TenantRead as usize]
+                .requests_abandoned_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("aetherflow_http_requests_abandoned_total 1"));
+        assert!(rendered.contains(
+            r#"aetherflow_http_operation_requests_abandoned_total{operation="tenant_read"} 1"#
+        ));
+    }
+
+    #[test]
+    fn completed_http_request_guard_only_releases_in_flight_capacity() {
+        let metrics = Arc::new(HttpMetrics::default());
+        InFlightRequestGuard::new(Arc::clone(&metrics), HttpOperation::OperatorRead).complete();
+
+        assert_eq!(
+            metrics.requests_in_flight.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics.requests_abandoned_total.load(Ordering::Relaxed),
+            0
+        );
     }
 
     #[test]

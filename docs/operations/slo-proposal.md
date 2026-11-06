@@ -4,7 +4,7 @@
 
 ## Why targets are not active yet
 
-The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge, and bounded operation-class request/5xx counters, 2xx/3xx/4xx/5xx/other response-class counters, and latency histograms. The operation label is selected from a fixed enum (health, metrics, operator/tenant read, submit, mutation, or other); raw paths and tenant, workflow, and task identifiers are deliberately excluded. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
+The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge with drop-safe accounting and an abandoned-handler-future counter, plus bounded operation-class request/5xx counters, 2xx/3xx/4xx/5xx/other response-class counters, and latency histograms. The operation label is selected from a fixed enum (health, metrics, operator/tenant read, submit, mutation, or other); raw paths and tenant, workflow, and task identifiers are deliberately excluded. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
 
 The proposal below defines the measurements and candidate objectives to review. Do not enforce alert thresholds or advertise an SLA until the missing instrumentation, deployment topology, exclusions, and owner-approved targets exist.
 
@@ -39,7 +39,7 @@ Workflow completion and API availability must have separate budgets. A user-prov
 
 ## Instrumentation required before adoption
 
-1. Define the eligible-request denominator and collector rules for each bounded operation class; response classes are available, but server timeouts, client cancellations, and deployment restarts still need explicit attribution. Decide whether 4xx/429 responses count as unavailable for each SLI. Do not add raw path, tenant, workflow, or task labels.
+1. Define the eligible-request denominator and collector rules for each bounded operation class; response classes and abandoned-handler-future counts are available, but server timeouts, client disconnects, and deployment restarts are not separately attributable. Decide whether 4xx/429 responses count as unavailable for each SLI. Do not add raw path, tenant, workflow, or task labels.
 2. Add durable workflow terminal outcome and completion-latency observations, with explicit labels for platform error, handler error, cancellation, and deadline expiry.
 3. Add oldest pending outbox age, oldest unprocessed inbox age, retry/lease-expiry counters, and JetStream reconnect/error signals.
 4. Define black-box probes from the same network boundary as users; `GET /health` is process liveness only and must not be treated as API/database readiness.
