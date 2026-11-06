@@ -2119,7 +2119,11 @@ mod tests {
         let metrics = HttpMetrics::default();
         metrics.observe(HttpOperation::OperatorRead, 200, Duration::from_millis(3));
         metrics.observe(HttpOperation::TenantSubmit, 503, Duration::from_millis(300));
-        metrics.observe(HttpOperation::TenantMutation, 429, Duration::from_millis(10));
+        metrics.observe(
+            HttpOperation::TenantMutation,
+            429,
+            Duration::from_millis(10),
+        );
 
         let output = metrics.render_prometheus();
         assert!(output.contains("aetherflow_http_requests_total 3"));
@@ -2157,9 +2161,18 @@ mod tests {
     #[test]
     fn http_response_classes_are_fixed_and_cover_all_status_ranges() {
         assert_eq!(HttpResponseClass::classify(200), HttpResponseClass::Success);
-        assert_eq!(HttpResponseClass::classify(302), HttpResponseClass::Redirect);
-        assert_eq!(HttpResponseClass::classify(429), HttpResponseClass::ClientError);
-        assert_eq!(HttpResponseClass::classify(503), HttpResponseClass::ServerError);
+        assert_eq!(
+            HttpResponseClass::classify(302),
+            HttpResponseClass::Redirect
+        );
+        assert_eq!(
+            HttpResponseClass::classify(429),
+            HttpResponseClass::ClientError
+        );
+        assert_eq!(
+            HttpResponseClass::classify(503),
+            HttpResponseClass::ServerError
+        );
         assert_eq!(HttpResponseClass::classify(600), HttpResponseClass::Other);
     }
 
