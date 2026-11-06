@@ -320,7 +320,7 @@ echo "PASS: accepted workflow and pending task remained readable after abrupt AP
 
 echo "Starting the durable PostgreSQL worker, outbox publisher, and JetStream inbox consumer in an independent process..."
 handler_started_file="$work_dir/handler-started.marker"
-AETHERFLOW_RESTORE_HANDLER_STARTED_FILE="$handler_started_file" \\
+AETHERFLOW_RESTORE_HANDLER_STARTED_FILE="$handler_started_file" \
 AETHERFLOW_RESTORE_DATABASE_URL="$restore_runtime_url" \
 AETHERFLOW_RESTORE_ADMIN_DATABASE_URL="$restore_admin_url" \
 AETHERFLOW_RESTORE_NATS_URL="$NATS_RESTORE_URL" \
