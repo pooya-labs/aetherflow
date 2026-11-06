@@ -117,7 +117,7 @@ impl HttpOperation {
     }
 
     fn classify(method: &Method, path: &str) -> Self {
-        let is_read = method == &Method::GET || method == &Method::HEAD;
+        let is_read = method == Method::GET || method == Method::HEAD;
         if path == "/health" && is_read {
             return Self::Health;
         }
@@ -132,7 +132,7 @@ impl HttpOperation {
             if is_read {
                 return Self::OperatorRead;
             }
-            if method == &Method::POST {
+            if method == Method::POST {
                 return if path == "/api/v1/workflow-runs" {
                     Self::OperatorSubmit
                 } else {
@@ -152,7 +152,7 @@ impl HttpOperation {
             if is_read {
                 return Self::TenantRead;
             }
-            if method == &Method::POST {
+            if method == Method::POST {
                 return if path == "/api/v1/tenant/workflow-runs" {
                     Self::TenantSubmit
                 } else {
