@@ -532,7 +532,14 @@ async fn observe_http_request(
         "http.request",
         request_id,
         http_method = method,
-        otel_trace_id = tracing::field::Empty
+        otel_trace_id = tracing::field::Empty,
+        auth_scope = tracing::field::Empty,
+        auth_result = tracing::field::Empty,
+        auth_actor_type = tracing::field::Empty,
+        auth_actor_id = tracing::field::Empty,
+        auth_tenant_id = tracing::field::Empty,
+        auth_principal_id = tracing::field::Empty,
+        auth_throttled = tracing::field::Empty
     );
     if let Err(error) = span.set_parent(extract_trace_context(request.headers())) {
         tracing::warn!(%error, "unable to attach incoming W3C trace context");
@@ -556,6 +563,50 @@ async fn observe_http_request(
         "request completed"
     );
     response
+}
+
+fn record_auth_outcome(scope: &'static str, result: &'static str) {
+    let span = tracing::Span::current();
+    span.record("auth_scope", tracing::field::display(scope));
+    span.record("auth_result", tracing::field::display(result));
+}
+
+fn record_operator_identity() {
+    let span = tracing::Span::current();
+    span.record("auth_scope", tracing::field::display("operator"));
+    span.record("auth_result", tracing::field::display("authenticated"));
+    span.record(
+        "auth_actor_type",
+        tracing::field::display("operator_credential"),
+    );
+    // The current API has one shared operator Bearer token, not individual
+    // human operator accounts. Keep that limitation explicit in audit data.
+    span.record(
+        "auth_actor_id",
+        tracing::field::display("shared_operator_credential"),
+    );
+}
+
+fn record_tenant_identity(context: &TenantContext) {
+    let span = tracing::Span::current();
+    span.record("auth_scope", tracing::field::display("tenant"));
+    span.record("auth_result", tracing::field::display("authenticated"));
+    span.record(
+        "auth_actor_type",
+        tracing::field::display("tenant_principal"),
+    );
+    span.record(
+        "auth_tenant_id",
+        tracing::field::display(context.tenant_id().as_str()),
+    );
+    span.record(
+        "auth_principal_id",
+        tracing::field::display(context.principal_id().as_str()),
+    );
+}
+
+fn record_auth_throttled() {
+    tracing::Span::current().record("auth_throttled", true);
 }
 
 async fn export_metrics(State(state): State<AppState>) -> Response {
@@ -735,10 +786,12 @@ async fn require_bearer_token(
     next: Next,
 ) -> Response {
     if state.database.is_none() {
+        record_auth_outcome("operator", "health_only_mode");
         return next.run(request).await;
     }
 
     let Some(expected) = state.api_token_hash.as_ref() else {
+        record_auth_outcome("operator", "unavailable");
         return ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "auth_not_configured",
@@ -748,6 +801,7 @@ async fn require_bearer_token(
     };
 
     if !authorization_matches(expected, request.headers()) {
+        record_auth_outcome("operator", "rejected");
         let mut response = ApiError::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -760,10 +814,12 @@ async fn require_bearer_token(
         return response;
     }
 
+    record_operator_identity();
     if let Some(retry_after) = state
         .principal_rate_limiter
         .check(PrincipalRateLimitKey::Operator)
     {
+        record_auth_throttled();
         return rate_limited_response(retry_after);
     }
 
@@ -782,26 +838,36 @@ async fn require_tenant_bearer(
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| !value.is_empty());
     let Some(token) = token else {
+        record_auth_outcome("tenant", "rejected");
         return unauthorized_bearer_response();
     };
 
     let database = match state.database() {
         Ok(database) => database,
-        Err(error) => return error.into_response(),
+        Err(error) => {
+            record_auth_outcome("tenant", "unavailable");
+            return error.into_response();
+        }
     };
     let context = match database.tenant_credentials.authenticate_token(token).await {
         Ok(context) => context,
         Err(StorageError::InvalidTenantCredential) => {
+            record_auth_outcome("tenant", "rejected");
             return unauthorized_bearer_response();
         }
-        Err(error) => return ApiError::from_storage(error).into_response(),
+        Err(error) => {
+            record_auth_outcome("tenant", "error");
+            return ApiError::from_storage(error).into_response();
+        }
     };
 
+    record_tenant_identity(&context);
     let key = PrincipalRateLimitKey::Tenant {
         tenant_id: context.tenant_id().as_str().to_owned(),
         principal_id: context.principal_id().as_str().to_owned(),
     };
     if let Some(retry_after) = state.principal_rate_limiter.check(key) {
+        record_auth_throttled();
         return rate_limited_response(retry_after);
     }
 

@@ -63,7 +63,7 @@ This is an operational architecture requirement, not a feature provided by the c
 
 ## 5. Telemetry and monitoring
 
-The process emits structured JSON logs. Keep `RUST_LOG` at an operationally appropriate level; review new log fields before allowing them to include user-controlled strings. The request spans intentionally omit raw URIs, query strings, request/response bodies, Bearer credentials, task payloads, and database URLs.
+The process emits structured JSON logs. Keep `RUST_LOG` at an operationally appropriate level; review new log fields before allowing them to include user-controlled strings. The request spans intentionally omit raw URIs, query strings, request/response bodies, Bearer credentials, task payloads, and database URLs. They record the authentication scope and outcome; successful tenant requests also carry the credential-derived tenant and principal IDs as trace/log attributes. Successful operator requests identify the current shared credential as `shared_operator_credential`, not a human operator. These identity fields are not Prometheus labels and must be protected by the same access and retention controls as other security-relevant logs. The shared operator credential still prevents attribution to an individual person.
 
 `GET /api/v1/metrics` exposes aggregate HTTP request counters, in-flight requests, 5xx counts, and a bounded latency histogram. It is operator-authenticated and does not expose tenant/workflow/path labels. The OTLP exporter is opt-in and must use an access-controlled collector.
 
