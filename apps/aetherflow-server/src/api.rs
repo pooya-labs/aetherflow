@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -142,8 +142,11 @@ impl HttpMetrics {
             "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter."
         )
         .expect("write metrics");
-        writeln!(output, "# TYPE aetherflow_http_requests_rate_limited_total counter")
-            .expect("write metrics");
+        writeln!(
+            output,
+            "# TYPE aetherflow_http_requests_rate_limited_total counter"
+        )
+        .expect("write metrics");
         writeln!(
             output,
             "aetherflow_http_requests_rate_limited_total {}",
@@ -201,7 +204,6 @@ impl HttpMetrics {
         output
     }
 }
-
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PrincipalRateLimitKey {
@@ -272,9 +274,9 @@ impl PrincipalRateLimiter {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if now.saturating_duration_since(state.last_cleanup) >= Self::CLEANUP_INTERVAL {
-            state
-                .buckets
-                .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < Self::IDLE_TTL);
+            state.buckets.retain(|_, bucket| {
+                now.saturating_duration_since(bucket.last_seen) < Self::IDLE_TTL
+            });
             state.last_cleanup = now;
         }
 
@@ -297,9 +299,10 @@ impl PrincipalRateLimiter {
             updated_at: now,
             last_seen: now,
         });
-        let elapsed = now.saturating_duration_since(bucket.updated_at).as_secs_f64();
-        bucket.tokens =
-            (bucket.tokens + elapsed * self.refill_per_second).min(self.burst_capacity);
+        let elapsed = now
+            .saturating_duration_since(bucket.updated_at)
+            .as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.refill_per_second).min(self.burst_capacity);
         bucket.updated_at = now;
         bucket.last_seen = now;
 
@@ -1782,8 +1785,8 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, HttpMetrics, PrincipalRateLimitKey, PrincipalRateLimiter,
-        authorization_matches, hash_api_token, router,
+        AppState, HttpMetrics, PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches,
+        hash_api_token, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -1815,7 +1818,6 @@ mod tests {
         assert!(!output.contains("workflow_run_id"));
         assert!(!output.contains("authorization"));
     }
-
 
     #[test]
     fn principal_rate_limiter_enforces_burst_refill_and_identity_isolation() {

@@ -213,8 +213,6 @@ fn init_tracing() -> Result<SdkTracerProvider, Box<dyn Error>> {
     Ok(tracer_provider)
 }
 
-
-
 fn positive_u32_environment(name: &str, default: u32) -> Result<u32, std::io::Error> {
     let value = match std::env::var(name) {
         Ok(value) => value.parse::<u32>().map_err(|_| {
@@ -504,15 +502,20 @@ mod tests {
 
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
-        positive_u32_environment,
-        postgres_pool_with_ssl_mode, should_export_otlp, validate_http_transport,
-        verify_runtime_database_role,
+        positive_u32_environment, postgres_pool_with_ssl_mode, should_export_otlp,
+        validate_http_transport, verify_runtime_database_role,
     };
 
     #[test]
     fn rate_limit_environment_values_are_positive_integers() {
-        assert_eq!(positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_MISSING", 30).unwrap(), 30);
-        assert_eq!(positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_ZERO", 0).is_err(), true);
+        assert_eq!(
+            positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_MISSING", 30).unwrap(),
+            30
+        );
+        assert_eq!(
+            positive_u32_environment("AETHERFLOW_TEST_RATE_LIMIT_ZERO", 0).is_err(),
+            true
+        );
     }
 
     #[test]
