@@ -648,7 +648,6 @@ impl PrincipalRateLimiter {
     }
 }
 
-
 /// Process-local failed-authentication limiter keyed by the actual TCP peer.
 /// Only failed authentication consumes a token; successful authentication
 /// clears that peer's history. The bounded map never trusts client headers.

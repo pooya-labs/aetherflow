@@ -80,14 +80,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rate_limit_per_second =
         positive_u32_environment("AETHERFLOW_API_RATE_LIMIT_PER_SECOND", 2)?;
     let state = state.with_api_rate_limit(rate_limit_burst, rate_limit_per_second)?;
-    let auth_failure_burst =
-        positive_u32_environment("AETHERFLOW_AUTH_FAILURE_BURST", 20)?;
+    let auth_failure_burst = positive_u32_environment("AETHERFLOW_AUTH_FAILURE_BURST", 20)?;
     let auth_failure_per_second =
         positive_u32_environment("AETHERFLOW_AUTH_FAILURE_PER_SECOND", 2)?;
-    let state = state.with_auth_failure_rate_limit(
-        auth_failure_burst,
-        auth_failure_per_second,
-    )?;
+    let state = state.with_auth_failure_rate_limit(auth_failure_burst, auth_failure_per_second)?;
 
     let cors_origins = std::env::var("AETHERFLOW_CORS_ALLOWED_ORIGINS").unwrap_or_default();
     let state = state.with_cors_allowed_origins(&cors_origins)?;
