@@ -777,13 +777,10 @@ mod tests {
         .expect("construct Rustls HTTPS server");
         let app = Router::new().route(
             "/",
-            get(|ConnectInfo(remote): ConnectInfo<SocketAddr>| async move {
-                remote.to_string()
-            }),
+            get(|ConnectInfo(remote): ConnectInfo<SocketAddr>| async move { remote.to_string() }),
         );
-        let server_task = tokio::spawn(
-            server.serve(app.into_make_service_with_connect_info::<SocketAddr>()),
-        );
+        let server_task =
+            tokio::spawn(server.serve(app.into_make_service_with_connect_info::<SocketAddr>()));
 
         let tcp = TcpStream::connect(address)
             .await
