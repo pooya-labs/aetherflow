@@ -323,7 +323,7 @@ impl HttpMetrics {
             self.requests_abandoned_total.load(Ordering::Relaxed)
         )
         .expect("write metrics");
-        writeln!(output, "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by the authenticated-principal rate limiter.").expect("write metrics");
+        writeln!(output, "# HELP aetherflow_http_requests_rate_limited_total HTTP requests rejected by an API rate limiter.").expect("write metrics");
         writeln!(
             output,
             "# TYPE aetherflow_http_requests_rate_limited_total counter"
@@ -2377,7 +2377,7 @@ mod tests {
         ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN, WWW_AUTHENTICATE,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
-    use std::net::IpAddr;
+    use std::net::{IpAddr, SocketAddr};
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
@@ -2430,6 +2430,40 @@ mod tests {
         request.extensions_mut().insert(ConnectInfo(peer));
 
         assert_eq!(request_source_ip(&request), Some(peer.ip()));
+    }
+
+    #[tokio::test]
+    async fn repeated_missing_tenant_credentials_are_throttled_by_socket_peer() {
+        use axum::extract::ConnectInfo;
+
+        let state = AppState::without_database()
+            .with_auth_failure_rate_limit(1, 1)
+            .expect("configure source failure threshold");
+        let peer: SocketAddr = "192.0.2.20:54000".parse().expect("valid test peer");
+        let make_request = |forwarded_for: &'static str| {
+            let mut request = Request::builder()
+                .uri("/api/v1/tenant/workflow-runs")
+                .header("x-forwarded-for", forwarded_for)
+                .body(Body::empty())
+                .expect("valid tenant request");
+            request.extensions_mut().insert(ConnectInfo(peer));
+            request
+        };
+
+        let first = router(state.clone())
+            .oneshot(make_request("198.51.100.10"))
+            .await
+            .expect("first failed-auth response");
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+
+        // Changing the caller-controlled forwarding header must not create a
+        // new bucket: both requests came from the same TCP peer.
+        let second = router(state)
+            .oneshot(make_request("198.51.100.11"))
+            .await
+            .expect("throttled response");
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(second.headers().get("retry-after").unwrap(), "1");
     }
 
     #[test]
