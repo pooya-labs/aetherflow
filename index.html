@@ -234,13 +234,12 @@
         <a href="#architecture">Architecture</a>
         <a href="#reliability">Reliability</a>
         <a href="#roadmap">Roadmap</a> &nbsp; · &nbsp; <a href="dashboard/">Dashboard</a>
-        <a href="dashboard/">Dashboard</a>
       </nav>
       <div class="nav-actions">
         <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
           <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
         </button>
-        <a class="button" href="https://github.com/pooya16pg-spec/aetherflow" target="_blank" rel="noreferrer">GitHub <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></a>
+        <a class="button" href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">GitHub <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></a>
         <button class="menu-button" id="menu-toggle" type="button" aria-label="Toggle navigation">☰</button>
       </div>
     </div>
@@ -258,7 +257,7 @@
           <p class="hero-copy">AetherFlow is building a durable workflow engine around recoverable execution, explicit state transitions, and event delivery you can reason about — even when processes disappear.</p>
           <div class="hero-actions">
             <a class="button primary" href="#architecture">Explore the system <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
-            <a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Open roadmap</a>
+            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Open roadmap</a>
             <a class="button" href="dashboard/">Live dashboard</a>
           </div>
           <div class="microcopy">
@@ -270,7 +269,7 @@
 
         <div class="console" aria-label="AetherFlow execution architecture preview">
           <div class="console-head">
-            <span class="console-label">Control plane / M07</span>
+            <span class="console-label">Production engineering / M08</span>
             <span class="window-dots"><i></i><i></i><i></i></span>
           </div>
           <div class="workflow-line">
@@ -303,7 +302,7 @@
     <section class="section" aria-label="Platform capabilities">
       <div class="shell">
         <div class="metrics">
-          <div class="metric"><div class="metric-label">Milestone</div><div class="metric-value">M07</div><div class="metric-note">Control plane · in progress</div></div>
+          <div class="metric"><div class="metric-label">Milestone</div><div class="metric-value">M08</div><div class="metric-note">Production engineering · in progress</div></div>
           <div class="metric"><div class="metric-label">Control API</div><div class="metric-value">v1</div><div class="metric-note">PostgreSQL-backed · integration tested</div></div>
           <div class="metric"><div class="metric-label">Payload limit</div><div class="metric-value">1 MiB</div><div class="metric-note">Bounded task input / output</div></div>
           <div class="metric"><div class="metric-label">Delivery model</div><div class="metric-value">At-least-once</div><div class="metric-note">Idempotency is explicit</div></div>
@@ -363,15 +362,15 @@
       <div class="shell">
         <div class="section-head">
           <div><div class="kicker">Project status</div><h2>Built in verifiable milestones.</h2></div>
-          <p class="section-intro">This is an active engineering project. M00–M06 are complete and verified. M07 now includes tenant-authenticated HTTP routes, tenant-scoped workers and event processing, PostgreSQL v6/v7 forced-RLS and worker grant-lock policies, a separate restricted runtime role, and HTTPS enforcement for non-loopback listeners. HTTPS listener tests and live PostgreSQL TLS trust/hostname integration are hosted-verified (PostgreSQL/NATS run 41609705469); CLI/SDK, dashboard, and operational hardening remain.</p>
+          <p class="section-intro">This is an active engineering project. M00–M07 are complete and verified. M08 has added structured request telemetry, bounded Prometheus metrics, W3C tracing, opt-in OTLP, a local PostgreSQL 18/three-node NATS stack, backup/restore and schema-upgrade runbooks, API and worker outage recovery drills, JetStream full-cluster recovery, repeatable scheduler and end-to-end load benchmarks, and authenticated-principal rate limiting. Remaining work focuses on trusted ingress protection, matched-runner regression verification, broader failure-injection, and production operational controls.</p>
         </div>
         <div class="status-grid">
           <div class="status-card">
-            <div class="kicker">M06 · complete</div>
+            <div class="kicker">M07 · complete</div>
             <div class="progress-number">100<span>%</span></div>
             <div class="progress-track"><div class="progress-fill"></div></div>
-            <div class="progress-caption">M00–M06 are complete, including the WASM sandbox and its scheduler-backed task-handler integration. M07 tenant routes, grant-gated event paths, forced RLS, role separation, and HTTPS listener enforcement passed the exact-source hosted CI matrix; live PostgreSQL TLS verification and developer tooling remain.</div>
-            <div style="margin-top:23px"><a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Read the full roadmap ↗</a></div>
+            <div class="progress-caption">M00–M07 are complete, including the control-plane v1 API, CLI, Rust SDK, tenant-scoped authorization and forced RLS, read-only dashboard, and verified HTTPS/database TLS boundaries. M08 observability, recovery drills, Compose infrastructure, operations runbooks, benchmark suites, and authenticated-principal rate limiting are implemented; production hardening and matched-runner performance evidence remain.</div>
+            <div style="margin-top:23px"><a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Read the full roadmap ↗</a></div>
           </div>
           <div class="status-card">
             <div class="milestones">
@@ -382,7 +381,8 @@
               <div class="milestone"><span class="milestone-code">M04</span><span><strong>Durable persistence</strong><small>PostgreSQL, outbox, inbox, JetStream, process recovery</small></span><span class="state">Complete</span></div>
               <div class="milestone"><span class="milestone-code">M05</span><span><strong>Distributed coordination</strong><small>Node membership, worker registration, partition fencing</small></span><span class="state">Complete</span></div>
               <div class="milestone"><span class="milestone-code">M06</span><span><strong>WASM extension runtime</strong><small>WIT ABI, Wasmtime sandbox, scheduler-backed plugin tasks</small></span><span class="state">Complete</span></div>
-              <div class="milestone current"><span class="milestone-code">M07</span><span><strong>Control plane</strong><small>Axum v1 API, durable PostgreSQL routes, versioned cancellation</small></span><span class="state current">In progress</span></div>
+              <div class="milestone"><span class="milestone-code">M07</span><span><strong>Control plane</strong><small>Versioned API, CLI/SDK, tenant isolation, read-only dashboard</small></span><span class="state">Complete</span></div>
+              <div class="milestone current"><span class="milestone-code">M08</span><span><strong>Production engineering</strong><small>Telemetry, failure recovery, benchmarks, operations hardening</small></span><span class="state current">In progress</span></div>
             </div>
           </div>
         </div>
@@ -394,9 +394,9 @@
         <div class="cta">
           <div><div class="kicker">Explore the implementation</div><h2>Follow the code, not the hype.</h2><p>Browse the source, inspect the persistence contract, or pick up from the next unchecked milestone.</p></div>
           <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <a class="button primary" href="https://github.com/pooya16pg-spec/aetherflow" target="_blank" rel="noreferrer">Source repository ↗</a>
-            <a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/docs/api/openapi.yaml" target="_blank" rel="noreferrer">OpenAPI v1 ↗</a>
-            <a class="button" href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Full roadmap ↗</a>
+            <a class="button primary" href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">Source repository ↗</a>
+            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/api/openapi.yaml" target="_blank" rel="noreferrer">OpenAPI v1 ↗</a>
+            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Full roadmap ↗</a>
           </div>
         </div>
       </div>
@@ -407,10 +407,10 @@
     <div class="shell footer-row">
       <span>© 2026 AetherFlow · Experimental software, built with Rust.</span>
       <div class="footer-links">
-        <a href="https://github.com/pooya16pg-spec/aetherflow" target="_blank" rel="noreferrer">GitHub</a>
-        <a href="https://github.com/pooya16pg-spec/aetherflow/blob/main/README.md" target="_blank" rel="noreferrer">README</a>
-        <a href="https://github.com/pooya16pg-spec/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Roadmap</a>
-        <a href="https://github.com/pooya16pg-spec/aetherflow/blob/main/docs/architecture/overview.md" target="_blank" rel="noreferrer">Architecture</a>
+        <a href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="https://github.com/pooya-labs/aetherflow/blob/main/README.md" target="_blank" rel="noreferrer">README</a>
+        <a href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Roadmap</a>
+        <a href="https://github.com/pooya-labs/aetherflow/blob/main/docs/architecture/overview.md" target="_blank" rel="noreferrer">Architecture</a>
       </div>
     </div>
   </footer>
