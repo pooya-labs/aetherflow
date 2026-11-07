@@ -6,13 +6,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::header::{
     ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
     ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS,
@@ -71,6 +72,7 @@ pub struct AppState {
     api_token_hash: Option<[u8; 32]>,
     cors_allowed_origins: Arc<HashSet<String>>,
     principal_rate_limiter: Arc<PrincipalRateLimiter>,
+    auth_failure_rate_limiter: Arc<AuthFailureRateLimiter>,
     metrics: Arc<HttpMetrics>,
 }
 
@@ -646,6 +648,155 @@ impl PrincipalRateLimiter {
     }
 }
 
+
+/// Process-local failed-authentication limiter keyed by the actual TCP peer.
+/// Only failed authentication consumes a token; successful authentication
+/// clears that peer's history. The bounded map never trusts client headers.
+struct AuthFailureRateLimiter {
+    burst_capacity: f64,
+    refill_per_second: f64,
+    state: Mutex<AuthFailureRateLimiterState>,
+}
+
+struct AuthFailureRateLimiterState {
+    buckets: HashMap<IpAddr, TokenBucket>,
+    last_cleanup: Instant,
+}
+
+impl Default for AuthFailureRateLimiter {
+    fn default() -> Self {
+        Self::new(20, 2).expect("the built-in authentication-failure limits are valid")
+    }
+}
+
+impl AuthFailureRateLimiter {
+    const MAX_BUCKETS: usize = 4_096;
+    const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
+    const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
+    fn new(burst_capacity: u32, refill_per_second: u32) -> Result<Self, std::io::Error> {
+        if burst_capacity == 0 || refill_per_second == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "authentication-failure rate-limit burst and refill rate must both be positive integers",
+            ));
+        }
+        Ok(Self {
+            burst_capacity: f64::from(burst_capacity),
+            refill_per_second: f64::from(refill_per_second),
+            state: Mutex::new(AuthFailureRateLimiterState {
+                buckets: HashMap::new(),
+                last_cleanup: Instant::now(),
+            }),
+        })
+    }
+
+    fn blocked_for(&self, source: IpAddr) -> Option<Duration> {
+        self.blocked_for_at(source, Instant::now())
+    }
+
+    fn blocked_for_at(&self, source: IpAddr, now: Instant) -> Option<Duration> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup(&mut state, now);
+        let bucket = state.buckets.get_mut(&source)?;
+        Self::refill(bucket, now, self.refill_per_second);
+        if bucket.tokens >= 1.0 {
+            None
+        } else {
+            Some(Duration::from_secs_f64(
+                ((1.0 - bucket.tokens) / self.refill_per_second).max(0.001),
+            ))
+        }
+    }
+
+    fn record_failure(&self, source: IpAddr) {
+        self.record_failure_at(source, Instant::now());
+    }
+
+    fn record_failure_at(&self, source: IpAddr, now: Instant) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.cleanup(&mut state, now);
+        if !state.buckets.contains_key(&source) && state.buckets.len() >= Self::MAX_BUCKETS {
+            // Do not let arbitrary source addresses grow process memory without
+            // bound. Distributed source enforcement remains the ingress layer's job.
+            return;
+        }
+        let bucket = state.buckets.entry(source).or_insert_with(|| TokenBucket {
+            tokens: self.burst_capacity,
+            updated_at: now,
+            last_seen: now,
+        });
+        Self::refill(bucket, now, self.refill_per_second);
+        bucket.tokens = (bucket.tokens - 1.0).max(0.0);
+        bucket.last_seen = now;
+    }
+
+    fn record_success(&self, source: IpAddr) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .buckets
+            .remove(&source);
+    }
+
+    fn cleanup(&self, state: &mut AuthFailureRateLimiterState, now: Instant) {
+        if now.saturating_duration_since(state.last_cleanup) >= Self::CLEANUP_INTERVAL {
+            state.buckets.retain(|_, bucket| {
+                now.saturating_duration_since(bucket.last_seen) < Self::IDLE_TTL
+            });
+            state.last_cleanup = now;
+        }
+    }
+
+    fn refill(bucket: &mut TokenBucket, now: Instant, refill_per_second: f64) {
+        let elapsed = now
+            .saturating_duration_since(bucket.updated_at)
+            .as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(20_000.0);
+        bucket.updated_at = now;
+        bucket.last_seen = now;
+    }
+
+    #[cfg(test)]
+    fn bucket_count(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .buckets
+            .len()
+    }
+}
+
+fn request_source_ip(request: &Request) -> Option<IpAddr> {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(address)| address.ip())
+}
+
+fn auth_failure_rate_limited_response(retry_after: Duration) -> Response {
+    let mut response = ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        "authentication attempts from this connection have been temporarily throttled",
+    )
+    .into_response();
+    let retry_after_seconds = retry_after
+        .as_secs()
+        .saturating_add(u64::from(retry_after.subsec_nanos() > 0))
+        .max(1);
+    if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
+}
+
 fn rate_limited_response(retry_after: Duration) -> Response {
     let mut response = ApiError::new(
         StatusCode::TOO_MANY_REQUESTS,
@@ -721,6 +872,7 @@ impl AppState {
             api_token_hash: Some(api_token_hash),
             cors_allowed_origins: Arc::default(),
             principal_rate_limiter: Arc::default(),
+            auth_failure_rate_limiter: Arc::default(),
             metrics: Arc::default(),
         })
     }
@@ -736,6 +888,23 @@ impl AppState {
         refill_per_second: u32,
     ) -> Result<Self, std::io::Error> {
         self.principal_rate_limiter = Arc::new(PrincipalRateLimiter::new(
+            burst_capacity,
+            refill_per_second,
+        )?);
+        Ok(self)
+    }
+
+    /// Configures a process-local limit for repeated failed authentication attempts.
+    ///
+    /// Buckets are keyed by the TCP peer address supplied by the listener; proxy
+    /// forwarding headers are deliberately ignored. This is a secondary guard,
+    /// not a replacement for a shared ingress limit in multi-replica deployments.
+    pub fn with_auth_failure_rate_limit(
+        mut self,
+        burst_capacity: u32,
+        refill_per_second: u32,
+    ) -> Result<Self, std::io::Error> {
+        self.auth_failure_rate_limiter = Arc::new(AuthFailureRateLimiter::new(
             burst_capacity,
             refill_per_second,
         )?);
@@ -1116,7 +1285,18 @@ async fn require_bearer_token(
         .into_response();
     };
 
+    let source = request_source_ip(&request);
+    if let Some(source) = source
+        && let Some(retry_after) = state.auth_failure_rate_limiter.blocked_for(source)
+    {
+        record_auth_throttled();
+        return auth_failure_rate_limited_response(retry_after);
+    }
+
     if !authorization_matches(expected, request.headers()) {
+        if let Some(source) = source {
+            state.auth_failure_rate_limiter.record_failure(source);
+        }
         record_auth_outcome("operator", "rejected");
         let mut response = ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -1130,6 +1310,9 @@ async fn require_bearer_token(
         return response;
     }
 
+    if let Some(source) = source {
+        state.auth_failure_rate_limiter.record_success(source);
+    }
     record_operator_identity();
     if let Some(retry_after) = state
         .principal_rate_limiter
@@ -1147,6 +1330,14 @@ async fn require_tenant_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    let source = request_source_ip(&request);
+    if let Some(source) = source
+        && let Some(retry_after) = state.auth_failure_rate_limiter.blocked_for(source)
+    {
+        record_auth_throttled();
+        return auth_failure_rate_limited_response(retry_after);
+    }
+
     let token = request
         .headers()
         .get(AUTHORIZATION)
@@ -1154,6 +1345,9 @@ async fn require_tenant_bearer(
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| !value.is_empty());
     let Some(token) = token else {
+        if let Some(source) = source {
+            state.auth_failure_rate_limiter.record_failure(source);
+        }
         record_auth_outcome("tenant", "rejected");
         return unauthorized_bearer_response();
     };
@@ -1168,6 +1362,9 @@ async fn require_tenant_bearer(
     let context = match database.tenant_credentials.authenticate_token(token).await {
         Ok(context) => context,
         Err(StorageError::InvalidTenantCredential) => {
+            if let Some(source) = source {
+                state.auth_failure_rate_limiter.record_failure(source);
+            }
             record_auth_outcome("tenant", "rejected");
             return unauthorized_bearer_response();
         }
@@ -1177,6 +1374,9 @@ async fn require_tenant_bearer(
         }
     };
 
+    if let Some(source) = source {
+        state.auth_failure_rate_limiter.record_success(source);
+    }
     record_tenant_identity(&context);
     let key = PrincipalRateLimitKey::Tenant {
         tenant_id: context.tenant_id().as_str().to_owned(),
@@ -2168,8 +2368,9 @@ fn format_timestamp(value: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, HttpMetrics, HttpOperation, HttpResponseClass, InFlightRequestGuard,
-        PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches, hash_api_token, router,
+        AppState, AuthFailureRateLimiter, HttpMetrics, HttpOperation, HttpResponseClass,
+        InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches,
+        hash_api_token, request_source_ip, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -2183,6 +2384,66 @@ mod tests {
     use tower::ServiceExt;
 
     const TEST_API_TOKEN: &str = "test-only-aetherflow-api-token-32-bytes";
+
+    #[test]
+    fn source_auth_failure_limit_blocks_after_burst_and_refills() {
+        let limiter = AuthFailureRateLimiter::new(2, 1).expect("valid limits");
+        let source = "192.0.2.10".parse::<IpAddr>().expect("valid test IP");
+        let start = Instant::now();
+
+        assert_eq!(limiter.blocked_for_at(source, start), None);
+        limiter.record_failure_at(source, start);
+        limiter.record_failure_at(source, start);
+        assert_eq!(
+            limiter.blocked_for_at(source, start),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            limiter.blocked_for_at(source, start + Duration::from_secs(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn successful_authentication_clears_source_failure_history() {
+        let limiter = AuthFailureRateLimiter::new(1, 1).expect("valid limits");
+        let source = "192.0.2.11".parse::<IpAddr>().expect("valid test IP");
+        let now = Instant::now();
+
+        limiter.record_failure_at(source, now);
+        assert!(limiter.blocked_for_at(source, now).is_some());
+        limiter.record_success(source);
+        assert_eq!(limiter.blocked_for_at(source, now), None);
+        assert_eq!(limiter.bucket_count(), 0);
+    }
+
+    #[test]
+    fn source_ip_comes_from_socket_peer_not_forwarded_headers() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let peer: SocketAddr = "192.0.2.12:4321".parse().expect("valid peer");
+        let mut request = Request::builder()
+            .header("x-forwarded-for", "203.0.113.99")
+            .body(Body::empty())
+            .expect("valid request");
+        request.extensions_mut().insert(ConnectInfo(peer));
+
+        assert_eq!(request_source_ip(&request), Some(peer.ip()));
+    }
+
+    #[test]
+    fn source_auth_failure_buckets_are_bounded() {
+        let limiter = AuthFailureRateLimiter::new(1, 1).expect("valid limits");
+        let start = Instant::now();
+        for value in 0..(AuthFailureRateLimiter::MAX_BUCKETS + 100) {
+            let source = IpAddr::V4(std::net::Ipv4Addr::from(
+                u32::try_from(value).expect("bounded test address"),
+            ));
+            limiter.record_failure_at(source, start);
+        }
+        assert_eq!(limiter.bucket_count(), AuthFailureRateLimiter::MAX_BUCKETS);
+    }
 
     #[test]
     fn prometheus_metrics_use_bounded_latency_buckets_and_aggregate_only() {
