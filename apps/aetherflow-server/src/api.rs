@@ -2463,7 +2463,10 @@ mod tests {
             .await
             .expect("throttled response");
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(second.headers().get("retry-after").unwrap(), "1");
+        assert_eq!(
+            second.headers().get("retry-after").and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
     }
 
     #[test]
