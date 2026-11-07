@@ -753,12 +753,7 @@ impl AuthFailureRateLimiter {
         }
     }
 
-    fn refill(
-        bucket: &mut TokenBucket,
-        now: Instant,
-        burst_capacity: f64,
-        refill_per_second: f64,
-    ) {
+    fn refill(bucket: &mut TokenBucket, now: Instant, burst_capacity: f64, refill_per_second: f64) {
         let elapsed = now
             .saturating_duration_since(bucket.updated_at)
             .as_secs_f64();
@@ -2382,9 +2377,9 @@ mod tests {
         ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, ORIGIN, WWW_AUTHENTICATE,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
+    use std::net::IpAddr;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
-    use std::net::IpAddr;
     use std::time::{Duration, Instant};
     use tower::ServiceExt;
 
