@@ -701,7 +701,7 @@ impl AuthFailureRateLimiter {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.cleanup(&mut state, now);
         let bucket = state.buckets.get_mut(&source)?;
-        Self::refill(bucket, now, self.refill_per_second);
+        Self::refill(bucket, now, self.burst_capacity, self.refill_per_second);
         if bucket.tokens >= 1.0 {
             None
         } else {
@@ -731,7 +731,7 @@ impl AuthFailureRateLimiter {
             updated_at: now,
             last_seen: now,
         });
-        Self::refill(bucket, now, self.refill_per_second);
+        Self::refill(bucket, now, self.burst_capacity, self.refill_per_second);
         bucket.tokens = (bucket.tokens - 1.0).max(0.0);
         bucket.last_seen = now;
     }
@@ -753,11 +753,16 @@ impl AuthFailureRateLimiter {
         }
     }
 
-    fn refill(bucket: &mut TokenBucket, now: Instant, refill_per_second: f64) {
+    fn refill(
+        bucket: &mut TokenBucket,
+        now: Instant,
+        burst_capacity: f64,
+        refill_per_second: f64,
+    ) {
         let elapsed = now
             .saturating_duration_since(bucket.updated_at)
             .as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(20_000.0);
+        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(burst_capacity);
         bucket.updated_at = now;
         bucket.last_seen = now;
     }
@@ -2379,7 +2384,8 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
+    use std::net::IpAddr;
+    use std::time::{Duration, Instant};
     use tower::ServiceExt;
 
     const TEST_API_TOKEN: &str = "test-only-aetherflow-api-token-32-bytes";
