@@ -505,7 +505,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use axum::{Router, routing::get};
+    use axum::{Router, extract::ConnectInfo, routing::get};
     use axum_server::tls_rustls::RustlsConfig;
     use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
     use rcgen::generate_simple_self_signed;
@@ -775,8 +775,15 @@ mod tests {
             server_config,
         )
         .expect("construct Rustls HTTPS server");
-        let app = Router::new().route("/", get(|| async { "tls-only" }));
-        let server_task = tokio::spawn(server.serve(app.into_make_service()));
+        let app = Router::new().route(
+            "/",
+            get(|ConnectInfo(remote): ConnectInfo<SocketAddr>| async move {
+                remote.to_string()
+            }),
+        );
+        let server_task = tokio::spawn(
+            server.serve(app.into_make_service_with_connect_info::<SocketAddr>()),
+        );
 
         let tcp = TcpStream::connect(address)
             .await
@@ -795,6 +802,20 @@ mod tests {
                 .peer_certificates()
                 .expect("peer certificate")[0],
             expected_certificate
+        );
+        tls_stream
+            .write_all(b"GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n")
+            .await
+            .expect("send authenticated TLS request");
+        let mut tls_response = Vec::new();
+        tls_stream
+            .read_to_end(&mut tls_response)
+            .await
+            .expect("read response from HTTPS test server");
+        let tls_response = String::from_utf8_lossy(&tls_response);
+        assert!(
+            tls_response.contains("127.0.0.1:"),
+            "the HTTPS make service must attach the actual socket peer address"
         );
         drop(tls_stream);
 
