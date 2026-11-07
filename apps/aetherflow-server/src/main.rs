@@ -804,7 +804,7 @@ mod tests {
             expected_certificate
         );
         tls_stream
-            .write_all(b"GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n")
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .await
             .expect("send authenticated TLS request");
         let mut tls_response = Vec::new();
