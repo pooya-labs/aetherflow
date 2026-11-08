@@ -176,6 +176,16 @@ The PostgreSQL storage crate and initial schema have passed PostgreSQL 18 CI. Du
 
 ---
 
+## Latest project update — 8 November 2026
+
+The free Cloudflare runtime is now deployed separately from the Rust/PostgreSQL ingress path: the public dashboard connects to Workers + D1 (WEUR) + Cloudflare Workflows without asking visitors for an API Origin or Bearer token. A live REST smoke test completed the built-in echo workflow and persisted its terminal state and events. The Apps Script profile is implemented but still requires owner-side Google authorization and deployment. Latest browser QA passed 11 desktop/mobile tests, and the PostgreSQL/JetStream restore workflow passed 28/28 steps. AetherFlow remains experimental and is not production-ready; the Rust ingress gateway, managed recovery objectives, NATS server-side identity/ACL policy, complete SLOs and independent security review remain open.
+
+## Project ownership
+
+<p align="center"><a href="https://pooya-labs.github.io/pooya-labs-platform/"><img src="https://raw.githubusercontent.com/pooya-labs/pooya-labs-platform/main/apps/platform/public/brand/pooya-monogram.webp" alt="Pooya Labs Platform monogram" width="64" /></a></p>
+
+**Owned and maintained by [Pooya Labs Platform](https://pooya-labs.github.io/pooya-labs-platform/).** Project direction and engineering: **Pooya Goodarzi**.
+
 ## راهنمای فارسی
 
 ### معرفی
@@ -205,9 +215,11 @@ The PostgreSQL storage crate and initial schema have passed PostgreSQL 18 CI. Du
 
 ### وضعیت فعلی توسعه
 
-بر اساس وضعیت ثبت‌شده در README، مراحل M00 تا M07 تکمیل شده‌اند و مرحلهٔ M08 شامل کارهای مهندسی تولید، عملیات و بازیابی همچنان در حال پیشرفت است. آزمون‌های PostgreSQL و NATS سناریوهای بازیابی، قطعی اعضای کلاستر و پردازش مجدد رویدادها را پوشش می‌دهند؛ بااین‌حال این شواهد به معنی آماده‌بودن سرویس برای استقرار تولیدی عمومی نیستند.
+مراحل M00 تا M07 تکمیل شده‌اند و M08، شامل مهندسی تولید، عملیات و بازیابی، همچنان در حال پیشرفت است. مسیر رایگان Cloudflare در پوشهٔ `cloudflare-free/` مستقر شده و شامل Workers، D1 در WEUR و اتصال Cloudflare Workflows است. داشبورد عمومی این runtime را به‌طور خودکار راه‌اندازی می‌کند و برای اجرای نمونهٔ محدود، نیازی به واردکردن API Origin یا Bearer token ندارد.
 
-دروازهٔ ورودی Cloudflare Worker هنوز مستقر یا به مسیر تولید متصل نشده است. برای استقرار واقعی، origin امن، تنظیمات شبکه و اسرار هماهنگ، مسیر دامنه یا Tunnel و آزمون جلوگیری از دورزدن gateway لازم است.
+این runtime رایگان را نباید با gateway ورودی Rust در `cloudflare-gateway/` یکی دانست؛ gateway مبتنی بر Rust هنوز به origin زندهٔ API متصل و در مسیر تولید مستقر نشده است. پروفایل Apps Script نیز در مخزن پیاده‌سازی شده، اما استقرار و مجوزدهی نهایی Google باید توسط مالک حساب انجام شود. آزمون زندهٔ گردش‌کار echo و ذخیرهٔ رویدادها در D1 انجام شده و آزمون مرورگر اخیر ۱۱ سناریو و آزمون بازیابی PostgreSQL/JetStream نیز ۲۸ مرحله را با موفقیت گذرانده‌اند.
+
+با این حال پروژه هنوز آزمایشی است. مدیریت بازیابی تولیدی، امنیت و ACL سمت سرور NATS، SLOهای کامل، استقرار gateway Rust و بازبینی امنیتی مستقل باقی مانده‌اند؛ بنابراین AetherFlow را آمادهٔ استفادهٔ عملیاتی عمومی معرفی نکنید.
 
 ### ابزارهای توسعه
 
@@ -220,3 +232,15 @@ The PostgreSQL storage crate and initial schema have passed PostgreSQL 18 CI. Du
 ### مجوز
 
 AetherFlow تحت مجوز Apache License 2.0 منتشر می‌شود. مجوز نرم‌افزار به‌تنهایی اجازهٔ استفاده از نام‌ها، نشان‌ها یا علائم تجاری AetherFlow و Pooya Labs را نمی‌دهد.
+
+### آخرین تغییرات — ۸ نوامبر ۲۰۲۶
+
+محیط رایگان Cloudflare به‌صورت مستقل از مسیر ورودی Rust/PostgreSQL مستقر شده است: داشبورد عمومی مستقیماً به Workers، پایگاه دادهٔ D1 در منطقهٔ WEUR و Cloudflare Workflows متصل می‌شود و دیگر از بازدیدکننده آدرس API یا توکن Bearer نمی‌خواهد. آزمون زندهٔ REST یک گردش‌کار نمونهٔ echo را اجرا کرد و وضعیت نهایی و رویدادهای آن را در D1 ذخیره کرد. پروفایل Apps Script نیز پیاده‌سازی شده، اما برای فعال‌شدن به مجوزدهی و استقرار نهایی توسط مالک حساب Google نیاز دارد. آخرین آزمون مرورگر ۱۱ سناریوی دسکتاپ و موبایل را گذراند و گردش‌کار بازیابی PostgreSQL/JetStream نیز ۲۸ مرحله از ۲۸ مرحله را با موفقیت طی کرد.
+
+با وجود این پیشرفت‌ها، AetherFlow همچنان آزمایشی است و برای محیط تولید آماده محسوب نمی‌شود. استقرار gateway ورودی Rust، اهداف بازیابی مدیریت‌شده، سیاست هویت و ACL سمت سرور NATS، SLOهای کامل و بازبینی امنیتی مستقل همچنان باز هستند.
+
+### مالکیت و نگه‌داری
+
+<p align="center"><a href="https://pooya-labs.github.io/pooya-labs-platform/"><img src="https://raw.githubusercontent.com/pooya-labs/pooya-labs-platform/main/apps/platform/public/brand/pooya-monogram.webp" alt="نشان مونوگرام پویا لبز" width="64" /></a></p>
+
+**مالک و نگه‌دارنده: [پلتفرم پویا لبز](https://pooya-labs.github.io/pooya-labs-platform/)** · طراحی و توسعه: **پویا گودرزی**.
