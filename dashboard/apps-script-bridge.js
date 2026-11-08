@@ -83,8 +83,7 @@
 
     if (message.type === "AETHERFLOW_BRIDGE_INIT") {
       var payload = message.payload;
-      if (!payload || typeof payload.sessionToken !== "string" ||
-          !payload.workspace || typeof payload.workspace.id !== "string") return;
+      if (!payload || !payload.workspace || typeof payload.workspace.id !== "string") return;
       parentOrigin = event.origin;
       sessionReady = true;
       if (bootstrapTimeout) root.clearTimeout(bootstrapTimeout);
