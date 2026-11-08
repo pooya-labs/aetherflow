@@ -229,8 +229,8 @@ async fn jetstream_publisher_confirms_storage_and_deduplicates_stable_event_ids(
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("apply PostgreSQL schema"),
-        MigrationOutcome::Applied { version: 9, .. }
-            | MigrationOutcome::AlreadyCurrent { version: 9, .. }
+        MigrationOutcome::Applied { version: 10, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 10, .. }
     ));
 
     // The dispatcher deliberately claims the global outbox. Earlier cases in
@@ -1817,8 +1817,8 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     let store = PgStore::from_pool(pool.clone());
     assert!(matches!(
         store.migrate().await.expect("apply PostgreSQL schema"),
-        MigrationOutcome::Applied { version: 9, .. }
-            | MigrationOutcome::AlreadyCurrent { version: 9, .. }
+        MigrationOutcome::Applied { version: 10, .. }
+            | MigrationOutcome::AlreadyCurrent { version: 10, .. }
     ));
 
     // This test uses the global outbox dispatcher, so start from an isolated
