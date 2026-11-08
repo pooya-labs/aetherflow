@@ -59,15 +59,21 @@ SET LOCAL statement_timeout = '5s';
 SET LOCAL lock_timeout = '1s';
 
 -- Terminal workflow outcomes and successful completion p95 for a recent window.
+-- Match the tenant metrics contract: use finished_at for the rolling window
+-- and started_at as the accepted-workflow timestamp for completion latency.
 SELECT
     status,
     count(*) AS workflows,
     percentile_cont(0.95) WITHIN GROUP (
-        ORDER BY extract(epoch FROM (finished_at - created_at))
-    ) FILTER (WHERE status = 'succeeded') AS success_completion_p95_seconds
+        ORDER BY extract(epoch FROM (finished_at - started_at))
+    ) FILTER (
+        WHERE status = 'succeeded'
+          AND started_at IS NOT NULL
+          AND finished_at >= started_at
+    ) AS success_completion_p95_seconds
 FROM workflow_runs
-WHERE created_at >= clock_timestamp() - INTERVAL '30 minutes'
-  AND finished_at IS NOT NULL
+WHERE finished_at >= clock_timestamp() - INTERVAL '30 minutes'
+  AND status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
 GROUP BY status
 ORDER BY status;
 
@@ -148,7 +154,7 @@ sum by (operation) (
 aetherflow_http_requests_in_flight
 ~~~
 
-The abandoned-request counter does not identify whether a future was dropped by a client disconnect, upstream deadline, panic or process shutdown. It is a diagnostic signal, not a standalone availability SLI. The existing metrics do not yet provide durable workflow completion outcomes, queue-age gauges or platform-versus-handler failure attribution; use the SQL/exporter path until those signals are deliberately implemented and reviewed.
+The abandoned-request counter does not identify whether a future was dropped by a client disconnect, upstream deadline, panic or process shutdown. It is a diagnostic signal, not a standalone availability SLI. The tenant snapshot now provides per-tenant terminal workflow outcomes, successful completion-latency percentiles, queue-age gauges and expired-lease counts. It still does not provide an eligible-accepted denominator tied to an agreed deadline, platform-versus-handler failure attribution, cumulative publish/consume errors, or cross-replica aggregation. Use tenant-scoped credentials and an access-controlled collector; do not turn the per-tenant snapshot into an unrestricted platform-wide view.
 
 See the [production deployment acceptance checklist](production-acceptance.md) for gateway, PostgreSQL, NATS, recovery, monitoring and owner sign-off gates.
 
