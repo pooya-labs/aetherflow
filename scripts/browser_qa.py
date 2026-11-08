@@ -10,7 +10,7 @@ import threading
 import unittest
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -297,6 +297,133 @@ class AetherFlowBrowserQA(unittest.TestCase):
         self.assertIn("Not connected", page.locator("#connectionStatus").inner_text())
         self.assertEqual(page.locator("#statTotal").inner_text(), "—")
         self.assertEqual(page.locator("#apiToken").input_value(), "")
+        self.assert_no_page_errors()
+
+    def test_dashboard_paginates_tenant_workflows_and_event_history(self) -> None:
+        page = self.page
+        requests: list[dict[str, str]] = []
+
+        workflow_pages = [
+            {
+                "items": [
+                    {
+                        "workflow_run_id": "run-tenant-001",
+                        "workflow_id": "tenant-sync",
+                        "status": "succeeded",
+                        "version": 1,
+                        "task_count": 0,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                    }
+                ],
+                "next_cursor": "workflow-page-2",
+            },
+            {
+                "items": [
+                    {
+                        "workflow_run_id": "run-tenant-002",
+                        "workflow_id": "tenant-export",
+                        "status": "running",
+                        "version": 2,
+                        "task_count": 2,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        ]
+        snapshot = {
+            "workflow_run_id": "run-tenant-001",
+            "workflow_id": "tenant-sync",
+            "status": "succeeded",
+            "version": 1,
+            "created_at": FIXED_TIME,
+            "updated_at": FIXED_TIME,
+            "task_runs": [],
+        }
+        event_pages = [
+            {
+                "events": [
+                    {
+                        "event_id": 201,
+                        "event_type": "task.succeeded",
+                        "aggregate_type": "task_run",
+                        "aggregate_id": "task-tenant-001",
+                        "created_at": FIXED_TIME,
+                        "published_at": FIXED_TIME,
+                        "status": "published",
+                    }
+                ],
+                "next_cursor": "older-events-2",
+            },
+            {
+                "events": [
+                    {
+                        "event_id": 200,
+                        "event_type": "task.started",
+                        "aggregate_type": "task_run",
+                        "aggregate_id": "task-tenant-001",
+                        "created_at": FIXED_TIME,
+                        "published_at": None,
+                        "status": "pending",
+                    }
+                ],
+                "next_cursor": None,
+            },
+        ]
+
+        def mock_api(route) -> None:
+            parsed = urlparse(route.request.url)
+            requests.append({"path": parsed.path, "query": parsed.query})
+            query = parse_qs(parsed.query)
+            if parsed.path == "/api/v1/tenant/workflow-runs":
+                page_index = 1 if query.get("cursor") == ["workflow-page-2"] else 0
+                json_response(route, workflow_pages[page_index])
+            elif parsed.path == "/api/v1/tenant/workflow-runs/run-tenant-001":
+                json_response(route, snapshot)
+            elif parsed.path == "/api/v1/tenant/workflow-runs/run-tenant-001/events":
+                page_index = 1 if query.get("cursor") == ["older-events-2"] else 0
+                json_response(route, event_pages[page_index])
+            else:
+                json_response(route, {"error": {"message": "Unexpected tenant test route"}}, status=404)
+
+        page.route(API_BASE + "/**", mock_api)
+        page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
+        page.locator("#apiBase").fill(API_BASE)
+        page.locator("#scope").select_option("tenant")
+        page.locator("#apiToken").fill(TOKEN)
+        page.locator("#connectButton").click()
+
+        page.get_by_text("Connected · live data").wait_for()
+        page.locator(".run-item").filter(has_text="run-tenant-001").wait_for()
+        page.get_by_text("task.succeeded · task_run").wait_for()
+        self.assertTrue(page.locator("#workersButton").is_disabled())
+        self.assertEqual(page.locator(".event-row").count(), 1)
+
+        page.get_by_role("button", name="Load older events").click()
+        page.get_by_text("task.started · task_run").wait_for()
+        self.assertEqual(page.locator(".event-row").count(), 2)
+
+        page.locator("#loadMore").click()
+        page.locator(".run-item").filter(has_text="run-tenant-002").wait_for()
+        self.assertEqual(page.locator(".run-item").count(), 2)
+        self.assertEqual(page.locator("#statTotal").inner_text(), "2")
+
+        paths = [request["path"] for request in requests]
+        self.assertTrue(paths)
+        self.assertTrue(
+            all(path.startswith("/api/v1/tenant/") for path in paths),
+            "Tenant scope must never call operator endpoints: " + ", ".join(paths),
+        )
+        self.assertIn(
+            "cursor=older-events-2",
+            next(request["query"] for request in requests if request["path"].endswith("/events") and "cursor=" in request["query"]),
+        )
+        self.assertIn(
+            "cursor=workflow-page-2",
+            next(request["query"] for request in requests if request["path"] == "/api/v1/tenant/workflow-runs" and "cursor=" in request["query"]),
+        )
         self.assert_no_page_errors()
 
     def test_dashboard_mobile_layout_and_theme_persistence(self) -> None:
