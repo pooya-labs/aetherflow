@@ -64,7 +64,7 @@ for route in (
     require(route in cloudflare, "missing Cloudflare API route: " + route)
 for operation in ("echo", "collect", "uppercase", "sha256", "add", "fail_once"):
     require('kind === "' + operation + '"' in cloudflare, "missing built-in task operation: " + operation)
-require("maxWorkflowsPerWorkspace: 50" in cloudflare && "workspace_history_limit" in cloudflare,
+require("maxWorkflowsPerWorkspace: 50" in cloudflare and "workspace_history_limit" in cloudflare,
         "Cloudflare D1 workspace history must have a finite retention ceiling")
 require("AETHERFLOW_EXECUTIONS.create" in cloudflare, "workflow submissions must use the durable Workflow binding")
 require("AETHERFLOW_EXECUTIONS.get" in cloudflare, "workflow cancellation must address the durable Workflow instance")
