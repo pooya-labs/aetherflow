@@ -5,6 +5,7 @@
     base: "",
     token: "",
     scope: "operator",
+    runtime: "manual",
     status: "",
     cursor: null,
     page: 0,
@@ -449,12 +450,18 @@
       state.page += 1;
       renderRuns();
       $("loadMore").disabled = !state.cursor;
-      const appsScriptDemo = Boolean(window.AetherFlowAppsScriptBridge && window.AetherFlowAppsScriptBridge.isActive());
+      const appsScriptDemo = state.runtime === "apps-script";
+      const cloudflareFree = state.runtime === "cloudflare-free";
       $("welcomeText").textContent = appsScriptDemo
         ? "Connected to the Apps Script demo · synthetic workflow records in an owner-private Sheet."
-        : "Connected to " + state.base + " · " + (state.scope === "tenant" ? "Tenant view" : "Operator view");
-      $("scopePill").textContent = appsScriptDemo ? "Demo" : (state.scope === "tenant" ? "Tenant" : "Operator");
-      setConnection(appsScriptDemo ? "Connected · synthetic demo data" : "Connected · live data", "good");
+        : cloudflareFree
+          ? "Connected to Cloudflare Workers + D1 · accepted workflows execute through durable Cloudflare Workflows."
+          : "Connected to " + state.base + " · " + (state.scope === "tenant" ? "Tenant view" : "Operator view");
+      $("scopePill").textContent = appsScriptDemo ? "Demo" : cloudflareFree ? "Cloudflare" : (state.scope === "tenant" ? "Tenant" : "Operator");
+      setConnection(
+        appsScriptDemo ? "Connected · synthetic demo data" : cloudflareFree ? "Connected · Cloudflare Workflows + D1" : "Connected · live data",
+        "good"
+      );
       if (!append) {
         const metricsRequest = loadOperationalSnapshot(connectionRevision);
         const detailRequest = state.runs.length
@@ -620,6 +627,7 @@
       state.base = nextBase;
       state.token = nextToken;
       state.scope = nextScope;
+      state.runtime = "manual";
       state.status = $("statusFilter").value;
       $("apiToken").value = "";
       await loadRuns(false);
@@ -639,6 +647,7 @@
     state.requestController = null;
     state.token = "";
     state.base = "";
+    state.runtime = "manual";
     state.cursor = null;
     state.page = 0;
     state.runs = [];
@@ -675,23 +684,45 @@
     updateThemeButton();
   });
 
-  async function connectAppsScriptDemo() {
-    const bridge = window.AetherFlowAppsScriptBridge;
-    if (!bridge || !bridge.isActive()) return;
-
+  function setServerlessPresentation(runtime) {
     form.classList.add("hidden");
     $("disconnectButton").classList.add("hidden");
-    $("connectionTitle").textContent = "Demo workspace";
+    $("connectionTitle").textContent = "Serverless workspace";
     const connectionCopy = document.querySelector(".connection-copy");
-    if (connectionCopy) connectionCopy.textContent = "Connected through the owner-managed Apps Script runtime. Each browser receives a separate synthetic workspace.";
     const securityNote = document.querySelector(".security-note");
-    if (securityNote) securityNote.textContent = "Private demo session. The short-lived session capability stays inside the bridge and is never stored in the dashboard URL, cookies, or local storage.";
     const notice = document.querySelector(".notice span:last-child");
-    if (notice) notice.textContent = "Apps Script demo mode. Workflow records are synthetic and stored in the owner's private Google Spreadsheet. No real task code is executed, and no NATS, WASM, or production telemetry is connected.";
     const footer = document.querySelector(".footer");
-    if (footer && footer.children.length > 1) {
-      footer.children[1].textContent = "Apps Script + private Sheet · Synthetic demo data · Session-only capability";
+    if (runtime === "apps-script") {
+      if (connectionCopy) connectionCopy.textContent = "Connected through the owner-managed Apps Script runtime. Each browser receives a separate bounded demo workspace.";
+      if (securityNote) securityNote.textContent = "Private demo session. The short-lived capability stays inside the bridge and is never stored in the dashboard URL, cookies, or local storage.";
+      if (notice) notice.textContent = "Apps Script profile · Synthetic records in the owner's private Google Spreadsheet. It does not execute task code, NATS, WASM plugins, or production telemetry.";
+      if (footer && footer.children.length > 1) footer.children[1].textContent = "Google Apps Script + private Sheet · Synthetic demo data · Session-only capability";
+    } else {
+      if (connectionCopy) connectionCopy.textContent = "Connected to the free Cloudflare runtime. Workflow state is stored in D1 and accepted workflows run as durable Cloudflare Workflow instances.";
+      if (securityNote) securityNote.textContent = "A short-lived session capability is held in memory for this tab. The browser identifier is pseudonymous; the session token is not written to local storage, cookies, or the URL.";
+      if (notice) notice.textContent = "Cloudflare Free profile · D1 persistence + durable Workflow execution. Only the documented built-in task operations are available; arbitrary user code and WASM execution are not enabled.";
+      if (footer && footer.children.length > 1) footer.children[1].textContent = "Cloudflare Workers + D1 + Workflows · Free-tier usage caps · Session-only capability";
     }
+  }
+
+  function browserClientId() {
+    const key = "aetherflow.cloudflare.client.v1";
+    try {
+      const current = localStorage.getItem(key);
+      if (current && /^[a-f0-9-]{36}$/i.test(current)) return current;
+      const generated = crypto.randomUUID();
+      localStorage.setItem(key, generated);
+      return generated;
+    } catch (_) {
+      return crypto.randomUUID();
+    }
+  }
+
+  async function connectAppsScriptDemo() {
+    const bridge = window.AetherFlowAppsScriptBridge;
+    if (!bridge || !bridge.isActive()) return false;
+
+    setServerlessPresentation("apps-script");
     setConnection("Connecting to the Apps Script demo…", "");
     try {
       await bridge.start();
@@ -699,14 +730,73 @@
       state.base = "Google Apps Script demo";
       state.token = "apps-script-session";
       state.scope = "operator";
+      state.runtime = "apps-script";
+      state.status = "";
+      setBusy(false);
+      await loadRuns(false);
+      return true;
+    } catch (error) {
+      state.token = "";
+      setConnection(error.message, "bad");
+      return true;
+    }
+  }
+
+  async function connectCloudflareFree() {
+    const config = window.AETHERFLOW_RUNTIME_CONFIG;
+    if (!config || config.mode !== "cloudflare-free" || !config.apiBase || !config.bootstrapPath) {
+      setConnection("The free serverless runtime is not configured.", "bad");
+      return;
+    }
+
+    setServerlessPresentation("cloudflare-free");
+    setConnection("Creating your private Cloudflare workspace…", "");
+    state.requestController?.abort();
+    state.requestController = new AbortController();
+
+    try {
+      const response = await fetch(config.apiBase.replace(/\\/+$/, "") + config.bootstrapPath, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ client_id: browserClientId() }),
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal: state.requestController.signal
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        const message = payload && payload.error && payload.error.message;
+        throw new Error(message || ("The Cloudflare runtime returned HTTP " + response.status + "."));
+      }
+      if (!payload || typeof payload.sessionToken !== "string" || !payload.workspace) {
+        throw new Error("The Cloudflare runtime returned an invalid session.");
+      }
+
+      state.connectionRevision += 1;
+      state.base = config.apiBase.replace(/\\/+$/, "");
+      state.token = payload.sessionToken;
+      state.scope = "operator";
+      state.runtime = "cloudflare-free";
       state.status = "";
       setBusy(false);
       await loadRuns(false);
     } catch (error) {
       state.token = "";
-      setConnection(error.message, "bad");
+      state.base = "";
+      state.runtime = "cloudflare-free";
+      setConnection(
+        error && error.name === "AbortError" ? "Connection cancelled." : error.message,
+        "bad"
+      );
+      runList.replaceChildren(element("div", "empty error", error.message));
     }
   }
 
-  connectAppsScriptDemo();
+  async function connectDefaultRuntime() {
+    const connected = await connectAppsScriptDemo();
+    if (!connected) await connectCloudflareFree();
+  }
+
+  connectDefaultRuntime();
 })();
