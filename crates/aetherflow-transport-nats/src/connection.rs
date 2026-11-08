@@ -135,10 +135,7 @@ impl NatsConnectionConfig {
     /// credentials file, create a new connection from a freshly loaded
     /// configuration and drain the old client; this helper does not watch files
     /// or silently reload secrets in the background.
-    pub async fn connect(
-        &self,
-        servers: Vec<ServerAddr>,
-    ) -> Result<Client, NatsConnectionError> {
+    pub async fn connect(&self, servers: Vec<ServerAddr>) -> Result<Client, NatsConnectionError> {
         self.validate()?;
 
         let mut options = ConnectOptions::new().require_tls(self.tls_required);
@@ -152,10 +149,9 @@ impl NatsConnectionConfig {
         if let Some(path) = &self.ca_file {
             options = options.add_root_certificates(path.clone());
         }
-        if let (Some(certificate), Some(key)) = (
-            &self.client_certificate_file,
-            &self.client_key_file,
-        ) {
+        if let (Some(certificate), Some(key)) =
+            (&self.client_certificate_file, &self.client_key_file)
+        {
             options = options.add_client_certificate(certificate.clone(), key.clone());
         }
 

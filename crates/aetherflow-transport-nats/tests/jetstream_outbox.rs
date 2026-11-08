@@ -19,8 +19,8 @@ use aetherflow_storage_postgres::{
     PostgresTaskWorker, PostgresWorkerConfig,
 };
 use aetherflow_transport_nats::{
-    EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
-    NatsConnectionConfig, NatsJetStreamPublisher,
+    EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsConnectionConfig,
+    NatsJetStreamConsumer, NatsJetStreamPublisher,
 };
 use async_nats::jetstream::{
     self, consumer::PullConsumer, consumer::pull::Config as PullConsumerConfig,
