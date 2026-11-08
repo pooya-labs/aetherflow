@@ -192,13 +192,22 @@ fn env_path(name: &'static str) -> Option<PathBuf> {
 }
 
 fn env_bool(name: &'static str) -> Result<Option<bool>, NatsConnectionError> {
-    let Ok(value) = env::var(name) else {
-        return Ok(None);
-    };
+    match env::var(name) {
+        Ok(value) => parse_bool(name, &value).map(Some),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err(NatsConnectionError::InvalidBoolean { name })
+        }
+    }
+}
 
+fn parse_bool(
+    name: &'static str,
+    value: &str,
+) -> Result<bool, NatsConnectionError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "true" => Ok(Some(true)),
-        "false" => Ok(Some(false)),
+        "true" => Ok(true),
+        "false" => Ok(false),
         _ => Err(NatsConnectionError::InvalidBoolean { name }),
     }
 }
@@ -207,6 +216,18 @@ fn env_bool(name: &'static str) -> Result<Option<bool>, NatsConnectionError> {
 mod tests {
     use super::{NatsConnectionConfig, NatsConnectionError};
     use std::path::PathBuf;
+
+    #[test]
+    fn tls_environment_boolean_accepts_only_explicit_true_or_false() {
+        assert!(super::parse_bool("AETHERFLOW_NATS_TLS_REQUIRED", "true").expect("true"));
+        assert!(!super::parse_bool("AETHERFLOW_NATS_TLS_REQUIRED", " false ").expect("false"));
+        assert!(matches!(
+            super::parse_bool("AETHERFLOW_NATS_TLS_REQUIRED", "yes"),
+            Err(NatsConnectionError::InvalidBoolean {
+                name: "AETHERFLOW_NATS_TLS_REQUIRED"
+            })
+        ));
+    }
 
     #[test]
     fn local_default_keeps_loopback_compose_compatible() {
