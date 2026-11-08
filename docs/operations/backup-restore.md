@@ -197,7 +197,7 @@ cargo run -p aetherflow-server
 
 Before restarting workers or accepting new submissions:
 
-- Check `aetherflow_schema_migrations` and compare all recorded versions, names, and checksums with the source release. The current repository migration set is v1–v9.
+- Check `aetherflow_schema_migrations` and compare all recorded versions, names, and checksums with the source release. The current repository migration set is v1–v10.
 - Confirm all ten tenant-owned tables still have both row-level security enabled and forced; start the server with the restricted runtime URL so its startup verifier checks the runtime role and RLS boundary.
 - Confirm workflow/task history and tenant ownership using an authenticated read-only API request. `GET /health` is process liveness only and is not a database readiness check.
 - Compare each restored JetStream stream's message count/last sequence and consumer state with the recovery manifest. Confirm expected streams, subjects, retention, and replication settings.
@@ -221,7 +221,7 @@ The PostgreSQL schema workflow runs [`scripts/verify-operations-restore.sh`](../
 
 The rehearsal:
 
-- Creates a PostgreSQL custom-format dump, validates the archive and checksum, restores it to a separate isolated database, and checks migration ledger v9, all ten FORCE-RLS tables, and twelve tenant RLS policies.
+- Creates a PostgreSQL custom-format dump, validates the archive and checksum, restores it to a separate isolated database, and checks migration ledger v10, all ten FORCE-RLS tables, and twelve tenant RLS policies.
 - Creates a three-replica JetStream stream with three retained test messages, backs it up using NATS CLI v0.4.0, restores it to a separate NATS 2.12 server using one replica, and verifies the restored message count and a retained payload.
 - Grants the restored database to the non-owner runtime test role, starts the real AetherFlow server against that restored database, and waits for an authenticated database-backed API route.
 - Submits a fixed one-task workflow through `POST /api/v1/workflow-runs` and confirms the API returned HTTP 201 with the workflow running and task pending.
