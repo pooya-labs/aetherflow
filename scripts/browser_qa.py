@@ -512,7 +512,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
         )
         page.wait_for_function("window.__apiRequests.length === 4")
         respond(3, {"events": [], "next_cursor": None})
-        page.get_by_text("workflow-b", exact=True).wait_for()
+        page.locator("#detailContent .detail-subtitle").filter(has_text="workflow-b").wait_for()
 
         # The first selection resolves last. It must not trigger an event fetch
         # or replace the newer workflow currently shown in the console.
@@ -535,6 +535,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
         self.assert_no_page_errors()
 
     def test_dashboard_disconnect_cancels_pending_api_requests(self) -> None:
+        page = self.page
         page.add_init_script(
             """
             (() => {
