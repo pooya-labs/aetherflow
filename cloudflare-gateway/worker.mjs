@@ -84,24 +84,28 @@ export class ClientRateLimiter {
   }
 
   async alarm() {
-    const row = this.ctx.storage.sql
-      .exec("SELECT updated_at_ms FROM client_rate_limit WHERE id = 1")
-      .toArray()[0] ?? null;
+    // Alarms can run concurrently with requests. Block delivery while checking
+    // the last-seen timestamp and either rescheduling or deleting all storage.
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const row = this.ctx.storage.sql
+        .exec("SELECT updated_at_ms FROM client_rate_limit WHERE id = 1")
+        .toArray()[0] ?? null;
 
-    if (!row) {
+      if (!row) {
+        await this.ctx.storage.deleteAll();
+        return;
+      }
+
+      const expiresAt = Number(row.updated_at_ms) + IDLE_BUCKET_TTL_MS;
+      if (this.now() < expiresAt) {
+        await this.ctx.storage.setAlarm(expiresAt);
+        return;
+      }
+
+      // Delete all metadata and alarm state as well as the SQL row so inactive
+      // Durable Objects can be fully cleaned up and stop accruing storage.
       await this.ctx.storage.deleteAll();
-      return;
-    }
-
-    const expiresAt = Number(row.updated_at_ms) + IDLE_BUCKET_TTL_MS;
-    if (this.now() < expiresAt) {
-      await this.ctx.storage.setAlarm(expiresAt);
-      return;
-    }
-
-    // Delete all metadata and alarm state as well as the SQL row so inactive
-    // Durable Objects can be fully cleaned up and stop accruing storage.
-    await this.ctx.storage.deleteAll();
+    });
   }
 }
 
