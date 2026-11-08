@@ -106,6 +106,10 @@ class AetherFlowBrowserQA(unittest.TestCase):
         self.assertEqual(owner.get_attribute("href"), "https://pooya-labs.github.io/pooya-labs-platform/")
         self.assertIn("Pooya Labs Platform", owner.inner_text())
         self.assertEqual(owner.locator("img").get_attribute("src"), "assets/brand/pooya-monogram.webp")
+        owner.scroll_into_view_if_needed()
+        page.wait_for_function(
+            "() => { const image = document.querySelector('.owner-credit img'); return Boolean(image && image.complete && image.naturalWidth > 0); }"
+        )
         self.assertGreater(owner.locator("img").evaluate("img => img.naturalWidth"), 0)
         self.assertIn("Engineered for recovery", page.locator(".hero h1").inner_text())
         self.assertEqual(page.locator(".architecture .arch-card").count(), 4)
