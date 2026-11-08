@@ -303,15 +303,17 @@ function routeApi_(sheet, method, path, body, workspaceId) {
     submission.tasks.forEach(function (task) {
       taskIds[task.task_id] = "tr-" + sha256_(submission.workflow_run_id + "\u0000" + task.task_id).slice(0, 40);
     });
+    // Apps Script persists demo control-plane records but has no task executor.
+    // Keep newly submitted workflows pending until a real execution profile accepts them.
     var workflow = {
       workflow_id: submission.workflow_id, workflow_run_id: submission.workflow_run_id,
-      status: "running", version: 1, created_at: stamp, updated_at: stamp, finished_at: null
+      status: "pending", version: 1, created_at: stamp, updated_at: stamp, finished_at: null
     };
     writeRecord_(sheet, "workflow_runs", workspaceId, workflow);
     submission.tasks.forEach(function (task) {
       var row = {
         task_run_id: taskIds[task.task_id], workflow_run_id: submission.workflow_run_id,
-        task_id: task.task_id, status: task.depends_on.length ? "pending" : "ready",
+        task_id: task.task_id, status: "pending",
         version: 1, attempts_started: 0, max_attempts: submission.retry_policy.max_attempts,
         retry_policy: submission.retry_policy, available_at: stamp,
         input_base64: task.input_base64, input_size_bytes: task.input_size_bytes,
@@ -324,10 +326,10 @@ function routeApi_(sheet, method, path, body, workspaceId) {
     appendEvent_(sheet, workspaceId, submission.workflow_run_id, "workflow_run", submission.workflow_run_id, 1, "workflow.submitted", stamp);
     submission.tasks.forEach(function (task) {
       appendEvent_(sheet, workspaceId, submission.workflow_run_id, "task_run", taskIds[task.task_id], 1,
-        task.depends_on.length ? "task.pending" : "task.ready", stamp);
+        "task.pending", stamp);
     });
     var taskReceipts = submission.tasks.map(function (task) {
-      return { task_id: task.task_id, task_run_id: taskIds[task.task_id], status: task.depends_on.length ? "pending" : "ready" };
+      return { task_id: task.task_id, task_run_id: taskIds[task.task_id], status: "pending" };
     });
     return { status: 201, body: {
       workflow_id: workflow.workflow_id, workflow_run_id: workflow.workflow_run_id,
