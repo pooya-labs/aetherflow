@@ -128,6 +128,8 @@ python3 -m venv .venv
 
 GitHub Actions archives desktop/mobile screenshots for review. Passing browser QA validates the Pages interface and mocked API contract only; production authentication, CORS, and a live deployment still require an operator-owned API environment.
 
+Latest exact-source Browser QA: commit `3a94c8da3bcf4b1479bd3b5a62de9c1b5a7295d0` passed all six Chromium tests in [run 42486030870](https://github.com/pooya-labs/aetherflow/actions/runs/42486030870). Rust CI [42486030882](https://github.com/pooya-labs/aetherflow/actions/runs/42486030882), Security [42486030909](https://github.com/pooya-labs/aetherflow/actions/runs/42486030909), and Pages deployment [42486030707](https://github.com/pooya-labs/aetherflow/actions/runs/42486030707) also passed on that SHA.
+
 ## Reproducible scheduler benchmarks
 
 The repository includes two complementary performance tools: an in-memory scheduler/DAG benchmark and a PostgreSQL 18 + NATS 2.12 end-to-end load profile covering the durable worker, outbox, JetStream, and inbox path. Both report CSV metrics and run in CI. The end-to-end guide records three five-repeat PostgreSQL/NATS sessions and a matched-fingerprint reference; the CI comparator applies conservative limits only to the normalized EPYC 9V45 fingerprint. The baseline is not a production capacity claim. See the [in-memory benchmark guide](docs/performance/benchmarks.md) and the [end-to-end PostgreSQL/JetStream load guide](docs/performance/end-to-end-load.md).
