@@ -24,7 +24,7 @@ This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded wor
 5. Create a second script file named Core and paste apps-script/Core.gs. Keep it byte-for-byte aligned with serverless-shared/workflow-core.js.
 6. Create an HTML file named Index and paste apps-script/Index.html.
 7. Replace appsscript.json with the manifest in this directory and save.
-8. Select initializeAetherFlowDemo in the function selector, click Run, review the Google Sheets authorization, and approve it. This creates the private AetherFlow Demo Database spreadsheet.
+8. Select _setupAetherFlowDemo_ in the Apps Script editor function selector, click Run, review the Google Sheets authorization, and approve it. This private helper creates the owner-owned AetherFlow Demo Database. The public initializeAetherFlowDemo function is only a read-only readiness probe.
 9. Choose Deploy → New deployment → Web app. Set Execute as to Me and Who has access to Anyone (anonymous access).
 10. Deploy. The iframe URL is embedded in the wrapper source and will connect automatically.
 
