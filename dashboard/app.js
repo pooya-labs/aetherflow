@@ -13,7 +13,13 @@
     selectedSnapshot: null,
     eventCursor: null,
     events: [],
-    busy: false
+    busy: false,
+    connectionRevision: 0,
+    selectionRevision: 0,
+    taskRevision: 0,
+    eventRequestRevision: 0,
+    loadingOlderEvents: false,
+    requestController: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -48,12 +54,17 @@
   function setBusy(value) {
     state.busy = value;
     $("connectButton").disabled = value;
-    $("disconnectButton").disabled = value || !state.token;
+    // Keep disconnect available while loading so a slow API can be cancelled.
+    $("disconnectButton").disabled = !state.token;
     $("refreshButton").disabled = value || !state.token;
     $("loadMore").disabled = value || !state.token || !state.cursor;
     $("applyFilter").disabled = value || !state.token;
     $("statusFilter").disabled = value || !state.token;
     $("workersButton").disabled = value || !state.token || state.scope !== "operator";
+  }
+
+  function isCurrentConnection(revision) {
+    return revision === state.connectionRevision && Boolean(state.token);
   }
 
   function baseUrl(raw) {
@@ -92,7 +103,8 @@
       },
       credentials: "omit",
       cache: "no-store",
-      redirect: "error"
+      redirect: "error",
+      signal: state.requestController ? state.requestController.signal : undefined
     });
 
     const raw = await response.text();
@@ -248,7 +260,12 @@
 
   async function loadRuns(append) {
     if (!state.token) return;
+    const connectionRevision = state.connectionRevision;
     if (!append) {
+      state.selectionRevision += 1;
+      state.taskRevision += 1;
+      state.eventRequestRevision += 1;
+      state.loadingOlderEvents = false;
       state.cursor = null;
       state.page = 0;
       state.runs = [];
@@ -269,6 +286,7 @@
     setConnection("Loading workflow runs…", "");
     try {
       const page = await api(workflowCollection() + "?" + params.toString());
+      if (!isCurrentConnection(connectionRevision)) return;
       const items = Array.isArray(page.items) ? page.items : [];
       state.runs = append ? state.runs.concat(items) : items;
       state.cursor = page.next_cursor || null;
@@ -280,18 +298,28 @@
       setConnection("Connected · live data", "good");
       if (!append && state.runs.length) await selectRun(state.runs[0].workflow_run_id);
     } catch (error) {
+      if (!isCurrentConnection(connectionRevision)) return;
       setConnection(error.message, "bad");
       if (!append) {
         runList.replaceChildren(element("div", "empty error", error.message));
         updateStats();
       }
     } finally {
-      setBusy(false);
+      if (isCurrentConnection(connectionRevision)) setBusy(false);
     }
   }
 
   async function selectRun(id) {
     if (!state.token) return;
+    const connectionRevision = state.connectionRevision;
+    const selectionRevision = ++state.selectionRevision;
+    state.taskRevision += 1;
+    state.eventRequestRevision += 1;
+    state.loadingOlderEvents = false;
+    const isCurrentSelection = () =>
+      isCurrentConnection(connectionRevision) &&
+      selectionRevision === state.selectionRevision &&
+      state.selectedId === id;
     state.selectedId = id;
     renderRuns();
     detail.className = "";
@@ -299,36 +327,63 @@
     try {
       const root = workflowCollection() + "/" + encodeURIComponent(id);
       const snapshot = await api(root);
+      if (!isCurrentSelection()) return;
       const eventsPage = await api(root + "/events?limit=50");
+      if (!isCurrentSelection()) return;
       state.selectedSnapshot = snapshot;
       state.eventCursor = eventsPage.next_cursor || null;
       state.events = Array.isArray(eventsPage.events) ? eventsPage.events : [];
       renderDetail(snapshot, state.events);
     } catch (error) {
-      detail.replaceChildren(element("div", "empty error", error.message));
+      if (isCurrentSelection()) {
+        detail.replaceChildren(element("div", "empty error", error.message));
+      }
     }
   }
 
   async function loadOlderEvents() {
-    if (!state.token || !state.eventCursor || !state.selectedId || !state.selectedSnapshot) return;
-    const root = workflowCollection() + "/" + encodeURIComponent(state.selectedId) + "/events";
+    if (!state.token || !state.eventCursor || !state.selectedId || !state.selectedSnapshot || state.loadingOlderEvents) return;
+    const connectionRevision = state.connectionRevision;
+    const selectionRevision = state.selectionRevision;
+    const eventRequestRevision = ++state.eventRequestRevision;
+    const selectedId = state.selectedId;
+    const isCurrentEventLoad = () =>
+      isCurrentConnection(connectionRevision) &&
+      selectionRevision === state.selectionRevision &&
+      eventRequestRevision === state.eventRequestRevision &&
+      selectedId === state.selectedId;
+    state.loadingOlderEvents = true;
+    const root = workflowCollection() + "/" + encodeURIComponent(selectedId) + "/events";
     const params = new URLSearchParams();
     params.set("limit", "50");
     params.set("cursor", state.eventCursor);
     try {
       const page = await api(root + "?" + params.toString());
+      if (!isCurrentEventLoad()) return;
       state.events = state.events.concat(Array.isArray(page.events) ? page.events : []);
       state.eventCursor = page.next_cursor || null;
       renderDetail(state.selectedSnapshot, state.events);
     } catch (error) {
-      detail.append(element("div", "empty error", error.message));
+      if (isCurrentEventLoad()) detail.append(element("div", "empty error", error.message));
+    } finally {
+      if (eventRequestRevision === state.eventRequestRevision) state.loadingOlderEvents = false;
     }
   }
 
   async function inspectTask(id) {
+    const connectionRevision = state.connectionRevision;
+    const selectionRevision = state.selectionRevision;
+    const taskRevision = ++state.taskRevision;
+    const selectedId = state.selectedId;
+    const isCurrentTask = () =>
+      isCurrentConnection(connectionRevision) &&
+      selectionRevision === state.selectionRevision &&
+      taskRevision === state.taskRevision &&
+      selectedId === state.selectedId;
     detail.replaceChildren(element("div", "empty", "Loading task snapshot…"));
     try {
       const task = await api(taskRoute(id));
+      if (!isCurrentTask()) return;
       detail.replaceChildren();
       const head = element("div", "detail-head");
       head.append(element("div", "detail-title", task.task_run_id), element("div", "detail-subtitle", task.task_id));
@@ -352,16 +407,18 @@
       back.addEventListener("click", () => selectRun(state.selectedId));
       detail.append(back);
     } catch (error) {
-      detail.replaceChildren(element("div", "empty error", error.message));
+      if (isCurrentTask()) detail.replaceChildren(element("div", "empty error", error.message));
     }
   }
 
   async function loadWorkers() {
     if (!state.token || state.scope !== "operator") return;
+    const connectionRevision = state.connectionRevision;
     $("workersPanel").classList.remove("hidden");
     $("workerList").replaceChildren(element("div", "empty", "Loading active workers…"));
     try {
       const data = await api("/api/v1/workers");
+      if (!isCurrentConnection(connectionRevision)) return;
       const workers = Array.isArray(data.workers) ? data.workers : [];
       $("workerList").replaceChildren();
       if (!workers.length) $("workerList").append(element("div", "empty", "No active worker registrations."));
@@ -373,19 +430,32 @@
         $("workerList").append(row);
       }
     } catch (error) {
-      $("workerList").replaceChildren(element("div", "empty error", error.message));
+      if (isCurrentConnection(connectionRevision)) {
+        $("workerList").replaceChildren(element("div", "empty error", error.message));
+      }
     }
   }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      state.base = baseUrl($("apiBase").value.trim());
-      state.token = $("apiToken").value.trim();
-      state.scope = $("scope").value;
+      const nextBase = baseUrl($("apiBase").value.trim());
+      const nextToken = $("apiToken").value.trim();
+      const nextScope = $("scope").value;
+      if (!nextToken) throw new Error("Paste a read-capable Bearer token.");
+      if (!/^[A-Za-z0-9_-]{32,256}$/.test(nextToken)) throw new Error("Token format must be 32–256 URL-safe characters.");
+
+      state.requestController?.abort();
+      state.requestController = new AbortController();
+      state.connectionRevision += 1;
+      state.selectionRevision += 1;
+      state.taskRevision += 1;
+      state.eventRequestRevision += 1;
+      state.loadingOlderEvents = false;
+      state.base = nextBase;
+      state.token = nextToken;
+      state.scope = nextScope;
       state.status = $("statusFilter").value;
-      if (!state.token) throw new Error("Paste a read-capable Bearer token.");
-      if (!/^[A-Za-z0-9_-]{32,256}$/.test(state.token)) throw new Error("Token format must be 32–256 URL-safe characters.");
       $("apiToken").value = "";
       await loadRuns(false);
     } catch (error) {
@@ -394,6 +464,13 @@
   });
 
   $("disconnectButton").addEventListener("click", () => {
+    state.connectionRevision += 1;
+    state.selectionRevision += 1;
+    state.taskRevision += 1;
+    state.eventRequestRevision += 1;
+    state.loadingOlderEvents = false;
+    state.requestController?.abort();
+    state.requestController = null;
     state.token = "";
     state.base = "";
     state.cursor = null;
