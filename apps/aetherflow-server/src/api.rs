@@ -4020,6 +4020,120 @@ mod tests {
             "tenant event history must never expose outbox JSON"
         );
 
+        // Seed another tenant's queue and lease records. The operational metrics
+        // endpoint must count only the authenticated tenant's rows under FORCE RLS.
+        database_client
+            .execute(
+                "UPDATE task_runs
+                 SET status = 'running',
+                     attempts_started = 1,
+                     claimed_by = 'metrics-worker',
+                     fencing_token = 1,
+                     lease_expires_at = clock_timestamp() - INTERVAL '1 minute',
+                     started_at = clock_timestamp() - INTERVAL '2 minutes'
+                 WHERE task_run_id = $1",
+                &[&foreign_task_run_id],
+            )
+            .await
+            .expect("seed an expired task lease in the foreign tenant");
+        database_client
+            .execute(
+                "INSERT INTO outbox_events
+                   (aggregate_type, aggregate_id, aggregate_version, event_type,
+                    payload, tenant_id, claim_owner, claim_token, claim_expires_at)
+                 VALUES
+                   ('workflow_run', $1, 1, 'metrics.foreign', '{}'::jsonb,
+                    $2, 'metrics-worker', 1, clock_timestamp() - INTERVAL '1 minute')",
+                &[&foreign_workflow_run_id, &foreign_tenant_id],
+            )
+            .await
+            .expect("seed an expired outbox claim in the foreign tenant");
+        let tenant_pending_event_id = format!("metrics-tenant-pending-{suffix}");
+        let tenant_processing_event_id = format!("metrics-tenant-processing-{suffix}");
+        let foreign_pending_event_id = format!("metrics-foreign-pending-{suffix}");
+        database_client
+            .execute(
+                "INSERT INTO consumer_inbox
+                   (tenant_id, consumer_name, event_id, status, attempts,
+                    claim_owner, claim_token, lease_expires_at, received_at)
+                 VALUES
+                   ($1, 'metrics-consumer', $2, 'pending', 0, NULL, 0, NULL,
+                    clock_timestamp() - INTERVAL '35 seconds'),
+                   ($1, 'metrics-consumer', $3, 'processing', 1, 'metrics-worker', 1,
+                    clock_timestamp() - INTERVAL '1 minute',
+                    clock_timestamp() - INTERVAL '90 seconds'),
+                   ($4, 'metrics-consumer', $5, 'pending', 0, NULL, 0, NULL,
+                    clock_timestamp() - INTERVAL '2 minutes')",
+                &[
+                    &tenant_id,
+                    &tenant_pending_event_id,
+                    &tenant_processing_event_id,
+                    &foreign_tenant_id,
+                    &foreign_pending_event_id,
+                ],
+            )
+            .await
+            .expect("seed tenant and foreign-tenant inbox backlog");
+        
+        let operator_token_on_tenant_metrics = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {TEST_API_TOKEN}"))
+                    .uri("/api/v1/tenant/metrics")
+                    .body(Body::empty())
+                    .expect("valid operator token on tenant metrics route"),
+            )
+            .await
+            .expect("tenant metrics route must reject operator credentials");
+        assert_eq!(
+            operator_token_on_tenant_metrics.status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let tenant_metrics_response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .header(AUTHORIZATION, format!("Bearer {reader_token}"))
+                    .uri("/api/v1/tenant/metrics")
+                    .body(Body::empty())
+                    .expect("valid tenant-reader metrics request"),
+            )
+            .await
+            .expect("tenant operational metrics response");
+        assert_eq!(tenant_metrics_response.status(), StatusCode::OK);
+        assert_eq!(
+            tenant_metrics_response.headers().get("cache-control"),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let tenant_metrics_body = to_bytes(tenant_metrics_response.into_body(), 32 * 1024)
+            .await
+            .expect("read tenant operational metrics");
+        let tenant_metrics_text =
+            String::from_utf8(tenant_metrics_body.to_vec()).expect("metrics are UTF-8");
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_workflow_runs{status=\"running\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_inbox_events{state=\"pending\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_inbox_events{state=\"processing\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_inbox_expired_processing_leases 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_outbox_expired_claims 0"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_task_expired_running_leases 0"
+        ));
+        assert!(!tenant_metrics_text.contains(&foreign_workflow_run_id));
+        assert!(!tenant_metrics_text.contains(&foreign_tenant_id));
+        assert!(!tenant_metrics_text.contains("tenant_id"));
+        assert!(!tenant_metrics_text.contains("workflow_run_id"));
+        assert!(!tenant_metrics_text.contains("event_id"));
+
         let foreign_workflow_read = router(state.clone())
             .oneshot(
                 Request::builder()
