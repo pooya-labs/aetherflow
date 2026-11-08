@@ -103,10 +103,9 @@ The `cf` CLI is currently in beta. Review its [current deployment documentation]
 
 The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.18 or later and run `npm install` to install the pinned project-local CLI. Authenticate with `npx cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
 
-From this directory:
+From this directory, after completing Toolchain setup:
 
 ```sh
-npm install
 npm run check
 npm test
 npx cf deploy --dry-run --secrets-file .env.production
