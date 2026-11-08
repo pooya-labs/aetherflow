@@ -34,12 +34,53 @@ Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 milli
 
 Task payloads and outputs are not returned by the dashboard API; only size metadata and redacted event history are exposed.
 
-## Provisioning
+## Current Cloudflare deployment
 
-1. Create a dedicated D1 database named `aetherflow-free` and apply `migrations/0001_control_plane.sql`.
-2. Deploy `worker.mjs` as an ES module Worker named `aetherflow-free-runtime`, with a D1 binding called `DB` and a Workflow binding called `AETHERFLOW_EXECUTIONS` pointing to Workflow `aetherflow-execution` and class `AetherFlowExecution`.
-3. Create the Workflow resource `aetherflow-execution` against script `aetherflow-free-runtime` and class `AetherFlowExecution`.
-4. Enable the `workers.dev` route and set `ALLOWED_ORIGIN` to `https://pooya-labs.github.io`.
-5. Test `/health`, then the dashboard bootstrap flow from `https://pooya-labs.github.io/aetherflow/dashboard/`.
+The account-owned runtime is configured at:
 
-The Worker is configured for the user's existing `workers.dev` subdomain and does not require a paid Zone or custom domain.
+- API: https://aetherflow-free-runtime.pooyagame141.workers.dev
+- Health endpoint: https://aetherflow-free-runtime.pooyagame141.workers.dev/health
+- D1 database: `aetherflow-free` (primary region WEUR)
+- Workflow: `aetherflow-execution`
+- Worker: `aetherflow-free-runtime`
+
+This deployment uses the account's existing `workers.dev` subdomain. It has no custom domain, public Origin server, VPS, PostgreSQL connection, or NATS endpoint.
+
+## Rebuilding or deploying from this folder
+
+The Wrangler configuration is in `wrangler.jsonc` and already includes the account's D1 binding and Cloudflare Workflow binding. From this directory:
+
+1. Authenticate Wrangler with the Cloudflare account that owns the D1 database.
+2. Review `wrangler.jsonc`; retain the existing `database_id` for the current environment or replace it with a separately created D1 database.
+3. For a newly created D1 database, run the schema once with `npx wrangler d1 execute aetherflow-free --remote --file=./migrations/0001_control_plane.sql`. Do not run this SQL again against the already initialized database.
+4. Deploy with `npx wrangler deploy`. The worker is configured to use the `workers.dev` subdomain and keeps preview URLs disabled.
+5. Check `/health`, then open the GitHub Pages dashboard. On the direct Pages URL, the dashboard bootstraps a short-lived session from the Cloudflare runtime automatically. The Apps Script iframe path takes precedence when opened through the Google Web App.
+
+Cloudflare's account settings were provisioned directly for the current deployment. If you create another account or database, update `wrangler.jsonc` and the dashboard runtime config together.
+
+## Task input contract
+
+`input_base64` must contain standard base64-encoded UTF-8 JSON. Supported task payloads include:
+
+- `{"type":"echo","value":"hello"}`
+- `{"type":"uppercase","input":"hello"}`
+- `{"type":"sha256","input":"hello"}`
+- `{"type":"add","values":[2,3,5]}`
+- `{"type":"collect"}` to collect results from dependency tasks
+- `{"type":"fail_once"}` to verify the configured Workflow retry policy
+
+Task payloads and outputs are not returned by the dashboard API; only size metadata and redacted event history are exposed.
+
+## Testing
+
+From the repository root:
+
+```sh
+node --test serverless-shared/workflow-core.test.mjs
+python scripts/check-serverless-contracts.py
+node --check dashboard/runtime-config.js
+node --check dashboard/apps-script-bridge.js
+node --check dashboard/app.js
+node --check cloudflare-free/worker.mjs
+```
+
