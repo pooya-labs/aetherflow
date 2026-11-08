@@ -298,7 +298,7 @@ test("Durable Object uses SQLite storage and expires idle rate-limit buckets", a
     storage: {
       sql: {
         exec(sql, ...params) {
-          if (sql.startsWith("CREATE TABLE")) return { toArray: () => [] };
+          if (sql.includes("CREATE TABLE")) return { toArray: () => [] };
           if (sql.includes("SELECT tokens, updated_at_ms")) {
             return { toArray: () => (state.row ? [state.row] : []) };
           }
