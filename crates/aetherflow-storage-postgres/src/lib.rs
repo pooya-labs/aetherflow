@@ -11,6 +11,7 @@ mod coordinator;
 mod inbox;
 mod membership;
 mod outbox;
+mod operational_metrics;
 mod task_repository;
 mod tenant;
 mod tenant_auth;
@@ -21,6 +22,7 @@ pub use inbox::{InboxClaim, InboxClaimResult, PgInboxRepository};
 pub use membership::{
     MembershipStatus, NodeMembership, PgMembershipRepository, WorkerRegistration,
 };
+pub use operational_metrics::{PgTenantOperationalMetricsRepository, TenantOperationalMetrics};
 pub use outbox::{
     OutboxDispatchReport, OutboxDispatcherConfig, OutboxDispatcherConfigError,
     OutboxDispatcherError, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
@@ -56,7 +58,10 @@ const WORKER_TENANT_GRANT_LOCK_RLS_MIGRATION_SQL: &str = include_str!(
 );
 const DASHBOARD_HISTORY_INDEX_MIGRATION_SQL: &str =
     include_str!("../../aetherflow-runtime/migrations/postgres/0008_dashboard_history_indexes.sql");
-const MIGRATION_VERSION: i64 = 8;
+const TENANT_OPERATIONAL_METRICS_INDEX_MIGRATION_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0009_tenant_operational_metrics_index.sql"
+);
+const MIGRATION_VERSION: i64 = 9;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -66,7 +71,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 8] = [
+const MIGRATIONS: [Migration; 9] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -106,6 +111,11 @@ const MIGRATIONS: [Migration; 8] = [
         version: 8,
         name: "0008_dashboard_history_indexes.sql",
         sql: DASHBOARD_HISTORY_INDEX_MIGRATION_SQL,
+    },
+    Migration {
+        version: 9,
+        name: "0009_tenant_operational_metrics_index.sql",
+        sql: TENANT_OPERATIONAL_METRICS_INDEX_MIGRATION_SQL,
     },
 ];
 
@@ -456,7 +466,7 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 8);
+        assert_eq!(MIGRATION_VERSION, 9);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
@@ -476,6 +486,11 @@ mod tests {
         assert_eq!(MIGRATIONS[6].name, "0007_worker_tenant_grant_lock_rls.sql");
         assert_eq!(MIGRATIONS[7].version, 8);
         assert_eq!(MIGRATIONS[7].name, "0008_dashboard_history_indexes.sql");
+        assert_eq!(MIGRATIONS[8].version, 9);
+        assert_eq!(
+            MIGRATIONS[8].name,
+            "0009_tenant_operational_metrics_index.sql"
+        );
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
@@ -485,6 +500,7 @@ mod tests {
         let forced_tenant_rls = migration_checksum(&MIGRATIONS[5]);
         let worker_grant_lock_rls = migration_checksum(&MIGRATIONS[6]);
         let dashboard_history_indexes = migration_checksum(&MIGRATIONS[7]);
+        let tenant_operational_metrics_index = migration_checksum(&MIGRATIONS[8]);
         for checksum in [
             initial,
             inbox,
@@ -494,6 +510,7 @@ mod tests {
             forced_tenant_rls,
             worker_grant_lock_rls,
             dashboard_history_indexes,
+            tenant_operational_metrics_index,
         ] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
