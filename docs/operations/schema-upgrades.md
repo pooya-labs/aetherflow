@@ -1,6 +1,6 @@
 # PostgreSQL schema upgrade runbook
 
-**Current schema in this repository:** v8 (migrations 0001–0008). Re-check `MIGRATION_VERSION` in `crates/aetherflow-storage-postgres/src/lib.rs` before each release; this value changes as new migrations are added.
+**Current schema in this repository:** v9 (migrations 0001–0009). Re-check `MIGRATION_VERSION` in `crates/aetherflow-storage-postgres/src/lib.rs` before each release; this value changes as new migrations are added.
 
 ## Upgrade contract
 
@@ -48,7 +48,7 @@ FROM aetherflow_schema_migrations
 ORDER BY version;
 ~~~
 
-For this repository revision, the expected versions are contiguous from 1 through 8 and the latest migration is `0008_dashboard_history_indexes.sql`. Compare names and SHA-256 checksums with the exact target source. Do not copy a checksum from an older release or infer it from the version number.
+For this repository revision, the expected versions are contiguous from 1 through 9 and the latest migration is `0009_tenant_operational_metrics_index.sql`. Compare names and SHA-256 checksums with the exact target source. Do not copy a checksum from an older release or infer it from the version number.
 
 7. Verify the tenant RLS boundary. The application startup verifier is authoritative; this query is a read-only cross-check for the ten protected tables:
 
