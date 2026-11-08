@@ -62,6 +62,44 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/tenant/metrics:
+    get:
+      tags: [Observability]
+      security:
+        - tenantBearerAuth: []
+      operationId: getTenantOperationalMetrics
+      summary: Export durable operational gauges for the authenticated tenant
+      description: |
+        Returns a read-only Prometheus snapshot scoped to the tenant derived
+        from the validated Bearer credential. The snapshot includes workflow
+        status counts, oldest active workflow age, outbox backlog/ready lag,
+        expired outbox claims, inbox pending/processing counts and age, and
+        expired inbox/task leases. It does not export tenant, workflow, task,
+        event, credential, or payload values as labels or metric samples.
+        This is a point-in-time tenant view, not a platform-wide aggregate,
+        completion-latency distribution, or production SLO.
+      responses:
+        '200':
+          description: Tenant-scoped Prometheus text exposition format.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /health:
     get:
       security: []
