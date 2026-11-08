@@ -745,8 +745,7 @@ mod tests {
         for max_attempts in attempt_budgets {
             let non_zero_attempts =
                 NonZeroU32::new(max_attempts).expect("test attempt budgets are non-zero");
-            let policy = RetryPolicy::new(non_zero_attempts, 1, 100)
-                .expect("valid retry policy");
+            let policy = RetryPolicy::new(non_zero_attempts, 1, 100).expect("valid retry policy");
 
             for attempts_started in 0..=max_attempts + 1 {
                 assert_eq!(
@@ -774,8 +773,7 @@ mod tests {
                 let mut previous = 0;
 
                 for retry_number in 1..=66 {
-                    let retry =
-                        NonZeroU32::new(retry_number).expect("retry numbers are non-zero");
+                    let retry = NonZeroU32::new(retry_number).expect("retry numbers are non-zero");
                     let delay = policy.backoff_ms(retry);
 
                     assert!(delay >= initial);
