@@ -129,7 +129,65 @@ def main() -> None:
     if not {"task.succeeded", "workflow.succeeded"}.issubset(event_types):
         raise SystemExit(f"Cloudflare event history is incomplete: {event_types}")
 
-    print("Cloudflare Free live smoke: health, CORS, bootstrap, submit, durable execution, D1 state and event history: OK")
+    retry_workflow_id = f"ci-retry-{run_id}-{attempt}"
+    retry_input = base64.b64encode(json.dumps({"type": "fail_once"}).encode("utf-8")).decode("ascii")
+    collect_input = base64.b64encode(json.dumps({"type": "collect"}).encode("utf-8")).decode("ascii")
+    retry_submission = {
+        "workflow_id": "github-actions-retry-dag",
+        "workflow_run_id": retry_workflow_id,
+        "tasks": [
+            {"task_id": "retry-once", "depends_on": [], "input_base64": retry_input},
+            {"task_id": "collect-after-retry", "depends_on": ["retry-once"], "input_base64": collect_input},
+        ],
+        "retry_policy": {
+            "max_attempts": 2,
+            "initial_backoff_ms": 100,
+            "max_backoff_ms": 500,
+        },
+    }
+    status, retry_receipt, _ = request(
+        "/api/v1/workflow-runs",
+        method="POST",
+        body=retry_submission,
+        token=token,
+    )
+    if status != 201 or retry_receipt.get("workflow_run_id") != retry_workflow_id:
+        raise SystemExit(f"Cloudflare did not accept the retry/DAG workflow: {retry_receipt}")
+
+    retry_snapshot = None
+    while time.monotonic() < deadline:
+        _, retry_snapshot, _ = request(
+            "/api/v1/workflow-runs/" + retry_workflow_id,
+            token=token,
+        )
+        if retry_snapshot.get("status") in ("succeeded", "failed", "timed_out", "cancelled"):
+            break
+        time.sleep(1)
+
+    if not retry_snapshot or retry_snapshot.get("status") != "succeeded":
+        raise SystemExit(f"Cloudflare retry/DAG workflow did not succeed: {retry_snapshot}")
+    retry_tasks = {task.get("task_id"): task for task in retry_snapshot.get("task_runs", [])}
+    if set(retry_tasks) != {"retry-once", "collect-after-retry"} or any(
+        task.get("status") != "succeeded" for task in retry_tasks.values()
+    ):
+        raise SystemExit(f"Cloudflare dependency chain did not complete: {retry_tasks}")
+
+    _, retry_task, _ = request(
+        "/api/v1/task-runs/" + retry_tasks["retry-once"]["task_run_id"],
+        token=token,
+    )
+    if retry_task.get("attempts_started") != 2:
+        raise SystemExit(f"Cloudflare built-in retry did not run exactly twice: {retry_task}")
+
+    _, retry_events, _ = request(
+        "/api/v1/workflow-runs/" + retry_workflow_id + "/events?limit=100",
+        token=token,
+    )
+    retry_event_types = {event.get("event_type") for event in retry_events.get("events", [])}
+    if not {"task.succeeded", "workflow.succeeded"}.issubset(retry_event_types):
+        raise SystemExit(f"Cloudflare retry/DAG event history is incomplete: {retry_event_types}")
+
+    print("Cloudflare Free live smoke: health, CORS, bootstrap, submit, durable execution, retry, DAG dependencies, D1 state and event history: OK")
 
 
 if __name__ == "__main__":
