@@ -4,7 +4,7 @@
 
 ## Scope and security objectives
 
-The scope is the Rust control plane, tenant-aware PostgreSQL storage, worker execution and NATS JetStream delivery, the WebAssembly plugin boundary, the read-only dashboard, telemetry, and the CI/dependency supply chain.
+The scope is the Rust control plane, Cloudflare edge gateway and API origin boundary, tenant-aware PostgreSQL storage, worker execution and NATS JetStream delivery, the WebAssembly plugin boundary, the read-only dashboard, telemetry, and the CI/dependency supply chain.
 
 Primary objectives are to preserve workflow/task integrity, prevent cross-tenant data access, protect operator and tenant credentials, constrain untrusted workflow/plugin execution, avoid leaking payloads into telemetry, and make recovery behavior explicit.
 
@@ -19,11 +19,12 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 | JetStream streams, consumers, and message identities | Message loss, replay, duplicate work, or workflow stalls |
 | Plugin artifacts and execution resources | Host resource exhaustion or exploitation of runtime/engine defects |
 | TLS private keys and OTLP exporter headers | Impersonation or disclosure of telemetry credentials |
+| Edge-to-origin ingress secret and per-client limiter identity | Direct-origin bypass, secret replay, or client-source quota evasion |
 | Source, lockfile, CI workflows, release artifacts | Malicious code or dependency entering a build |
 
 ## Trust boundaries
 
-1. **External client → HTTP API.** Platform routes require the operator Bearer credential. Tenant routes authenticate a stored tenant credential and enforce explicit role permissions. Browser CORS is exact-origin allowlisted; CORS is not authentication.
+1. **External client → Cloudflare gateway → HTTP API origin.** The Worker derives client source identity from Cloudflare's `CF-Connecting-IP`, applies a per-client SQLite Durable Object token bucket keyed by HMAC-SHA-256, removes caller-supplied forwarding/identity headers, preserves API Bearer credentials, and injects `X-AetherFlow-Ingress-Token` from a Worker Secret. For non-loopback binds, the Rust API requires the matching ingress secret on every route except `/health`; it stores only a SHA-256 digest and compares the request value in constant time. Platform routes then require the operator Bearer credential; tenant routes authenticate a stored tenant credential and enforce explicit role permissions. Browser CORS is exact-origin allowlisted; CORS is not authentication.
 2. **API/worker process → PostgreSQL.** Migrations use `AETHERFLOW_MIGRATION_DATABASE_URL`; normal application queries use the restricted `DATABASE_URL` role. Startup checks reject elevated runtime-role attributes/memberships, protected-table ownership, and missing FORCE RLS.
 3. **Tenant context → SQL/RLS.** Ten tenant-owned tables have forced RLS. Tenant and credential context is transaction-local. This guards against accidentally omitted tenant predicates; it does not protect against arbitrary SQL execution under the runtime role or a compromised application process that can set its own custom GUCs.
 4. **Worker/outbox → NATS JetStream → inbox consumer.** PostgreSQL remains authoritative for workflow state; outbox/inbox transactions and message identity handle the documented at-least-once delivery boundary. They do not make unrelated external side effects exactly-once.
@@ -35,7 +36,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 
 | Threat | Existing mitigation | Residual risk / required follow-up |
 |---|---|---|
-| Unauthenticated remote caller | Bearer auth on durable routes; health is liveness-only; non-loopback plaintext HTTP is rejected; authenticated principals have bounded process-local buckets; missing/invalid operator and tenant credentials now have a bounded failure bucket keyed by listener-supplied TCP peer address; forwarded-IP headers are ignored; mandatory shared ingress policy is documented | The application limiter is process-local, observes only the immediate peer, and is not a distributed client quota; the shared ingress policy is not deployed/verified; direct-origin bypass must be prevented by network policy; operator credential is shared; no external penetration test |
+| Unauthenticated remote caller | Operator/tenant Bearer auth; health is liveness-only; non-loopback HTTP requires TLS and `AETHERFLOW_INGRESS_TOKEN`; non-health requests require the matching constant-time-checked ingress header; gateway code uses per-client HMAC-keyed SQLite Durable Objects, strips spoofed identity headers and fails closed; application limiters remain secondary | Gateway source is not deployed or routed; no verified HTTPS API origin/Zone/Tunnel exists; network policy must still restrict origin access to Cloudflare; full request/concurrency limits, cross-replica acceptance and independent penetration testing remain open; operator credential is shared |
 | Tenant attempts to read or mutate another tenant | Credential-derived tenant context, permission checks, composite tenant ownership, forced RLS | RLS is not a defense against arbitrary SQL execution or a compromised runtime process; continue negative cross-tenant tests |
 | Stolen tenant/operator token | Only digests are stored; raw tokens are not logged; tenant credentials can be revoked; successful tenant request spans include credential-derived tenant/principal IDs | No managed secret store; the shared operator credential is trace-identifiable but not attributable to an individual human; no non-disruptive operator-token rotation; trace storage is not a tamper-evident audit ledger |
 | Malicious workflow or plugin | Bounded payloads/retries/concurrency; WASM capability default deny and resource/fuel limits | Engine bugs, host bugs, process-wide resource pressure, and OS isolation remain deployment concerns |
@@ -50,6 +51,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 - Tenant API credentials are high-entropy opaque values; only SHA-256 digests and non-secret prefixes are stored. Permission checks are role-based and tenant ID is not accepted as an authority from the request.
 - The application uses parameterized SQL. RLS is an additional database guardrail, not an SQL injection mitigation.
 - PostgreSQL TLS uses the platform native trust roots and validates the server name. `DATABASE_SSL_MODE=disable` is only for the disposable loopback Compose environment. A non-loopback HTTP listener requires a valid Rustls certificate/key pair.
+- A non-loopback HTTP listener also requires `AETHERFLOW_INGRESS_TOKEN`, validated before database migrations. The Worker injects this secret only after removing the inbound caller-controlled header. HMAC-SHA-256 uses the same Worker Secret for DO naming; rotation resets per-client token buckets. This application-level guard does not replace a private origin network boundary.
 - Compose NATS endpoints are local development services. Do not expose the loopback-only ports or treat the development cluster configuration as a production-authenticated NATS deployment.
 - Metrics expose aggregate request counts, a bounded latency histogram, and an authenticated-principal rate-limit counter under operator authentication. The authenticated-principal limiter defaults to burst 30/refill 2 per second. Failed/missing credentials use a separate default 20-burst/2-refill-per-second limiter keyed by the actual TCP peer and independent of forwarded headers; its source map is capped at 4,096 entries and clears after successful authentication. Both limiters are process-local and do not provide a cluster-wide quota. These are request controls, not workflow-level SLO instrumentation.
 - At-least-once event delivery means external task handlers must use stable idempotency keys or their own transactional boundary.
@@ -57,7 +59,7 @@ Primary objectives are to preserve workflow/task integrity, prevent cross-tenant
 ## Priority gaps before production
 
 1. Complete independent security review/penetration test and a production deployment architecture review.
-2. Deploy and verify the production-guide ingress policy: a shared gateway must rate-limit missing/malformed/invalid credentials by actual client connection source before forwarding, cover all replicas, strip untrusted forwarding headers, and make direct-origin bypass impossible. The application-level peer limiter is only a bounded per-process secondary control and has not yet passed hosted verification. Then add per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
+2. Deploy and verify the production-guide ingress policy: a shared gateway must rate-limit actual client sources before forwarding, cover all replicas, strip untrusted forwarding headers, inject the private origin secret, and make direct-origin bypass impossible. Gateway and API-side ingress-secret code now exist, but the Worker has no production route or origin and the security boundary has not been exercised over the network. The application-level peer limiter is only a bounded per-process secondary control. Then add per-principal audit identity, managed secret/certificate rotation, and production-safe NATS authentication/TLS configuration.
 3. Decide and test production backup/WAL archiving, restore ownership, RPO, and RTO; the current rehearsal is isolated CI only.
 4. Add workflow/outbox/inbox SLIs and alerting, then approve SLOs and error budgets.
 5. Complete dependency license review, SBOM generation and release provenance/attestation policy.
