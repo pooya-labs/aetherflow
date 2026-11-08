@@ -172,3 +172,51 @@ The license does not grant permission to use the AetherFlow or Pooya Labs names,
 ## Persistence status
 
 The PostgreSQL storage crate and initial schema have passed PostgreSQL 18 CI. Durable handler failure recording, task cancellation/timeout, workflow terminal aggregation, and outbox claim/retry/ack are implemented and integration-tested. Workflow aggregation succeeds only when all tasks succeed; on a terminal failure, cancellation, or timeout it cancels remaining non-terminal tasks and closes active attempts transactionally. The `aetherflow-transport-nats` crate integrates a real JetStream publisher and inbox-backed pull consumer, and now exposes `NatsConnectionConfig` for NATS `.creds` authentication, TLS enforcement, custom CA roots and optional client mTLS. PostgreSQL 18 + NATS CI verifies the broker-accepted/outbox-ack retry boundary, stable message-ID deduplication, logical consumer deduplication, lease and AckWait heartbeat for long handlers, failed-handler redelivery, single-member loss, and a full three-member outage with PostgreSQL outbox retention and exactly-one inbox processing after recovery. The durable worker/coordinator remains an opt-in PostgreSQL execution path. OS-level process termination after broker storage and after inbox commit is now integration-tested on PostgreSQL 18 + NATS (run `41380067612`). Delivery remains at-least-once; external side effects require application-level idempotency or a transaction shared with inbox completion. M05 membership-gated task execution is verified on PostgreSQL 18 + NATS (41402000557) with Rust CI (41402000570). Tests cover stale-epoch write rejection, replacement-worker recovery after task-lease expiry, registry capability filtering, lease renewal while gracefully draining a long-running handler, UID-scoped packet-level PostgreSQL partition/rejoin, abrupt worker-process loss, three-member NATS quorum recovery, and the combined two-round chaos campaign. This is a verified durable execution vertical slice—not a production-ready distributed workflow engine. See [the PostgreSQL transaction contract](docs/persistence/postgres-transaction-contract.md).
+
+
+---
+
+## راهنمای فارسی
+
+### معرفی
+
+**AetherFlow** یک پلتفرم متن‌بازِ در حال توسعه برای اجرای گردش‌کارهای توزیع‌شده و بادوام است که هستهٔ آن با Rust ساخته می‌شود. هدف پروژه، مدیریت صریح وضعیت وظایف، بازیابی پس از خرابی، هماهنگی Workerها و مشاهده‌پذیری عملیات است.
+
+### اهداف طراحی
+
+- نگهداری بادوام وضعیت گردش‌کار و وظایف همراه با انتقال وضعیت قابل ممیزی.
+- تحویل حداقل یک‌باره (At-least-once) همراه با ابزارهای اجرای idempotent.
+- بازیابی Workerها با lease، heartbeat و retry محدود.
+- تعریف روشن رفتار لغو، timeout، هم‌زمانی و backpressure.
+- هستهٔ ماژولار Rust با اجرای ناهمگام.
+- مرز توسعهٔ افزونه‌های WebAssembly.
+- ثبت رویدادهای ساخت‌یافته، متریک‌ها و traceها.
+- آزمون‌های تکرارپذیر برای سناریوهای خرابی و بازیابی.
+
+این پروژه ادعای اجرای عمومی و تضمین‌شدهٔ «دقیقاً یک‌بار» ندارد. اثرهای جانبی خارجی به idempotency در سطح برنامه یا یکپارچگی تراکنشی صریح نیاز دارند.
+
+### اجزای فنی
+
+هسته با Rust و Tokio توسعه می‌یابد. لایهٔ کنترل HTTP بر پایهٔ Axum، ذخیره‌سازی بادوام با PostgreSQL، انتقال رویداد با NATS JetStream، مرز افزونه‌ها با Wasmtime و مشاهده‌پذیری با OpenTelemetry طراحی شده‌اند. قرارداد API نسخهٔ ۱ و مشخصات OpenAPI 3.1 در مسیر `docs/api/openapi.yaml` قرار دارد.
+
+### وب‌سایت و کنسول فقط‌خواندنی
+
+وب‌سایت عمومی پروژه مستندات معماری، قرارداد کنترل‌پلین، شواهد بازیابی و وضعیت توسعه را ارائه می‌کند. کنسول مرورگری فقط‌خواندنی به APIای متصل می‌شود که خودتان اجرا می‌کنید؛ این کنسول backend میزبانی‌شده ارائه نمی‌دهد و امکان ارسال یا لغو گردش‌کار را ندارد. توکن Bearer فقط در حافظهٔ همان صفحه نگهداری می‌شود و در localStorage، کوکی یا URL ذخیره نمی‌شود.
+
+### وضعیت فعلی توسعه
+
+بر اساس وضعیت ثبت‌شده در README، مراحل M00 تا M07 تکمیل شده‌اند و مرحلهٔ M08 شامل کارهای مهندسی تولید، عملیات و بازیابی همچنان در حال پیشرفت است. آزمون‌های PostgreSQL و NATS سناریوهای بازیابی، قطعی اعضای کلاستر و پردازش مجدد رویدادها را پوشش می‌دهند؛ بااین‌حال این شواهد به معنی آماده‌بودن سرویس برای استقرار تولیدی عمومی نیستند.
+
+دروازهٔ ورودی Cloudflare Worker هنوز مستقر یا به مسیر تولید متصل نشده است. برای استقرار واقعی، origin امن، تنظیمات شبکه و اسرار هماهنگ، مسیر دامنه یا Tunnel و آزمون جلوگیری از دورزدن gateway لازم است.
+
+### ابزارهای توسعه
+
+مخزن شامل API نسخه‌دار، CLI، SDK ناهمگام Rust، کنسول مرورگری، آزمون‌های Chromium و ابزارهای benchmark است. تحویل پیام حداقل یک‌باره است؛ برای جلوگیری از تکرار اثرهای جانبی خارجی باید idempotency در سطح برنامه رعایت شود.
+
+### اجرای پروژه
+
+برای فرمان‌های دقیق نصب و اجرای سرویس‌ها، راهنمای توسعه در `docs/development.md`، راهنمای CLI در `apps/aetherflow-cli/README.md` و راهنمای SDK در `crates/aetherflow-sdk/README.md` را ببینید. تنظیمات PostgreSQL، NATS، آزمون مرورگر و runbookهای عملیاتی نیز در مستندات مرتبط پوشهٔ `docs/` آمده‌اند.
+
+### مجوز
+
+AetherFlow تحت مجوز Apache License 2.0 منتشر می‌شود. مجوز نرم‌افزار به‌تنهایی اجازهٔ استفاده از نام‌ها، نشان‌ها یا علائم تجاری AetherFlow و Pooya Labs را نمی‌دهد.
