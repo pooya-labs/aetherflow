@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn migration_set_has_stable_order_names_and_sha256_checksums() {
-        assert_eq!(MIGRATION_VERSION, 9);
+        assert_eq!(MIGRATION_VERSION, 10);
         assert_eq!(MIGRATIONS[0].version, 1);
         assert_eq!(MIGRATIONS[0].name, "0001_initial_schema.sql");
         assert_eq!(MIGRATIONS[1].version, 2);
