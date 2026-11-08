@@ -29,8 +29,21 @@ function doGet() {
     .addMetaTag("viewport", "width=device-width, initial-scale=1");
 }
 
-/** Owner-only setup. Run initializeAetherFlowDemo from the Apps Script editor. */
+/**
+ * Public readiness probe. This function is safe to call through google.script.run:
+ * it never creates a spreadsheet or mutates owner resources.
+ */
 function initializeAetherFlowDemo() {
+  var id = PropertiesService.getScriptProperties().getProperty(AETHERFLOW_GAS.databaseProperty);
+  if (!id) {
+    throw safeError_(503, "demo_not_initialized", "The owner must run _setupAetherFlowDemo_ from the Apps Script editor.");
+  }
+  ensureSheet_(id);
+  return { ready: true, schemaVersion: AETHERFLOW_GAS.schemaVersion };
+}
+
+/** Owner setup. Trailing underscore keeps this mutating function off google.script.run. */
+function _setupAetherFlowDemo_() {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
