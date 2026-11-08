@@ -1563,7 +1563,10 @@ fn secret_header_matches(
     headers: &HeaderMap,
     header_name: &'static str,
 ) -> bool {
-    let Some(value) = headers.get(header_name).and_then(|header| header.to_str().ok()) else {
+    let Some(value) = headers
+        .get(header_name)
+        .and_then(|header| header.to_str().ok())
+    else {
         return false;
     };
     let supplied: [u8; 32] = Sha256::digest(value.as_bytes()).into();
@@ -3314,7 +3317,13 @@ mod tests {
     fn shared_gateway_token_uses_the_same_strict_secret_policy() {
         assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", TEST_API_TOKEN).is_ok());
         assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", "short").is_err());
-        assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", "contains spaces and is long enough").is_err());
+        assert!(
+            hash_secret_token(
+                "AETHERFLOW_INGRESS_TOKEN",
+                "contains spaces and is long enough"
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
