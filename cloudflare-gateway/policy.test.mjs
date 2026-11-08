@@ -139,6 +139,21 @@ test("proxy request strips spoofable identity and ingress headers", () => {
   }
 });
 
+test("gateway rejects oversized declared request bodies before rate limiting", async () => {
+  const response = await worker.fetch(
+    new Request("https://gateway.example.test/api/v1/workflow-runs", {
+      method: "POST",
+      headers: {
+        "CF-Connecting-IP": "203.0.113.5",
+        "Content-Length": String(2 * 1024 * 1024 + 1),
+      },
+    }),
+    {},
+  );
+  assert.equal(response.status, 413);
+  assert.equal((await response.json()).error.code, "payload_too_large");
+});
+
 test("gateway fails closed without an origin or ingress secret", async () => {
   const response = await worker.fetch(
     new Request("https://gateway.example.test/api/v1/workflow-runs", {
