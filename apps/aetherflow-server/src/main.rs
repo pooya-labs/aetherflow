@@ -790,7 +790,7 @@ mod tests {
         let connector = TlsConnector::from(Arc::new(client_config));
         let server_name =
             ServerName::try_from("localhost".to_owned()).expect("valid TLS server name");
-        let tls_stream = connector
+        let mut tls_stream = connector
             .connect(server_name, tcp)
             .await
             .expect("complete verified TLS handshake");
