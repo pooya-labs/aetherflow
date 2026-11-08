@@ -48,6 +48,8 @@ require(webapp.get("access") == "ANYONE_ANONYMOUS", "Apps Script manifest must d
 require("google.script.run" in gas_html, "Apps Script wrapper must call google.script.run")
 require("event.origin !== PAGES_ORIGIN" in gas_html, "Apps Script wrapper must validate the dashboard origin")
 require("event.source !== frame.contentWindow" in gas_html, "Apps Script wrapper must validate iframe source")
+require("payload: payload" not in gas_html, "Apps Script session bootstrap must not relay the full token-bearing payload")
+require("typeof payload.sessionToken !== \"string\"" not in bridge, "iframe bridge must not require or handle the server-side session token")
 require("ORBIT" not in gas and "AETHERFLOW_DEMO_SPREADSHEET_ID" in gas, "Apps Script runtime must use its own private datastore")
 for forbidden in ("UrlFetchApp.fetch", "MailApp.sendEmail", "GmailApp.sendEmail", "ScriptApp.getOAuthToken"):
     require(forbidden not in gas, "Apps Script demo must not use " + forbidden)
