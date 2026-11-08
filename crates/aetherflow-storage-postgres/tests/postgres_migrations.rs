@@ -52,11 +52,11 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     ];
     let applied = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 8, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 9, .. }))
         .count();
     let already_current = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 8, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 9, .. }))
         .count();
     assert_eq!(applied, 1);
     assert_eq!(already_current, 1);
@@ -1215,7 +1215,7 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         store.migrate().await,
         Err(StorageError::NewerSchema {
             found: 9,
-            supported: 8
+            supported: 9
         })
     ));
     client
@@ -1320,7 +1320,7 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
     );
     assert!(matches!(
         outcome,
-        MigrationOutcome::Applied { version: 8, .. }
+        MigrationOutcome::Applied { version: 9, .. }
     ));
 
     let inbox_primary_key: String = client
