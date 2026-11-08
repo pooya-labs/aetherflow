@@ -4062,6 +4062,21 @@ mod tests {
             )
             .await
             .expect("seed an expired outbox claim in the foreign tenant");
+        let tenant_metrics_workflow_run_id = format!("metrics-tenant-workflow-{suffix}");
+        database_client
+            .execute(
+                "INSERT INTO workflow_runs
+                   (workflow_run_id, workflow_id, tenant_id, status, created_at)
+                 VALUES ($1, $2, $3, 'pending', clock_timestamp() - INTERVAL '2 minutes')",
+                &[
+                    &tenant_metrics_workflow_run_id,
+                    &format!("metrics-workflow-definition-{suffix}"),
+                    &tenant_id,
+                ],
+            )
+            .await
+            .expect("seed an active workflow for tenant metrics");
+
         let tenant_pending_event_id = format!("metrics-tenant-pending-{suffix}");
         let tenant_processing_event_id = format!("metrics-tenant-processing-{suffix}");
         let foreign_pending_event_id = format!("metrics-foreign-pending-{suffix}");
@@ -4125,8 +4140,19 @@ mod tests {
         let tenant_metrics_text =
             String::from_utf8(tenant_metrics_body.to_vec()).expect("metrics are UTF-8");
         assert!(
-            tenant_metrics_text.contains("aetherflow_tenant_workflow_runs{status=\"running\"} 1")
+            tenant_metrics_text.contains("aetherflow_tenant_workflow_runs{status=\"pending\"} 1")
         );
+        assert!(
+            tenant_metrics_text.contains("aetherflow_tenant_workflow_runs{status=\"cancelled\"} 1")
+        );
+        let active_workflow_age = tenant_metrics_text
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("aetherflow_tenant_oldest_active_workflow_age_seconds ")
+                    .and_then(|value| value.parse::<f64>().ok())
+            })
+            .expect("oldest active workflow age gauge");
+        assert!(active_workflow_age >= 100.0, "workflow age was {active_workflow_age}");
         assert!(
             tenant_metrics_text.contains("aetherflow_tenant_inbox_events{state=\"pending\"} 1")
         );
