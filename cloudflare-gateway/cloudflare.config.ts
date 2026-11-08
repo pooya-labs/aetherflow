@@ -1,5 +1,5 @@
 import { bindings, defineConfig, exports } from "cf/config";
-import * as entrypoint from "./worker.mjs" with { type: "cf-worker" };
+import * as entrypoint from "./index.mjs" with { type: "cf-worker" };
 
 export default defineConfig({
   accountId: "593f6245708f02254aa8ed0f1417f739",
