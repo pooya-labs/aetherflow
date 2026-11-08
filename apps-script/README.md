@@ -4,6 +4,14 @@ This is the zero-cost, low-volume serverless demo profile for AetherFlow. It fol
 
 This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded workflow control-plane demo contract only. It does not run arbitrary task code, WASM plugins, worker leases, NATS JetStream, PostgreSQL outbox/inbox delivery, production tenant identity, or real customer workflows. The displayed sample workflow records are synthetic.
 
+## Current owner deployment — 2026-11-08
+
+[Open the owner-provided Apps Script Web App](https://script.google.com/macros/s/AKfycby-RppnSarisz26pfexeZLjd-LD_FTmE8q6Ea3JtFLkl4iAfuyCCLX61p92nNZLlWyr/exec).
+
+The public URL responds with the expected page title, “AetherFlow — Apps Script Demo”. This confirms that the Web App HTML wrapper is reachable; it does **not** confirm that the private Spreadsheet is initialized or that `google.script.run` can complete the workflow lifecycle.
+
+For an existing deployment, do not recreate the project or database. Confirm that `_setupAetherFlowDemo_` has been run successfully in the owning Apps Script project and that its Google Sheets authorization was approved. Then open the link above and verify that the wrapper status becomes “Connected · private demo workspace”. Submit one small built-in sample workflow, refresh the page, and verify that the workflow and event history remain available. Never share the owner-only Spreadsheet URL or ID.
+
 ## Included
 
 - Apps Script V8 Web App wrapper embedding the GitHub Pages dashboard.
