@@ -136,6 +136,14 @@ export default {
       return jsonError(405, "method_not_allowed", { Allow: "GET, HEAD, POST, OPTIONS" });
     }
 
+    const contentLength = request.headers.get("content-length");
+    if (contentLength !== null) {
+      if (!/^\d+$/.test(contentLength)) return jsonError(400, "invalid_content_length");
+      if (Number(contentLength) > 2 * 1024 * 1024) {
+        return jsonError(413, "payload_too_large");
+      }
+    }
+
     let settings;
     try {
       settings = gatewaySettings(env);
