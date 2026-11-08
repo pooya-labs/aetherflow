@@ -755,7 +755,7 @@
     state.requestController = new AbortController();
 
     try {
-      const response = await fetch(config.apiBase.replace(/\\/+$/, "") + config.bootstrapPath, {
+      const response = await fetch(config.apiBase.replace(/\/+$/, "") + config.bootstrapPath, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: JSON.stringify({ client_id: browserClientId() }),
@@ -774,7 +774,7 @@
       }
 
       state.connectionRevision += 1;
-      state.base = config.apiBase.replace(/\\/+$/, "");
+      state.base = config.apiBase.replace(/\/+$/, "");
       state.token = payload.sessionToken;
       state.scope = "operator";
       state.runtime = "cloudflare-free";
