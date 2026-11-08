@@ -641,6 +641,132 @@ aetherflow_tenant_task_expired_running_leases 0
         self.assertEqual(page.locator(".run-item").count(), 0)
         self.assert_no_page_errors()
 
+    def test_dashboard_runs_a_sample_workflow_on_cloudflare_free(self) -> None:
+        page = self.page
+        created: list[dict] = []
+
+        def runtime_config(route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/javascript",
+                body=(
+                    "window.AETHERFLOW_RUNTIME_CONFIG = Object.freeze({"
+                    + "mode: 'cloudflare-free', "
+                    + "apiBase: '"
+                    + API_BASE
+                    + "', bootstrapPath: '/api/v1/demo/bootstrap'});"
+                ),
+            )
+
+        def mock_api(route) -> None:
+            request = route.request
+            parsed = urlparse(request.url)
+            if parsed.path == "/api/v1/demo/bootstrap":
+                json_response(
+                    route,
+                    {
+                        "sessionToken": "cloudflare-browser-qa-session-" + ("x" * 32),
+                        "expiresInSeconds": 21600,
+                        "workspace": {"id": "workspace-browser-qa", "name": "Browser QA"},
+                        "user": {"name": "Browser QA"},
+                    },
+                )
+                return
+
+            self.assertEqual(request.headers.get("authorization"), "Bearer cloudflare-browser-qa-session-" + ("x" * 32))
+            if parsed.path == "/api/v1/workflow-runs" and request.method == "POST":
+                body = request.post_data_json
+                created.append(body)
+                json_response(
+                    route,
+                    {
+                        "workflow_id": body["workflow_id"],
+                        "workflow_run_id": body["workflow_run_id"],
+                        "status": "pending",
+                        "version": 1,
+                        "task_runs": [
+                            {"task_id": task["task_id"], "task_run_id": "tr-" + task["task_id"], "status": "ready" if not task.get("depends_on") else "pending"}
+                            for task in body["tasks"]
+                        ],
+                    },
+                    status=201,
+                )
+                return
+
+            if parsed.path == "/api/v1/workflow-runs":
+                run_id = created[-1]["workflow_run_id"] if created else "unused"
+                items = []
+                if created:
+                    items = [{
+                        "workflow_id": "serverless-showcase",
+                        "workflow_run_id": run_id,
+                        "status": "pending",
+                        "version": 1,
+                        "task_count": 3,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                    }]
+                json_response(route, {"items": items, "next_cursor": None})
+                return
+
+            if parsed.path.startswith("/api/v1/workflow-runs/") and parsed.path.endswith("/events"):
+                json_response(route, {"events": [], "next_cursor": None})
+                return
+
+            if parsed.path.startswith("/api/v1/workflow-runs/"):
+                run_id = created[-1]["workflow_run_id"]
+                json_response(
+                    route,
+                    {
+                        "workflow_id": "serverless-showcase",
+                        "workflow_run_id": run_id,
+                        "status": "pending",
+                        "version": 1,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                        "task_runs": [
+                            {"task_id": "format-message", "task_run_id": "tr-format-message", "status": "ready"},
+                            {"task_id": "fingerprint-message", "task_run_id": "tr-fingerprint-message", "status": "ready"},
+                            {"task_id": "collect-results", "task_run_id": "tr-collect-results", "status": "pending"},
+                        ],
+                    },
+                )
+                return
+
+            json_response(route, {"error": {"message": "Unexpected test route: " + parsed.path}}, status=404)
+
+        page.route("**/runtime-config.js", runtime_config)
+        page.route(API_BASE + "/**", mock_api)
+        page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
+
+        page.get_by_text("Connected · live data").wait_for()
+        page.locator("#runSample").wait_for(state="visible")
+        self.assertFalse(page.locator("#runSample").is_disabled())
+
+        page.locator("#runSample").click()
+        page.get_by_text("Workflow accepted", exact=False).wait_for()
+        page.get_by_text("serverless-showcase", exact=True).wait_for()
+        page.get_by_text("collect-results", exact=True).wait_for()
+
+        self.assertEqual(len(created), 1)
+        submission = created[0]
+        self.assertEqual(submission["workflow_id"], "serverless-showcase")
+        self.assertEqual(
+            [task["task_id"] for task in submission["tasks"]],
+            ["format-message", "fingerprint-message", "collect-results"],
+        )
+        self.assertEqual(
+            submission["tasks"][2]["depends_on"],
+            ["format-message", "fingerprint-message"],
+        )
+        self.assertTrue(all(task.get("input_base64") for task in submission["tasks"]))
+        self.assert_no_page_errors()
+
+    def test_dashboard_hides_sample_execution_for_manual_and_apps_script_profiles(self) -> None:
+        page = self.page
+        page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
+        self.assertTrue(page.locator("#runSample").is_hidden())
+
     def test_dashboard_mobile_layout_and_theme_persistence(self) -> None:
         page = self.page
         page.set_viewport_size({"width": 390, "height": 844})
