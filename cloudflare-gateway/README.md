@@ -67,13 +67,14 @@ The 60-request burst / 20-per-second refill is only a starting policy, not a pro
 
 ## Local tests
 
-The policy and Worker request flow use Node's built-in test runner; they require no third-party test dependencies:
+The policy and Worker request flow use Node's built-in test runner; they require no third-party test dependencies. From this directory:
 
 ```sh
-node --check cloudflare-gateway/policy.mjs
-node --check cloudflare-gateway/worker.mjs
-node --test cloudflare-gateway/policy.test.mjs
+npm run check
+npm test
 ```
+
+The equivalent direct commands are `node --check policy.mjs`, `node --check worker.mjs`, `node --check index.mjs`, and `node --test policy.test.mjs`. The Durable Object SQL contract test uses a deterministic mock for the storage interface; it is not a deployed Workers-runtime/real SQLite integration test.
 
 The Rust API also has tests proving that a public bind without the ingress token is rejected, a direct API request without the edge token receives 403, a valid edge token reaches the normal API middleware, and `/health` remains public.
 
@@ -88,6 +89,6 @@ The Rust API also has tests proving that a public bind without the ingress token
 
 ## Usage and free-tier note
 
-A request to a rate-limited API route makes one Worker request and one Durable Object request. Cloudflare's current Free plan includes 100,000 Durable Object requests per day; exceeding a Free-plan limit causes further operations of that type to fail until reset. Review [current Durable Objects pricing and limits](https://developers.cloudflare.com/durable-objects/platform/pricing/) before production use. For higher usage, evaluate the plan and cost against measured traffic rather than assuming this edge layer is unlimited.
+A rate-limited API request makes one Worker request, one Durable Object request, one SQLite row read, and one SQLite row write. Cloudflare's current Free plan includes 100,000 Worker requests/day, 100,000 Durable Object requests/day, 100,000 Durable Object SQL row writes/day, and 5 million SQL row reads/day. Because every rate-limited request writes the bucket row, the practical free-tier ceiling is approximately 100,000 such requests per day, before other account usage. Free-tier operations fail once a daily limit is exhausted; this is an availability ceiling, not an automatic paid overage. Review [current Durable Objects pricing and limits](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before production use. For higher usage, evaluate the plan and cost against measured traffic rather than assuming this edge layer is unlimited.
 
 This Gateway is an ingress component only. It does not provision PostgreSQL, NATS server accounts, NATS ACLs, backups, or a production API host.
