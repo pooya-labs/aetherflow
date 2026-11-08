@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS demo_visitors (
   browser_hash TEXT PRIMARY KEY CHECK(length(browser_hash) = 64),
   workspace_id TEXT NOT NULL UNIQUE,
@@ -87,5 +85,3 @@ CREATE TABLE IF NOT EXISTS demo_events (
   FOREIGN KEY(workspace_id, workflow_run_id) REFERENCES demo_workflows(workspace_id, workflow_run_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS demo_events_workflow_idx ON demo_events(workspace_id, workflow_run_id, event_id);
-
-PRAGMA user_version = 1;
