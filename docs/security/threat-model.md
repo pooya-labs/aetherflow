@@ -1,6 +1,6 @@
 # AetherFlow threat model
 
-**Status:** Engineering threat model, 2026-11-04. This is a design review, not an independent security audit or production approval.
+**Status:** Engineering threat model, updated 2026-11-08. This is a design review, not an independent security audit or production approval.
 
 ## Scope and security objectives
 
