@@ -38,7 +38,11 @@ function initializeAetherFlowDemo() {
   if (!id) {
     throw safeError_(503, "demo_not_initialized", "The owner must run _setupAetherFlowDemo_ from the Apps Script editor.");
   }
-  ensureSheet_(id);
+  var spreadsheet = SpreadsheetApp.openById(id);
+  var sheet = spreadsheet.getSheetByName(AETHERFLOW_GAS.sheetName);
+  if (!sheet || sheet.getLastRow() < 1) {
+    throw safeError_(503, "demo_storage_unavailable", "The private demo spreadsheet is not initialized.");
+  }
   return { ready: true, schemaVersion: AETHERFLOW_GAS.schemaVersion };
 }
 
@@ -450,7 +454,12 @@ function requireRecord_(sheet, collection, workspaceId, id) {
 function getSheet_() {
   var id = PropertiesService.getScriptProperties().getProperty(AETHERFLOW_GAS.databaseProperty);
   if (!id) throw safeError_(503, "demo_not_initialized", "The owner must initialize the Apps Script demo first.");
-  return ensureSheet_(id);
+  var spreadsheet = SpreadsheetApp.openById(id);
+  var sheet = spreadsheet.getSheetByName(AETHERFLOW_GAS.sheetName);
+  if (!sheet || sheet.getLastRow() < 1) {
+    throw safeError_(503, "demo_storage_unavailable", "The private demo spreadsheet is unavailable.");
+  }
+  return sheet;
 }
 
 function ensureSheet_(id) {
