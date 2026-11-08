@@ -758,8 +758,10 @@
     try {
       const receipt = await apiWrite("/api/v1/workflow-runs", submission);
       if (!isCurrentConnection(state.connectionRevision)) return;
-      setConnection("Workflow accepted · " + receipt.workflow_run_id, "good");
       await loadRuns(false);
+      if (isCurrentConnection(state.connectionRevision)) {
+        setConnection("Workflow accepted · " + receipt.workflow_run_id, "good");
+      }
     } catch (error) {
       setConnection("Workflow submission failed · " + error.message, "bad");
     } finally {
