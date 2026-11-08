@@ -166,16 +166,15 @@
     if (value === null) return "—";
     if (value < 60) return value.toFixed(1) + " s";
     if (value < 3600) {
-      const minutes = Math.floor(value / 60);
       const totalSeconds = Math.floor(value);
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return minutes + "m " + seconds + "s";
+      const minutePart = Math.floor(totalSeconds / 60);
+      const secondPart = totalSeconds % 60;
+      return minutePart + "m " + secondPart + "s";
     }
     const totalMinutes = Math.floor(value / 60);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return hours + "h " + minutes + "m";
+    const hourPart = Math.floor(totalMinutes / 60);
+    const minutePart = totalMinutes % 60;
+    return hourPart + "h " + minutePart + "m";
   }
 
   function setOperationalValue(id, value) {
