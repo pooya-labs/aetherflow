@@ -1,7 +1,7 @@
 # ADR-0011: Control-plane operator authentication and PostgreSQL TLS
 
 - **Status:** Accepted; HTTP listener TLS boundary added
-- **Date:** 2026-11-03
+- **Date:** 2026-11-03 (edge-to-origin addendum: 2026-11-08)
 - **Scope:** HTTP control-plane credentials, HTTP listener TLS, and PostgreSQL client transport
 
 ## Context
