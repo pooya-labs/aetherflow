@@ -54,12 +54,15 @@ The versioned v1 control-plane API is implemented in apps/aetherflow-server and 
 | GET | /api/v1/task-runs/{task_run_id} | Read task state and payload-size metadata |
 | POST | /api/v1/task-runs/{task_run_id}/cancel | Cancel with an expected_version guard |
 | GET | /api/v1/workers | List live active worker registrations (platform operator) |
+| GET | /api/v1/tenant/metrics | Export tenant-scoped workflow and queue health gauges |
 | GET | /api/v1/tenant/workflow-runs | List the authenticated tenant's workflow runs |
 | POST | /api/v1/tenant/workflow-runs | Submit a workflow for the authenticated tenant |
 | GET | /api/v1/tenant/workflow-runs/{workflow_run_id} | Read a tenant-owned workflow |
 | GET | /api/v1/tenant/workflow-runs/{workflow_run_id}/events | Read redacted events for a tenant-owned workflow |
 | GET | /api/v1/tenant/task-runs/{task_run_id} | Read a tenant-owned task |
 | POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel a tenant-owned task with an expected_version guard |
+
+The tenant-only `GET /api/v1/tenant/metrics` endpoint returns workflow status counts, oldest active workflow age, outbox readiness/claim gauges, inbox backlog/age gauges, and expired lease counts from one read-only, repeatable-read PostgreSQL snapshot. It derives tenant scope from the validated credential, respects FORCE RLS, and uses only fixed status/state labels; it is not a platform-wide metric or a complete workflow SLO.
 
 The contract and its compatibility/security decisions are recorded in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). Task input is base64 encoded and limited to 1 MiB after decoding; the HTTP request body is capped at 2 MiB. Inspection responses never return task input or output bytes. Reusing a workflow-run ID returns a conflict; the v1 API does not promise idempotent replay.
 
@@ -88,6 +91,8 @@ Operational procedures cover coordinated PostgreSQL/JetStream backup and restore
 The server emits newline-delimited JSON logs. Set `RUST_LOG` to adjust the `tracing` filter; the default is `info`. HTTP requests create request-scoped tracing spans with a process-local request ID, method, response status, latency, and a W3C trace ID. Valid `traceparent`/`tracestate` headers are extracted from incoming requests; the server returns its own span context in response trace headers. Browser preflight allows only the explicit `authorization`, `content-type`, `traceparent`, and `tracestate` request headers, and exposes only the two trace response headers. Invalid trace context is ignored. Baggage, arbitrary request headers, URIs, query strings, request/response bodies, Bearer credentials, task payloads, and database URLs are not attached to spans or propagated.
 
 `GET /api/v1/metrics` exposes aggregate HTTP request, in-flight, 5xx, and abandoned-handler-future counters, plus bounded latency histograms partitioned by fixed operation classes (health, metrics, operator/tenant reads, submissions, mutations, and other). Per-operation response totals are split into the fixed 2xx, 3xx, 4xx, 5xx, and other classes. The in-flight gauge is released even when a handler future is dropped. Metrics are protected by the platform operator Bearer credential and remain unavailable in health-only mode; labels never contain raw paths, tenant/workflow/task identifiers, or credential values.
+
+`GET /api/v1/tenant/metrics` exposes a point-in-time, tenant-scoped view of workflow counts, active-workflow age, unpublished/ready outbox events, expired outbox claims, pending/processing inbox events and age, and expired inbox/task leases. It is authenticated with a tenant credential and cannot inspect other tenants. The endpoint intentionally returns aggregates only and sets `Cache-Control: no-store`; it does not provide completion percentiles, outcome attribution, cluster-wide totals, or an approved SLA.
 
 OpenTelemetry export is opt-in. Configure `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) to enable the default OTLP exporter; the protocol is `http/protobuf` via `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` (or `OTEL_EXPORTER_OTLP_PROTOCOL`). Set `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER=none` to disable export. An explicit `OTEL_TRACES_EXPORTER=otlp` without an endpoint is rejected at startup instead of silently targeting localhost. The OTLP exporter supports the standard `OTEL_EXPORTER_OTLP_HEADERS` environment variable; never put its values in logs or traces. Without an endpoint, the process creates local spans but makes no exporter connection.
 
