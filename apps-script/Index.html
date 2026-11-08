@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AetherFlow — Serverless Demo</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:#080d12;color:#eaf2f3}
+    *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{display:flex;flex-direction:column}
+    header{height:44px;flex:0 0 44px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 15px;border-bottom:1px solid #20313a;background:#0c151c}
+    .brand{font-size:11px;font-weight:850;letter-spacing:.1em}.demo{font-size:9px;font-weight:800;letter-spacing:.07em;color:#82e5d1;border:1px solid #28665a;border-radius:999px;padding:5px 9px;background:#102621}
+    main{flex:1;min-height:0;position:relative}iframe{display:block;width:100%;height:100%;border:0;background:#080d12}
+    #status{position:fixed;right:12px;bottom:10px;z-index:5;max-width:calc(100% - 24px);padding:6px 9px;border:1px solid #263b45;border-radius:8px;background:#0b141beF;color:#9eb1b7;font-size:10px;pointer-events:none}
+    @media(max-width:640px){header{height:40px;flex-basis:40px;padding:0 10px}.brand{font-size:9px}.demo{font-size:8px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">AETHERFLOW · SERVERLESS CONTROL PLANE</div>
+    <span class="demo">PUBLIC DEMO · SYNTHETIC WORKFLOWS</span>
+  </header>
+  <main>
+    <iframe id="aetherflow-frame" title="AetherFlow control-plane demo"
+      src="<?= appUrl ?>" referrerpolicy="no-referrer" allow="clipboard-read; clipboard-write"></iframe>
+  </main>
+  <div id="status" role="status" aria-live="polite">Preparing your isolated demo workspace…</div>
+  <script>
+    (function () {
+      "use strict";
+      var PAGES_ORIGIN = "https://pooya-labs.github.io";
+      var frame = document.getElementById("aetherflow-frame");
+      var status = document.getElementById("status");
+      var bootstrapping = false;
+      var ready = false;
+      var sessionToken = "";
+
+      function setStatus(value) { status.textContent = value; }
+      function postToFrame(message) {
+        if (frame.contentWindow) frame.contentWindow.postMessage(message, PAGES_ORIGIN);
+      }
+      function fail(message) {
+        ready = false;
+        sessionToken = "";
+        setStatus(message);
+        postToFrame({ type: "AETHERFLOW_BRIDGE_INIT_ERROR", message: message });
+      }
+
+      window.addEventListener("message", function (event) {
+        if (event.origin !== PAGES_ORIGIN || event.source !== frame.contentWindow) return;
+        var message = event.data;
+        if (!message || typeof message !== "object") return;
+
+        if (message.type === "AETHERFLOW_BRIDGE_HELLO") {
+          if (bootstrapping || ready || typeof message.clientId !== "string") return;
+          bootstrapping = true;
+          setStatus("Creating your isolated workspace…");
+          google.script.run
+            .withSuccessHandler(function (payload) {
+              if (!payload || typeof payload.sessionToken !== "string" || !payload.workspace) {
+                bootstrapping = false;
+                fail("The demo bootstrap returned an invalid response.");
+                return;
+              }
+              sessionToken = payload.sessionToken;
+              ready = true;
+              bootstrapping = false;
+              setStatus("Connected · private demo workspace · session expires in 6 hours");
+              postToFrame({ type: "AETHERFLOW_BRIDGE_INIT", payload: payload });
+            })
+            .withFailureHandler(function (error) {
+              bootstrapping = false;
+              var message = error && typeof error.message === "string"
+                ? error.message : "The demo workspace could not be prepared.";
+              fail(message);
+            })
+            .aetherflowBootstrap(message.clientId);
+          return;
+        }
+
+        if (message.type === "AETHERFLOW_BRIDGE_REQUEST") {
+          if (!ready || typeof message.id !== "string" || !message.request || typeof message.request !== "object") return;
+          var request = message.request;
+          if (JSON.stringify(request).length > 22000) {
+            postToFrame({ type: "AETHERFLOW_BRIDGE_RESPONSE", id: message.id, response: {
+              status: 413, body: { error: { code: "request_too_large", message: "The request is too large.", request_id: "wrapper" } }
+            }});
+            return;
+          }
+          google.script.run
+            .withSuccessHandler(function (response) {
+              postToFrame({ type: "AETHERFLOW_BRIDGE_RESPONSE", id: message.id, response: response });
+            })
+            .withFailureHandler(function () {
+              postToFrame({ type: "AETHERFLOW_BRIDGE_RESPONSE", id: message.id, response: {
+                status: 503, body: { error: { code: "demo_unavailable", message: "The demo service is temporarily unavailable.", request_id: "wrapper" } }
+              }});
+            })
+            .aetherflowApi({
+              method: request.method,
+              path: request.path,
+              body: request.body || {},
+              sessionToken: sessionToken
+            });
+        }
+      });
+
+      frame.addEventListener("load", function () {
+        if (!ready && !bootstrapping) setStatus("Connecting to Apps Script demo…");
+      });
+      window.addEventListener("beforeunload", function () {
+        ready = false;
+        bootstrapping = false;
+        sessionToken = "";
+      });
+    }());
+  </script>
+</body>
+</html>
