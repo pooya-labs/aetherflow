@@ -45,6 +45,111 @@ Workflow completion and API availability must have separate budgets. A user-prov
 4. Define black-box probes from the same network boundary as users; `GET /health` is process liveness only and must not be treated as API/database readiness.
 5. Add alert ownership, paging hours, maintenance exclusions, and a runbook link to every production alert.
 
+
+
+## Operational snapshots for review (not an SLO)
+
+The following read-only snapshots help an operator validate the current database state while designing a collector/exporter. They deliberately aggregate across rows and do not expose tenant, workflow, task or event identifiers. Execute them only through an approved reporting connection with the intended row-visibility policy. Do not grant BYPASSRLS to the application runtime role or weaken tenant policies for monitoring.
+
+~~~sql
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '5s';
+SET LOCAL lock_timeout = '1s';
+
+-- Terminal workflow outcomes and successful completion p95 for a recent window.
+SELECT
+    status,
+    count(*) AS workflows,
+    percentile_cont(0.95) WITHIN GROUP (
+        ORDER BY extract(epoch FROM (finished_at - created_at))
+    ) FILTER (WHERE status = 'succeeded') AS success_completion_p95_seconds
+FROM workflow_runs
+WHERE created_at >= clock_timestamp() - INTERVAL '30 minutes'
+  AND finished_at IS NOT NULL
+GROUP BY status
+ORDER BY status;
+
+-- Unpublished outbox volume, oldest age and expired claims.
+SELECT
+    count(*) FILTER (WHERE published_at IS NULL) AS unpublished_events,
+    max(extract(epoch FROM (clock_timestamp() - created_at)))
+        FILTER (WHERE published_at IS NULL) AS oldest_unpublished_seconds,
+    count(*) FILTER (
+        WHERE published_at IS NULL
+          AND claim_owner IS NOT NULL
+          AND claim_expires_at < clock_timestamp()
+    ) AS expired_claims
+FROM outbox_events;
+
+-- Inbox backlog age and processing leases that have expired.
+SELECT
+    count(*) FILTER (WHERE status <> 'processed') AS unprocessed_events,
+    max(extract(epoch FROM (clock_timestamp() - received_at)))
+        FILTER (WHERE status <> 'processed') AS oldest_unprocessed_seconds,
+    count(*) FILTER (
+        WHERE status = 'processing'
+          AND lease_expires_at < clock_timestamp()
+    ) AS expired_processing_leases
+FROM consumer_inbox;
+
+-- Running tasks whose durable lease is already expired.
+SELECT
+    count(*) FILTER (
+        WHERE status = 'running'
+          AND lease_expires_at < clock_timestamp()
+    ) AS expired_running_task_leases,
+    count(*) FILTER (WHERE status = 'failed') AS failed_tasks,
+    count(*) FILTER (WHERE status = 'timed_out') AS timed_out_tasks
+FROM task_runs;
+
+ROLLBACK;
+~~~
+
+The queries are snapshots, not durable time series. A production collector must poll at a documented interval, control query cost, retain timestamped samples, identify the observation source, and apply the approved tenant/privacy model. Workflow rows with status failed may reflect handler/business errors; do not count every failure as platform unavailability without an agreed attribution rule.
+
+### PromQL examples for the existing bounded HTTP metrics
+
+These expressions use the current fixed-cardinality metric names. They are examples for dashboard design; the scrape job must authenticate to the metrics endpoint and no numeric alert threshold is approved here.
+
+~~~promql
+# 5xx fraction by bounded operation class.
+sum by (operation) (
+  rate(aetherflow_http_operation_requests_failed_total[5m])
+)
+/
+clamp_min(
+  sum by (operation) (
+    rate(aetherflow_http_operation_requests_total[5m])
+  ),
+  1e-9
+)
+
+# p95 request latency by bounded operation class.
+histogram_quantile(
+  0.95,
+  sum by (operation, le) (
+    rate(aetherflow_http_operation_request_duration_seconds_bucket[5m])
+  )
+)
+
+# Response-class mix; 4xx includes authentication and rate-limit responses.
+sum by (operation, status_class) (
+  rate(aetherflow_http_operation_responses_total[5m])
+)
+
+# Handler futures dropped before a response was observed.
+sum by (operation) (
+  rate(aetherflow_http_operation_requests_abandoned_total[5m])
+)
+
+# Current API request concurrency.
+aetherflow_http_requests_in_flight
+~~~
+
+The abandoned-request counter does not identify whether a future was dropped by a client disconnect, upstream deadline, panic or process shutdown. It is a diagnostic signal, not a standalone availability SLI. The existing metrics do not yet provide durable workflow completion outcomes, queue-age gauges or platform-versus-handler failure attribution; use the SQL/exporter path until those signals are deliberately implemented and reviewed.
+
+See the [production deployment acceptance checklist](production-acceptance.md) for gateway, PostgreSQL, NATS, recovery, monitoring and owner sign-off gates.
+
 ## Decisions required from maintainers
 
 - Confirm or replace the candidate API availability and latency objectives.
