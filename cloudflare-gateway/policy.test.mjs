@@ -96,6 +96,27 @@ test("token bucket clamps clock rollback and never exceeds capacity", () => {
   assert.equal(capped.tokens, 3);
 });
 
+test("clock rollback cannot create a second refill interval", () => {
+  const rolledBack = consumeTokenBucket(
+    { tokens: 0, updated_at_ms: 10_000 },
+    1_000,
+    4,
+    3,
+  );
+  assert.equal(rolledBack.allowed, false);
+  assert.equal(rolledBack.updated_at_ms, 10_000);
+
+  const afterClockRecovers = consumeTokenBucket(
+    { tokens: rolledBack.tokens, updated_at_ms: rolledBack.updated_at_ms },
+    11_000,
+    4,
+    3,
+  );
+  assert.equal(afterClockRecovers.allowed, true);
+  assert.equal(afterClockRecovers.tokens, 2);
+  assert.equal(afterClockRecovers.updated_at_ms, 11_000);
+});
+
 test("client address is hashed before it becomes a Durable Object name", async () => {
   const secret = "server-side-high-entropy-ingress-token";
   const name = await clientBucketName("203.0.113.10", secret);
