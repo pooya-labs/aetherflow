@@ -4,6 +4,10 @@ This directory contains the edge ingress for the AetherFlow HTTP API. It is desi
 
 **Deployment status: source and CI tests are present; no live route is enabled.** The Cloudflare account currently has no active Zone or Tunnel, and AetherFlow has no verified API origin configured. The Worker configuration deliberately sets `workersDev: false` and disables preview URLs so an incomplete proxy is not publicly reachable.
 
+## Hosted CI evidence
+
+The dedicated [Cloudflare Gateway CI run](https://github.com/pooya-labs/aetherflow/actions/runs/42504504348) passed on source commit [`afe9850b9b34d24555eda781ceec72774c810e8f`](https://github.com/pooya-labs/aetherflow/commit/afe9850b9b34d24555eda781ceec72774c810e8f), with **13/13 Node policy tests passing**. JavaScript syntax checks and the static guard that verifies `workersDev: false`, `previewUrls: false`, and the unconfigured-origin placeholder also passed. The suite uses a deterministic mock for the Durable Object SQLite interface; it is not an acceptance test against a deployed Cloudflare Worker or real SQLite runtime.
+
 ## Request path
 
 ```text
