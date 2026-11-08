@@ -97,11 +97,17 @@ test("token bucket clamps clock rollback and never exceeds capacity", () => {
 });
 
 test("client address is hashed before it becomes a Durable Object name", async () => {
-  const name = await clientBucketName("203.0.113.10");
+  const secret = "server-side-high-entropy-ingress-token";
+  const name = await clientBucketName("203.0.113.10", secret);
+  const otherName = await clientBucketName("203.0.113.11", secret);
+  const rotatedName = await clientBucketName("203.0.113.10", "rotated-server-side-high-entropy-key");
   assert.equal(name.length, 64);
   assert.match(name, /^[a-f0-9]{64}$/);
   assert.notEqual(name, "203.0.113.10");
+  assert.notEqual(name, otherName);
+  assert.notEqual(name, rotatedName);
   await assert.rejects(() => clientBucketName(""));
+  await assert.rejects(() => clientBucketName("203.0.113.10", "short"));
 });
 
 test("proxy request strips spoofable identity and ingress headers", () => {
@@ -250,6 +256,7 @@ test("gateway replaces spoofed headers and preserves tenant Bearer credentials",
     );
     assert.equal(upstreamRequest.headers.has("x-forwarded-for"), false);
     assert.equal(upstreamRequest.headers.has("cf-connecting-ip"), false);
+    assert.equal(response.headers.get("cache-control"), "no-store");
   } finally {
     globalThis.fetch = originalFetch;
   }
