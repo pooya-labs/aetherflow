@@ -283,7 +283,7 @@ test("gateway replaces spoofed headers and preserves tenant Bearer credentials",
   }
 });
 
-test("Durable Object persists token-bucket state in SQLite", async () => {
+test("Durable Object uses the SQLite storage interface for bucket state", async () => {
   const state = {
     row: null,
     storage: {
