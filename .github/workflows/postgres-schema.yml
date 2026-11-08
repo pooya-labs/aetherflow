@@ -337,9 +337,11 @@ jobs:
                OR (version = 8 AND migration_name = '0008_dashboard_history_indexes.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$')
                OR (version = 9 AND migration_name = '0009_tenant_operational_metrics_index.sql'
+                   AND checksum_sha256 ~ '^[0-9a-f]{64}$')
+               OR (version = 10 AND migration_name = '0010_workflow_completion_metrics_index.sql'
                    AND checksum_sha256 ~ '^[0-9a-f]{64}$');
           ")"
-          test "$migration_count" = "9"
+          test "$migration_count" = "10"
           inbox_primary_key="$(psql --no-align --tuples-only --command "
             SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
             FROM information_schema.key_column_usage
@@ -419,10 +421,11 @@ jobs:
                 'worker_tenant_grants_worker_status_idx',
                 'workflow_runs_tenant_created_idx',
                 'outbox_events_tenant_history_idx',
-                'consumer_inbox_tenant_unprocessed_idx'
+                'consumer_inbox_tenant_unprocessed_idx',
+                'workflow_runs_tenant_finished_idx'
               );
           ")"
-          test "$index_count" = "29"
+          test "$index_count" = "30"
 
       - name: Create isolated database and test real JetStream transport
         run: |
