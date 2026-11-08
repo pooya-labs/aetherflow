@@ -8,6 +8,7 @@
   var parentOrigin = "";
   var nextId = 0;
   var bootstrapPromise = null;
+  var bootstrapTimeout = 0;
 
   function isAppsScriptRuntime() {
     try {
@@ -65,6 +66,8 @@
 
     if (message.type === "AETHERFLOW_BRIDGE_INIT_ERROR") {
       sessionReady = false;
+      if (bootstrapTimeout) root.clearTimeout(bootstrapTimeout);
+      bootstrapTimeout = 0;
       var failure = new Error(typeof message.message === "string" ? message.message : "Apps Script initialization failed.");
       pending.forEach(function (item) {
         root.clearTimeout(item.timeout);
@@ -72,6 +75,9 @@
       });
       pending.clear();
       if (bootstrapReject) bootstrapReject(failure);
+      bootstrapPromise = null;
+      bootstrapResolve = null;
+      bootstrapReject = null;
       return;
     }
 
@@ -81,12 +87,16 @@
           !payload.workspace || typeof payload.workspace.id !== "string") return;
       parentOrigin = event.origin;
       sessionReady = true;
+      if (bootstrapTimeout) root.clearTimeout(bootstrapTimeout);
+      bootstrapTimeout = 0;
       if (bootstrapResolve) bootstrapResolve({
         workspace: payload.workspace,
         user: payload.user || { name: "AetherFlow Demo Operator" },
         expiresInSeconds: Number(payload.expiresInSeconds) || 21600,
         mode: payload.mode || "apps-script-demo"
       });
+      bootstrapResolve = null;
+      bootstrapReject = null;
       return;
     }
 
@@ -124,10 +134,11 @@
         type: "AETHERFLOW_BRIDGE_HELLO",
         clientId: browserId()
       }, "*");
-      root.setTimeout(function () {
+      bootstrapTimeout = root.setTimeout(function () {
         if (sessionReady) return;
         var error = new Error("The Apps Script bridge timed out. Reload the public demo.");
         bootstrapPromise = null;
+        bootstrapTimeout = 0;
         bootstrapResolve = null;
         bootstrapReject = null;
         reject(error);
