@@ -35,6 +35,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let address = std::env::var("AETHERFLOW_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse::<SocketAddr>()?;
+    let ingress_token = match std::env::var("AETHERFLOW_INGRESS_TOKEN") {
+        Ok(token) => Some(token),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unable to read AETHERFLOW_INGRESS_TOKEN: {error}"),
+            )
+            .into());
+        }
+    };
+    validate_ingress_token(address, ingress_token.is_some())?;
     // Validate the external-listener security boundary before applying DDL.
     // Non-loopback addresses are never served over cleartext HTTP.
     let tls_config = load_http_tls_config(address).await?;
@@ -74,6 +86,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
             api::AppState::without_database()
         }
+    };
+
+    let state = if let Some(token) = ingress_token.as_deref() {
+        state.with_ingress_token(token)?
+    } else {
+        state
     };
 
     let rate_limit_burst = positive_u32_environment("AETHERFLOW_API_RATE_LIMIT_BURST", 30)?;
@@ -292,6 +310,22 @@ async fn load_http_tls_config_from_paths(
             )
             .into()
         })
+}
+
+/// Requires a dedicated ingress secret whenever the API listens beyond loopback.
+fn validate_ingress_token(
+    address: SocketAddr,
+    token_configured: bool,
+) -> Result<(), std::io::Error> {
+    if !address.ip().is_loopback() && !token_configured {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing non-loopback bind {address}: configure AETHERFLOW_INGRESS_TOKEN so the API only accepts traffic from the trusted gateway"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Returns true when TLS is required; rejects incomplete pairs and remote HTTP.
@@ -522,8 +556,18 @@ mod tests {
     use super::{
         ensure_rustls_crypto_provider, load_http_tls_config_from_paths, parse_database_ssl_mode,
         parse_positive_u32, postgres_pool_with_ssl_mode, should_export_otlp,
-        validate_http_transport, verify_runtime_database_role,
+        validate_http_transport, validate_ingress_token, verify_runtime_database_role,
     };
+
+    #[test]
+    fn non_loopback_listener_requires_a_gateway_ingress_secret() {
+        let public_address = "0.0.0.0:8080".parse().expect("valid public bind");
+        let loopback_address = "127.0.0.1:8080".parse().expect("valid loopback bind");
+
+        assert!(validate_ingress_token(public_address, false).is_err());
+        assert!(validate_ingress_token(public_address, true).is_ok());
+        assert!(validate_ingress_token(loopback_address, false).is_ok());
+    }
 
     #[test]
     fn rate_limit_environment_values_are_positive_integers() {
