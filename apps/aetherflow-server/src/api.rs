@@ -60,7 +60,8 @@ use aetherflow_runtime::repository::{MAX_TASK_PAYLOAD_BYTES, TaskInput};
 use aetherflow_runtime::workflow::{WorkflowDefinition, WorkflowTask};
 use aetherflow_storage_postgres::{
     DurableTaskRun, DurableWorkflowRun, PgMembershipRepository, PgTaskRepository,
-    PgTenantCredentialRepository, PgWorkflowCoordinator, StorageError, TenantContext,
+    PgTenantCredentialRepository, PgTenantOperationalMetricsRepository,
+    PgWorkflowCoordinator, StorageError, TenantContext, TenantOperationalMetrics,
     TenantPermission, WorkflowEventSummary, WorkflowRunSummary,
 };
 
@@ -125,6 +126,9 @@ impl HttpOperation {
         }
         if path == "/api/v1/metrics" && is_read {
             return Self::Metrics;
+        }
+        if path == "/api/v1/tenant/metrics" && is_read {
+            return Self::TenantRead;
         }
 
         let operator_resource = path == "/api/v1/workflow-runs"
@@ -818,6 +822,7 @@ struct AppDatabase {
     tasks: Arc<PgTaskRepository>,
     membership: PgMembershipRepository,
     tenant_credentials: PgTenantCredentialRepository,
+    operational_metrics: PgTenantOperationalMetricsRepository,
 }
 
 impl AppState {
@@ -860,6 +865,7 @@ impl AppState {
         let tasks = Arc::new(PgTaskRepository::from_pool(pool.clone()));
         let tenant_credentials = PgTenantCredentialRepository::from_pool(pool.clone());
         let membership = PgMembershipRepository::from_pool(pool.clone());
+        let operational_metrics = PgTenantOperationalMetricsRepository::from_pool(pool.clone());
         let coordinator = PgWorkflowCoordinator::new(Arc::clone(&tasks));
         Ok(Self {
             database: Some(Arc::new(AppDatabase {
@@ -867,6 +873,7 @@ impl AppState {
                 tasks,
                 membership,
                 tenant_credentials,
+                operational_metrics,
             })),
             api_token_hash: Some(api_token_hash),
             cors_allowed_origins: Arc::default(),
@@ -951,6 +958,7 @@ pub fn router(state: AppState) -> Router {
     // Tenant API keys are deliberately separate from the platform operator
     // credential. No tenant ID is accepted from request data or headers.
     let tenant_control_plane = Router::new()
+        .route("/api/v1/tenant/metrics", get(export_tenant_metrics))
         .route(
             "/api/v1/tenant/workflow-runs",
             get(list_tenant_workflow_runs).post(submit_tenant_workflow),
@@ -1091,6 +1099,184 @@ fn record_tenant_identity(context: &TenantContext) {
 
 fn record_auth_throttled() {
     tracing::Span::current().record("auth_throttled", true);
+}
+
+async fn export_tenant_metrics(
+    State(state): State<AppState>,
+    Extension(context): Extension<TenantContext>,
+) -> Result<Response, ApiError> {
+    require_tenant_permission(&context, TenantPermission::Read)?;
+    let metrics = state
+        .database()?
+        .operational_metrics
+        .snapshot(&context)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut response = render_tenant_operational_metrics(&metrics).into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn render_tenant_operational_metrics(metrics: &TenantOperationalMetrics) -> String {
+    let mut output = String::new();
+
+    const WORKFLOW_STATUSES: [&str; 6] = [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+    ];
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_workflow_runs Current workflow runs visible to the authenticated tenant."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_workflow_runs gauge")
+        .expect("write tenant metrics");
+    for status in WORKFLOW_STATUSES {
+        let count = metrics
+            .workflow_runs_by_status
+            .iter()
+            .find_map(|(stored_status, count)| (stored_status == status).then_some(*count))
+            .unwrap_or(0);
+        writeln!(
+            output,
+            "aetherflow_tenant_workflow_runs{{status=\"{status}\"}} {count}"
+        )
+        .expect("write tenant metrics");
+    }
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_oldest_active_workflow_age_seconds Age of the oldest pending or running workflow."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_oldest_active_workflow_age_seconds gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_oldest_active_workflow_age_seconds {:.6}",
+        metrics.oldest_active_workflow_age_seconds.max(0.0)
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_outbox_events Unpublished outbox events for the authenticated tenant."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_outbox_events gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_outbox_events{{state=\"pending\"}} {}",
+        metrics.outbox_pending_events
+    )
+    .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_outbox_events{{state=\"ready\"}} {}",
+        metrics.outbox_ready_events
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_outbox_oldest_ready_lag_seconds Delay of the oldest outbox event currently eligible for a claim."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_outbox_oldest_ready_lag_seconds gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_outbox_oldest_ready_lag_seconds {:.6}",
+        metrics.outbox_oldest_ready_lag_seconds.max(0.0)
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_outbox_expired_claims Unpublished outbox claims whose lease has expired."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_outbox_expired_claims gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_outbox_expired_claims {}",
+        metrics.outbox_expired_claims
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_inbox_events Inbox events not yet processed."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_inbox_events gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_inbox_events{{state=\"pending\"}} {}",
+        metrics.inbox_pending_events
+    )
+    .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_inbox_events{{state=\"processing\"}} {}",
+        metrics.inbox_processing_events
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_inbox_oldest_unprocessed_age_seconds Age of the oldest pending or processing inbox event."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_inbox_oldest_unprocessed_age_seconds gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_inbox_oldest_unprocessed_age_seconds {:.6}",
+        metrics.inbox_oldest_unprocessed_age_seconds.max(0.0)
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_inbox_expired_processing_leases Inbox processing leases whose expiry time has passed."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_inbox_expired_processing_leases gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_inbox_expired_processing_leases {}",
+        metrics.inbox_expired_processing_leases
+    )
+    .expect("write tenant metrics");
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_task_expired_running_leases Running task leases whose expiry time has passed."
+    )
+    .expect("write tenant metrics");
+    writeln!(output, "# TYPE aetherflow_tenant_task_expired_running_leases gauge")
+        .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_task_expired_running_leases {}",
+        metrics.task_expired_running_leases
+    )
+    .expect("write tenant metrics");
+
+    output
 }
 
 async fn export_metrics(State(state): State<AppState>) -> Response {
@@ -2368,8 +2554,9 @@ fn format_timestamp(value: SystemTime) -> String {
 mod tests {
     use super::{
         AppState, AuthFailureRateLimiter, HttpMetrics, HttpOperation, HttpResponseClass,
-        InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter, authorization_matches,
-        hash_api_token, request_source_ip, router,
+        InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter,
+        TenantOperationalMetrics, authorization_matches, hash_api_token,
+        render_tenant_operational_metrics, request_source_ip, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -2745,6 +2932,44 @@ mod tests {
             .await
             .expect("metrics response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn tenant_operational_metrics_render_only_fixed_low_cardinality_labels() {
+        let metrics = TenantOperationalMetrics {
+            workflow_runs_by_status: vec![
+                ("running".to_owned(), 2),
+                ("succeeded".to_owned(), 5),
+            ],
+            oldest_active_workflow_age_seconds: 12.5,
+            outbox_pending_events: 4,
+            outbox_ready_events: 3,
+            outbox_oldest_ready_lag_seconds: 7.25,
+            outbox_expired_claims: 1,
+            inbox_pending_events: 2,
+            inbox_processing_events: 1,
+            inbox_oldest_unprocessed_age_seconds: 33.0,
+            inbox_expired_processing_leases: 1,
+            task_expired_running_leases: 2,
+        };
+        let rendered = render_tenant_operational_metrics(&metrics);
+
+        assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"running\"} 2"));
+        assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"failed\"} 0"));
+        assert!(rendered.contains("aetherflow_tenant_outbox_events{state=\"pending\"} 4"));
+        assert!(rendered.contains("aetherflow_tenant_inbox_events{state=\"processing\"} 1"));
+        assert!(rendered.contains("aetherflow_tenant_task_expired_running_leases 2"));
+        assert!(!rendered.contains("tenant_id"));
+        assert!(!rendered.contains("workflow_run_id"));
+        assert!(!rendered.contains("event_id"));
+    }
+
+    #[test]
+    fn tenant_metrics_route_is_tenant_read_classified() {
+        assert_eq!(
+            HttpOperation::classify(&Method::GET, "/api/v1/tenant/metrics"),
+            HttpOperation::TenantRead
+        );
     }
 
     #[test]
