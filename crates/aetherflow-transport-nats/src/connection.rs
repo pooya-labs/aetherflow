@@ -195,16 +195,11 @@ fn env_bool(name: &'static str) -> Result<Option<bool>, NatsConnectionError> {
     match env::var(name) {
         Ok(value) => parse_bool(name, &value).map(Some),
         Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => {
-            Err(NatsConnectionError::InvalidBoolean { name })
-        }
+        Err(env::VarError::NotUnicode(_)) => Err(NatsConnectionError::InvalidBoolean { name }),
     }
 }
 
-fn parse_bool(
-    name: &'static str,
-    value: &str,
-) -> Result<bool, NatsConnectionError> {
+fn parse_bool(name: &'static str, value: &str) -> Result<bool, NatsConnectionError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
