@@ -35,7 +35,7 @@ AetherFlow will **not** claim universal exactly-once execution. External side ef
 | Event transport | NATS JetStream (after core semantics are proven) |
 | Extensions | Wasmtime |
 | Observability | OpenTelemetry |
-| Dashboard | TypeScript UI (later phase) |
+| Dashboard | Static read-only browser console (implemented) |
 | Deployment | Docker Compose; Kubernetes only after operational needs are demonstrated |
 
 Technology choices are provisional until validated by implementation and recorded in architecture decision records.
@@ -65,9 +65,9 @@ The contract and its compatibility/security decisions are recorded in [ADR-0010]
 
 **Security boundary:** `AETHERFLOW_API_TOKEN` protects platform/operator compatibility routes; tenant routes authenticate separately against stored tenant credentials and derive tenant identity server-side. `AETHERFLOW_MIGRATION_DATABASE_URL` is the DDL/migration owner pool; `DATABASE_URL` must be a restricted non-owner runtime role with no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, protected-table ownership, public-schema CREATE, REPLICATION, or membership in any other PostgreSQL role. Startup verifies this role and ENABLE + FORCE RLS on all ten protected tables. PostgreSQL uses Rustls with native CA roots and requires TLS by default. The HTTP listener defaults to 127.0.0.1:8080; plaintext HTTP is loopback-only, and non-loopback binds require `AETHERFLOW_TLS_CERT_PATH` and `AETHERFLOW_TLS_KEY_PATH` with valid PEM material. PostgreSQL TLS chain and hostname verification passed hosted integration tests against a live PostgreSQL 18 fixture (run [41609705469](https://github.com/pooya16pg-spec/aetherflow/actions/runs/41609705469)). Transaction-local RLS GUCs are app-controlled context and do not protect against arbitrary SQL execution or SQL injection. Browser access is disabled by default. Set `AETHERFLOW_CORS_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins (for example, `https://pooya-labs.github.io`); wildcard origins, paths, cookies, and credentialed CORS are not supported.
 
-## Read-only dashboard
+## Product website and read-only console
 
-Open the [AetherFlow dashboard](https://pooya-labs.github.io/aetherflow/dashboard/) to browse workflow runs, task snapshots, active workers, and redacted event history. It is a read-only browser client; it does not submit or cancel work. The Bearer token is held in page memory only and is not persisted to local storage, cookies, or the URL. Use HTTPS for remote APIs.
+The public [AetherFlow product site](https://pooya-labs.github.io/aetherflow/) documents the v1 control-plane contract, architecture, recovery evidence, developer setup and release status. The [read-only browser console](https://pooya-labs.github.io/aetherflow/dashboard/) connects to an API endpoint that you operate; it is not a hosted backend. It can inspect workflow runs, task snapshots, active workers and redacted event history, but it does not submit or cancel work. The Bearer token is held in page memory only and is not persisted to local storage, cookies or the URL. Use HTTPS for remote APIs.
 
 To connect a hosted API, configure `AETHERFLOW_CORS_ALLOWED_ORIGINS=https://pooya-labs.github.io` on the API server and restart it. The origin must match exactly. Operator listing is intentionally limited to the reserved `legacy-default` tenant; tenant credentials list only their own runs. Event responses never include raw outbox payloads.
 

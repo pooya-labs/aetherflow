@@ -3,155 +3,100 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#080d18">
-  <meta name="description" content="Read-only AetherFlow workflow, task, worker, and event observability dashboard.">
-  <title>AetherFlow Dashboard</title>
+  <meta name="theme-color" content="#080d12">
+  <meta name="description" content="A read-only AetherFlow control-plane console. Connect to your own API to inspect workflow runs, tasks, events and workers.">
+  <title>Control console — AetherFlow</title>
   <style>
-    :root {
-      color-scheme: dark;
-      --bg:#080d18;--bg-soft:#0c1423;--panel:rgba(17,28,47,.82);--panel-strong:#111d31;
-      --border:rgba(151,180,218,.14);--text:#f0f5ff;--muted:#9aabc5;--subtle:#6e819f;
-      --cyan:#63e6df;--blue:#79aaff;--violet:#b69aff;--green:#69ddb1;--amber:#ffc879;
-      --red:#ff8798;--shadow:0 24px 80px rgba(0,0,0,.24);--radius:20px;
-    }
-    html[data-theme="light"] {
-      color-scheme:light;--bg:#f4f7fc;--bg-soft:#eaf0f9;--panel:rgba(255,255,255,.9);
-      --panel-strong:#fff;--border:rgba(53,80,119,.15);--text:#14223a;--muted:#536782;
-      --subtle:#7487a2;--cyan:#087f83;--blue:#2862c7;--violet:#7552bb;--green:#14845c;
-      --amber:#a86400;--red:#c43e56;--shadow:0 22px 60px rgba(44,66,104,.11);
-    }
-    *{box-sizing:border-box}
-    body{margin:0;min-width:320px;background:radial-gradient(ellipse at 84% 0%,rgba(81,128,255,.14),transparent 32rem),radial-gradient(ellipse at 5% 32%,rgba(71,215,200,.07),transparent 28rem),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.55}
-    button,input,select{font:inherit}
-    button{cursor:pointer}
-    a{color:inherit;text-decoration:none}
-    .shell{width:min(1280px,calc(100% - 40px));margin:0 auto}
-    .topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(18px);border-bottom:1px solid var(--border)}
-    .nav{height:72px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-    .brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.04em}
-    .mark{width:34px;height:34px;display:grid;place-items:center;border-radius:11px;color:#07131c;background:linear-gradient(135deg,var(--cyan),var(--blue) 58%,var(--violet));font-size:17px}
-    .brand small{display:block;color:var(--subtle);font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}
-    .nav-right{display:flex;align-items:center;gap:10px}
-    .read-only{font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 30%,transparent);background:color-mix(in srgb,var(--green) 8%,transparent);padding:6px 10px;border-radius:999px}
-    .icon-btn,.btn{border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:11px;min-height:38px;padding:8px 12px;font-size:12px;font-weight:750}
-    .icon-btn{width:38px;padding:0;display:grid;place-items:center}
-    .btn.primary{background:linear-gradient(110deg,#63e6df,#8ad7ff);color:#07151c;border:0}
-    .btn.ghost{background:transparent;color:var(--muted)}
-    .btn:disabled{opacity:.45;cursor:not-allowed}
-    .layout{padding:26px 0 64px;display:grid;grid-template-columns:310px minmax(0,1fr);gap:20px;align-items:start}
-    .panel{background:linear-gradient(155deg,color-mix(in srgb,var(--panel-strong) 96%,transparent),color-mix(in srgb,var(--bg-soft) 95%,transparent));border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
-    .connect{padding:19px;position:sticky;top:92px}
-    .section-kicker{color:var(--cyan);font-size:10px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}
-    h1,h2,h3,p{margin-top:0}
-    h1{font-size:24px;letter-spacing:-.05em;margin:6px 0 7px}
-    h2{font-size:17px;letter-spacing:-.035em;margin:0}
-    h3{font-size:13px;letter-spacing:-.02em;margin:0}
-    .muted{color:var(--muted)}
-    .subtle{color:var(--subtle)}
-    .small{font-size:11px}
-    .field{display:grid;gap:6px;margin:13px 0}
-    label{font-size:11px;color:var(--muted);font-weight:750}
-    input,select{width:100%;min-height:40px;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text);outline:none;font-size:12px}
-    input:focus,select:focus{border-color:color-mix(in srgb,var(--cyan) 70%,var(--border));box-shadow:0 0 0 3px color-mix(in srgb,var(--cyan) 12%,transparent)}
-    input::placeholder{color:var(--subtle)}
-    .row{display:flex;align-items:center;gap:8px}
-    .row>*{min-width:0}
-    .row .grow{flex:1}
-    .connect-actions{display:flex;gap:8px;margin-top:16px}
-    .connect-actions .btn{flex:1}
-    .security-note{margin:16px 0 0;padding:12px;border-radius:12px;border:1px solid var(--border);background:color-mix(in srgb,var(--cyan) 4%,transparent);color:var(--muted);font-size:10px;line-height:1.65}
-    .security-note b{color:var(--text)}
-    .help-link{display:inline-block;margin-top:8px;color:var(--cyan);font-size:11px;font-weight:700}
-    .status-line{display:flex;align-items:center;gap:8px;padding-top:13px;margin-top:13px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
-    .dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--subtle)}
-    .dot.good{background:var(--green);box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 13%,transparent)}
-    .dot.bad{background:var(--red)}
-    .main{min-width:0}
-    .welcome{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin:2px 0 20px}
-    .welcome p{margin:5px 0 0;color:var(--muted);font-size:12px}
-    .welcome-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
-    .stat{padding:16px}
-    .stat .label{font-size:10px;color:var(--muted);font-weight:750}
-    .stat strong{display:block;font-size:25px;letter-spacing:-.06em;margin:3px 0}
-    .stat small{font-size:10px;color:var(--subtle)}
-    .content-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);gap:16px;align-items:start}
-    .card{padding:17px;min-width:0}
-    .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
-    .filters{display:flex;align-items:center;gap:8px;margin-bottom:12px}
-    .filters select{width:auto;min-width:125px;min-height:34px;padding:6px 9px;font-size:11px}
-    .run-list{display:grid;gap:8px}
-    .run-item{width:100%;text-align:left;padding:12px;border:1px solid var(--border);border-radius:13px;background:color-mix(in srgb,var(--panel) 60%,transparent);color:var(--text);transition:border-color .15s,transform .15s}
-    .run-item:hover{border-color:color-mix(in srgb,var(--cyan) 48%,var(--border));transform:translateY(-1px)}
-    .run-item.active{border-color:var(--cyan);background:color-mix(in srgb,var(--cyan) 7%,var(--panel))}
-    .run-top{display:flex;justify-content:space-between;gap:8px;align-items:center}
-    .run-id{font-size:12px;font-weight:800;overflow-wrap:anywhere}
-    .run-workflow{font-size:10px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
-    .run-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--subtle);font-size:10px;margin-top:9px}
-    .pill{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-size:9px;font-weight:850;text-transform:uppercase;letter-spacing:.05em;background:color-mix(in srgb,var(--blue) 11%,transparent);color:var(--blue);border:1px solid color-mix(in srgb,var(--blue) 20%,transparent);white-space:nowrap}
-    .pill.succeeded{color:var(--green);background:color-mix(in srgb,var(--green) 9%,transparent);border-color:color-mix(in srgb,var(--green) 25%,transparent)}
-    .pill.failed,.pill.cancelled,.pill.timed_out{color:var(--red);background:color-mix(in srgb,var(--red) 8%,transparent);border-color:color-mix(in srgb,var(--red) 23%,transparent)}
-    .pill.pending,.pill.retry_waiting{color:var(--amber);background:color-mix(in srgb,var(--amber) 8%,transparent);border-color:color-mix(in srgb,var(--amber) 24%,transparent)}
-    .list-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px}
-    .detail-empty{min-height:260px;display:grid;place-items:center;text-align:center;color:var(--subtle);font-size:12px;padding:24px}
-    .detail-head{padding-bottom:13px;border-bottom:1px solid var(--border);margin-bottom:13px}
-    .detail-title{font-size:14px;font-weight:850;overflow-wrap:anywhere}
-    .detail-subtitle{font-size:10px;color:var(--muted);margin-top:3px}
-    .detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-    .detail-cell{padding:10px;border-radius:11px;background:color-mix(in srgb,var(--bg-soft) 70%,transparent);border:1px solid var(--border);min-width:0}
-    .detail-cell small{display:block;color:var(--subtle);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
-    .detail-cell b{display:block;margin-top:4px;font-size:11px;overflow-wrap:anywhere}
-    .subsection{margin-top:18px}
-    .subsection-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}
-    .task-list,.event-list,.worker-list{display:grid;gap:7px}
-    .task-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--panel) 55%,transparent)}
-    .task-id{font-size:10px;font-weight:800;overflow-wrap:anywhere}
-    .task-row button{border:0;background:none;padding:0;color:var(--cyan);text-align:right;font-size:10px;font-weight:800}
-    .event-row{position:relative;padding:10px 10px 10px 18px;border-left:1px solid var(--border);margin-left:5px}
-    .event-row:before{content:"";position:absolute;left:-4px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--cyan)}
-    .event-name{font-size:10px;font-weight:850;overflow-wrap:anywhere}
-    .event-meta{font-size:9px;color:var(--subtle);margin-top:3px}
-    .workers{margin-top:16px}
-    .worker-row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px;border:1px solid var(--border);border-radius:10px}
-    .worker-row b{font-size:10px;overflow-wrap:anywhere}
-    .worker-row small{font-size:9px;color:var(--subtle)}
-    .notice{padding:12px 14px;border:1px solid color-mix(in srgb,var(--amber) 27%,transparent);background:color-mix(in srgb,var(--amber) 7%,transparent);color:var(--muted);border-radius:12px;font-size:10px;line-height:1.6;margin-bottom:14px}
-    .notice strong{color:var(--text)}
-    .error{color:var(--red)}
-    .success{color:var(--green)}
-    .empty{padding:20px;text-align:center;color:var(--subtle);font-size:11px;border:1px dashed var(--border);border-radius:12px}
-    .hidden{display:none!important}
-    .footer{padding:20px 0 32px;color:var(--subtle);font-size:10px;display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--border)}
-    @media(max-width:1020px){.layout{grid-template-columns:280px minmax(0,1fr)}.content-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:720px){.shell{width:min(100% - 28px,600px)}.layout{display:flex;flex-direction:column;padding-top:16px}.connect{position:static;width:100%}.main{width:100%}.welcome{align-items:flex-start;flex-direction:column}.welcome-actions{width:100%}.welcome-actions .btn{flex:1}.stats{gap:8px}.stat{padding:12px}.stat strong{font-size:22px}.card{padding:14px}.footer{flex-direction:column}}
+    :root{color-scheme:dark;--bg:#080d12;--bg2:#0b131a;--surface:#0e1820;--surface2:#111e28;--line:rgba(163,190,205,.13);--line2:rgba(163,190,205,.23);--text:#eff7f7;--muted:#a0b1b8;--subtle:#71858f;--mint:#75e6d0;--blue:#80b6ee;--violet:#b5a4f2;--amber:#e8c27c;--red:#f08c8c;--shadow:0 22px 70px rgba(0,0,0,.32)}
+    html[data-theme="light"]{color-scheme:light;--bg:#f5f8f7;--bg2:#edf3f1;--surface:#fff;--surface2:#f7faf9;--line:rgba(28,55,58,.12);--line2:rgba(28,55,58,.2);--text:#122426;--muted:#52676a;--subtle:#718587;--mint:#087f71;--blue:#346fac;--violet:#7159b1;--amber:#95651d;--red:#b64449;--shadow:0 22px 60px rgba(31,60,60,.1)}
+    *{box-sizing:border-box}body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:14px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.01em}
+    body:before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 84% 0%,rgba(117,230,208,.08),transparent 35rem),linear-gradient(rgba(122,163,166,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(122,163,166,.025) 1px,transparent 1px);background-size:auto,72px 72px,72px 72px}
+    a{color:inherit;text-decoration:none}button,input,select{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+    .shell{width:min(1440px,calc(100% - 44px));margin:0 auto}.topbar{position:sticky;top:0;z-index:20;height:70px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(18px)}
+    .nav{height:100%;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:15px;letter-spacing:-.045em}.brand-mark{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(117,230,208,.2);border-radius:11px;color:var(--mint);background:rgba(117,230,208,.07)}.brand-mark svg{width:21px;height:21px}.brand small{display:block;margin-top:-3px;color:var(--subtle);font-size:8px;letter-spacing:.15em;text-transform:uppercase}
+    .nav-right{display:flex;align-items:center;gap:9px}.nav-badge,.read-only{padding:5px 9px;border:1px solid var(--line);border-radius:99px;color:var(--muted);font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
+    .read-only{color:var(--mint);border-color:rgba(117,230,208,.22);background:rgba(117,230,208,.05)}
+    .btn,.icon-btn{min-height:36px;padding:0 12px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);color:var(--text);font-size:10px;font-weight:750;transition:border-color .18s,transform .18s}
+    .btn:hover:not(:disabled),.icon-btn:hover{border-color:var(--mint);transform:translateY(-1px)}.btn.primary{background:linear-gradient(115deg,var(--mint),#a3eadc);border-color:transparent;color:#06201d}.btn.ghost{background:transparent;color:var(--muted)}.btn:disabled{opacity:.38;cursor:not-allowed;transform:none}
+    .icon-btn{width:36px;padding:0;display:grid;place-items:center;font-size:15px}
+    .layout{display:grid;grid-template-columns:310px minmax(0,1fr);gap:20px;padding-top:25px;padding-bottom:34px;align-items:start}
+    .panel{min-width:0;border:1px solid var(--line);border-radius:17px;background:linear-gradient(150deg,var(--surface),color-mix(in srgb,var(--surface) 72%,transparent));box-shadow:0 10px 32px rgba(0,0,0,.06)}
+    .connect{position:sticky;top:91px;padding:20px}
+    .section-kicker{color:var(--mint);font-size:9px;font-weight:850;letter-spacing:.16em;text-transform:uppercase}
+    h1,h2,h3,p{margin-top:0}h1{margin:8px 0 5px;font-size:24px;letter-spacing:-.06em;line-height:1.1}h2{margin:0;font-size:14px;letter-spacing:-.03em}h3{font-size:12px}
+    .muted{color:var(--muted)}.subtle{color:var(--subtle)}.small{font-size:10px;line-height:1.7}
+    .connection-copy{margin:0 0 20px;color:var(--muted);font-size:10px;line-height:1.7}
+    .field{display:grid;gap:6px;margin:13px 0}.field label{font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+    input,select{width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--line2);border-radius:10px;background:var(--bg2);color:var(--text);font-size:11px}
+    input::placeholder{color:var(--subtle)}select{cursor:pointer}
+    .connect-actions{display:flex;gap:8px;margin-top:17px}.connect-actions .btn{flex:1}
+    .security-note{margin-top:19px;padding:13px;border:1px solid rgba(117,230,208,.16);border-radius:12px;background:rgba(117,230,208,.045);color:var(--muted);font-size:9px;line-height:1.75}
+    .security-note b{display:block;margin-bottom:4px;color:var(--text);font-size:10px}
+    .help-link{display:inline-block;margin-top:7px;color:var(--mint);font-size:9px;font-weight:760}
+    .status-line{display:flex;align-items:center;gap:8px;padding-top:17px;margin-top:16px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}
+    .dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--subtle)}.dot.good{background:var(--mint);box-shadow:0 0 0 4px rgba(117,230,208,.12)}.dot.bad{background:var(--red)}
+    .main{min-width:0}.welcome{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:2px 0 18px}.welcome p{margin:6px 0 0;color:var(--muted);font-size:11px}.welcome-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .notice{display:flex;gap:11px;align-items:flex-start;padding:13px 15px;border:1px solid rgba(232,194,124,.2);border-radius:12px;background:rgba(232,194,124,.045);color:var(--muted);font-size:9px;line-height:1.7;margin-bottom:14px}
+    .notice-mark{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:8px;color:var(--amber);background:rgba(232,194,124,.1);font-weight:900}
+    .notice strong{color:var(--text)}.notice code{color:var(--amber);font:9px ui-monospace,monospace;overflow-wrap:anywhere}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+    .stat{padding:15px}.stat .label{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.08em;text-transform:uppercase}.stat strong{display:block;font-size:24px;letter-spacing:-.06em;margin:4px 0}.stat small{font-size:9px;color:var(--subtle)}
+    .content-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(310px,.95fr);gap:13px;align-items:start}
+    .card{padding:17px;min-width:0}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+    .card-head-title{display:flex;align-items:center;gap:10px}.card-icon{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--line);border-radius:9px;color:var(--mint);background:rgba(117,230,208,.045);font-size:13px}
+    .filters{display:flex;align-items:center;gap:8px;margin-bottom:12px}.filters select{width:auto;min-width:125px;min-height:34px;padding:6px 9px;font-size:10px}
+    .run-list{display:grid;gap:8px}.run-item{width:100%;text-align:left;padding:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface2) 65%,transparent);color:var(--text);transition:border-color .15s,transform .15s}.run-item:hover{border-color:color-mix(in srgb,var(--mint) 48%,var(--line));transform:translateY(-1px)}.run-item.active{border-color:var(--mint);background:rgba(117,230,208,.05)}
+    .run-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.run-id{font-size:11px;font-weight:850;overflow-wrap:anywhere}.run-workflow{font-size:9px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.run-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--subtle);font-size:9px;margin-top:9px}
+    .pill{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-size:8px;font-weight:850;text-transform:uppercase;letter-spacing:.06em;background:rgba(128,182,238,.08);color:var(--blue);border:1px solid rgba(128,182,238,.16);white-space:nowrap}
+    .pill.succeeded,.pill.active{color:var(--mint);background:rgba(117,230,208,.06);border-color:rgba(117,230,208,.19)}
+    .pill.failed,.pill.cancelled,.pill.timed_out{color:var(--red);background:rgba(240,140,140,.06);border-color:rgba(240,140,140,.18)}
+    .pill.pending,.pill.retry_waiting{color:var(--amber);background:rgba(232,194,124,.06);border-color:rgba(232,194,124,.18)}
+    .list-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px}.list-foot small{color:var(--subtle);font-size:9px}
+    .detail-empty{min-height:260px;display:grid;place-items:center;text-align:center;color:var(--subtle);font-size:10px;line-height:1.7;padding:24px}
+    .detail-empty-inner{max-width:230px}.detail-empty-icon{width:43px;height:43px;display:grid;place-items:center;margin:0 auto 12px;border:1px solid var(--line);border-radius:14px;color:var(--mint);background:rgba(117,230,208,.05);font-size:17px}
+    .detail-head{padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:13px}.detail-title{font-size:13px;font-weight:850;overflow-wrap:anywhere}.detail-subtitle{font-size:9px;color:var(--muted);margin-top:3px}
+    .detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.detail-cell{padding:10px;border-radius:10px;background:color-mix(in srgb,var(--bg2) 70%,transparent);border:1px solid var(--line);min-width:0}
+    .detail-cell small{display:block;color:var(--subtle);font-size:8px;font-weight:850;text-transform:uppercase;letter-spacing:.07em}.detail-cell b{display:block;margin-top:4px;font-size:10px;overflow-wrap:anywhere}
+    .subsection{margin-top:17px}.subsection-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.task-list,.event-list,.worker-list{display:grid;gap:7px}
+    .task-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--surface2) 55%,transparent)}
+    .task-id{font-size:9px;font-weight:850;overflow-wrap:anywhere}.task-row button{border:0;background:none;padding:0;color:var(--mint);text-align:right;font-size:9px;font-weight:800}
+    .event-row{position:relative;padding:9px 9px 9px 17px;border-left:1px solid var(--line2);margin-left:5px}.event-row:before{content:"";position:absolute;left:-4px;top:13px;width:7px;height:7px;border-radius:50%;background:var(--mint)}
+    .event-name{font-size:9px;font-weight:850;overflow-wrap:anywhere}.event-meta{font-size:8px;color:var(--subtle);margin-top:3px}
+    .workers{margin-top:14px}.worker-row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px}.worker-row b{font-size:9px;overflow-wrap:anywhere}.worker-row small{font-size:8px;color:var(--subtle)}
+    .empty{padding:22px;text-align:center;color:var(--subtle);font-size:10px;line-height:1.7;border:1px dashed var(--line2);border-radius:12px}.error{color:var(--red)}.success{color:var(--mint)}.hidden{display:none!important}
+    .footer{padding:19px 0 30px;color:var(--subtle);font-size:9px;display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line)}
+    @media(max-width:1100px){.layout{grid-template-columns:280px minmax(0,1fr)}.content-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:760px){.shell{width:min(100% - 28px,620px)}.layout{display:flex;flex-direction:column;padding-top:15px}.connect{position:static;width:100%}.main{width:100%}.welcome{align-items:flex-start;flex-direction:column}.welcome-actions{width:100%}.welcome-actions .btn{flex:1}.stats{gap:8px}.stat{padding:12px}.stat strong{font-size:21px}.card{padding:13px}.footer{flex-direction:column}.nav-right .nav-badge{display:none}}
     @media(max-width:390px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-grid{grid-template-columns:1fr}.nav{height:64px}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important}}
   </style>
 </head>
 <body>
 <header class="topbar">
   <div class="shell nav">
     <a class="brand" href="../" aria-label="AetherFlow home">
-      <span class="mark">A</span>
+      <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18 9.2 5.5l3 6.2 2.1-4.2L20.5 18M3.5 18h17"/></svg></span>
       <span>AetherFlow<small>Control plane</small></span>
     </a>
     <div class="nav-right">
-      <span class="read-only">Read-only</span>
+      <span class="nav-badge">API v1</span>
+      <span class="read-only">Read-only console</span>
       <button class="icon-btn" id="themeButton" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button>
-      <a class="btn ghost" href="../">← Project site</a>
+      <a class="btn ghost" href="../">← Product site</a>
     </div>
   </div>
 </header>
 
 <main class="shell layout">
   <aside class="panel connect" aria-labelledby="connectionTitle">
-    <div class="section-kicker">Connection</div>
-    <h1 id="connectionTitle">Connect API</h1>
-    <p class="muted small">Use a deployed HTTPS control-plane endpoint and a read-capable credential.</p>
+    <div class="section-kicker">Your infrastructure</div>
+    <h1 id="connectionTitle">Connect control plane</h1>
+    <p class="connection-copy">Connect this browser to an AetherFlow API you operate. This public page does not include a hosted workflow backend.</p>
 
     <form id="connectionForm">
       <div class="field">
         <label for="apiBase">API base URL</label>
-        <input id="apiBase" name="apiBase" type="url" placeholder="https://api.example.com" autocomplete="url" required>
+        <input id="apiBase" name="apiBase" type="url" placeholder="https://api.your-domain.com" autocomplete="url" required>
       </div>
       <div class="field">
         <label for="scope">Credential scope</label>
@@ -162,7 +107,7 @@
       </div>
       <div class="field">
         <label for="apiToken">Bearer token</label>
-        <input id="apiToken" name="apiToken" type="password" placeholder="Paste token for this session" autocomplete="off" spellcheck="false" required>
+        <input id="apiToken" name="apiToken" type="password" placeholder="Used for this tab only" autocomplete="off" spellcheck="false" required>
       </div>
       <div class="connect-actions">
         <button class="btn primary" id="connectButton" type="submit">Connect</button>
@@ -171,22 +116,22 @@
     </form>
 
     <div class="security-note">
-      <b>Credential safety</b><br>
-      The token stays in this tab's memory only. It is never written to local storage, cookies, or the URL. Requests omit cookies and redirects.
-      <br><a class="help-link" href="https://github.com/pooya-labs/aetherflow#api-contract" target="_blank" rel="noreferrer">API and security setup ↗</a>
+      <b>Session-only credentials</b>
+      The token stays in JavaScript memory for this tab. It is never written to local storage, cookies or the URL. Requests omit cookies and reject redirects.
+      <br><a class="help-link" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/development.md" target="_blank" rel="noreferrer">API and security setup ↗</a>
     </div>
     <div class="status-line" aria-live="polite">
       <span class="dot" id="connectionDot"></span>
-      <span id="connectionStatus">Not connected</span>
+      <span id="connectionStatus">Not connected · no API requests sent</span>
     </div>
   </aside>
 
   <section class="main" aria-label="Workflow dashboard">
     <div class="welcome">
       <div>
-        <div class="section-kicker">Observability / M07</div>
-        <h1>Workflow overview</h1>
-        <p id="welcomeText">Connect to your AetherFlow control plane to load live runs and event history.</p>
+        <div class="section-kicker">Operations / workflow visibility</div>
+        <h1>Control console</h1>
+        <p id="welcomeText">Connect an API to inspect live workflow runs, task snapshots, redacted events and active workers.</p>
       </div>
       <div class="welcome-actions">
         <button class="btn" id="refreshButton" type="button" disabled>↻ Refresh</button>
@@ -195,9 +140,8 @@
     </div>
 
     <div class="notice">
-      <strong>Browser access requires server configuration.</strong>
-      Add this exact origin to <code>AETHERFLOW_CORS_ALLOWED_ORIGINS</code> on the API server:
-      <code>https://pooya-labs.github.io</code>. No wildcard origins or cookie credentials are used.
+      <span class="notice-mark">i</span>
+      <span><strong>Self-hosted API required.</strong> For remote browser access, allow this exact origin in <code>AETHERFLOW_CORS_ALLOWED_ORIGINS</code>: <code>https://pooya-labs.github.io</code>. CORS is not authentication; the Bearer credential is still required.</span>
     </div>
 
     <div class="stats" aria-label="Loaded workflow counts">
@@ -210,42 +154,31 @@
     <div class="content-grid">
       <section class="panel card" aria-labelledby="runsTitle">
         <div class="card-head">
-          <div><div class="section-kicker">Executions</div><h2 id="runsTitle">Workflow runs</h2></div>
+          <div class="card-head-title"><span class="card-icon">≋</span><div><div class="section-kicker">Execution history</div><h2 id="runsTitle">Workflow runs</h2></div></div>
           <span class="pill" id="scopePill">Disconnected</span>
         </div>
         <div class="filters">
           <select id="statusFilter" aria-label="Filter workflow status" disabled>
-            <option value="">All statuses</option>
-            <option value="pending">Pending</option>
-            <option value="running">Running</option>
-            <option value="succeeded">Succeeded</option>
-            <option value="failed">Failed</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="timed_out">Timed out</option>
+            <option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="succeeded">Succeeded</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="timed_out">Timed out</option>
           </select>
-          <button class="btn ghost" id="applyFilter" type="button" disabled>Apply</button>
+          <button class="btn ghost" id="applyFilter" type="button" disabled>Apply filter</button>
         </div>
-        <div class="run-list" id="runList">
-          <div class="empty">No workflow data yet. Connect to load your first page.</div>
-        </div>
-        <div class="list-foot">
-          <small class="subtle" id="pageStatus">Page 0 · 25 per request</small>
-          <button class="btn" id="loadMore" type="button" disabled>Load more</button>
-        </div>
+        <div class="run-list" id="runList"><div class="empty">No data loaded. Connect an API to fetch your first page.</div></div>
+        <div class="list-foot"><small id="pageStatus">No connection · 25 records per request</small><button class="btn" id="loadMore" type="button" disabled>Load more</button></div>
       </section>
 
       <section class="panel card" aria-labelledby="detailTitle">
         <div class="card-head">
-          <div><div class="section-kicker">Selected execution</div><h2 id="detailTitle">Run details</h2></div>
+          <div class="card-head-title"><span class="card-icon">⌁</span><div><div class="section-kicker">Selected execution</div><h2 id="detailTitle">Run details</h2></div></div>
           <span class="pill">Read-only</span>
         </div>
-        <div id="detailContent" class="detail-empty">Select a workflow run to inspect its tasks and event timeline.</div>
+        <div id="detailContent" class="detail-empty"><div class="detail-empty-inner"><span class="detail-empty-icon">⌘</span><strong>Nothing selected yet</strong><br>Select a workflow run to inspect its task state, timing and redacted event timeline.</div></div>
       </section>
     </div>
 
     <section class="panel card workers hidden" id="workersPanel" aria-labelledby="workersTitle">
       <div class="card-head">
-        <div><div class="section-kicker">Runtime</div><h2 id="workersTitle">Active workers</h2></div>
+        <div class="card-head-title"><span class="card-icon">⌘</span><div><div class="section-kicker">Runtime inventory</div><h2 id="workersTitle">Active workers</h2></div></div>
         <button class="btn ghost" id="closeWorkers" type="button">Close</button>
       </div>
       <div class="worker-list" id="workerList"></div>
@@ -254,10 +187,29 @@
 </main>
 
 <footer class="shell footer">
-  <span>AetherFlow · Experimental control plane</span>
-  <span>Read-only UI · No credentials persisted · No background polling</span>
+  <span>AetherFlow · API v1 · Read-only browser console</span>
+  <span>Bring your own API · Session-only credential · Manual refresh, no background polling</span>
 </footer>
 
+<script>
+  (() => {
+    const root = document.documentElement;
+    const theme = document.getElementById("themeButton");
+    let saved = null;
+    try { saved = localStorage.getItem("aetherflow-theme"); } catch (_) {}
+    if (saved === "light" || saved === "dark") root.dataset.theme = saved;
+    const updateLabel = () => {
+      theme.textContent = root.dataset.theme === "dark" ? "◐" : "◑";
+      theme.setAttribute("aria-label", root.dataset.theme === "dark" ? "Switch to light theme" : "Switch to dark theme");
+    };
+    updateLabel();
+    theme.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      try { localStorage.setItem("aetherflow-theme", root.dataset.theme); } catch (_) {}
+      updateLabel();
+    });
+  })();
+</script>
 <script src="app.js" defer></script>
 </body>
 </html>

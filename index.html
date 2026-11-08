@@ -3,432 +3,435 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#080d18">
-  <meta name="description" content="AetherFlow is a Rust-based durable workflow engine built around recoverable execution, PostgreSQL persistence, and NATS JetStream event delivery.">
-  <title>AetherFlow — Durable workflow orchestration</title>
+  <meta name="theme-color" content="#080d12">
+  <meta name="description" content="AetherFlow is a Rust-native durable workflow control plane with PostgreSQL-backed state, recoverable workers and NATS JetStream delivery.">
+  <meta property="og:title" content="AetherFlow — Durable workflows, engineered for recovery">
+  <meta property="og:description" content="A Rust-native workflow control plane built around durable state, fenced workers and at-least-once event delivery.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pooya-labs.github.io/aetherflow/">
+  <title>AetherFlow — Durable workflows, engineered for recovery</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%230c171b'/%3E%3Cpath d='M13 47 28 15l8 18 5-10 10 24M13 47h38' fill='none' stroke='%2372e5d1' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <style>
     :root {
       color-scheme: dark;
-      --bg: #080d18;
-      --bg-soft: #0c1423;
-      --panel: rgba(17, 28, 47, .82);
-      --panel-strong: #111d31;
-      --border: rgba(151, 180, 218, .14);
-      --text: #f0f5ff;
-      --muted: #9aabc5;
-      --subtle: #6e819f;
-      --cyan: #63e6df;
-      --blue: #79aaff;
-      --violet: #b69aff;
-      --green: #69ddb1;
-      --amber: #ffc879;
-      --shadow: 0 24px 80px rgba(0, 0, 0, .24);
-      --radius: 22px;
+      --bg:#080d12;--bg-2:#0b131a;--surface:#0e1820;--surface-2:#111e28;
+      --line:rgba(163,190,205,.13);--line-strong:rgba(163,190,205,.23);
+      --text:#eff7f7;--muted:#a0b1b8;--subtle:#71858f;
+      --mint:#75e6d0;--mint-strong:#35c9ad;--blue:#80b6ee;--violet:#b5a4f2;
+      --amber:#e8c27c;--red:#f08c8c;
+      --shadow:0 28px 90px rgba(0,0,0,.34);--radius:22px;--max:1200px;
     }
     html[data-theme="light"] {
-      color-scheme: light;
-      --bg: #f4f7fc;
-      --bg-soft: #eaf0f9;
-      --panel: rgba(255, 255, 255, .88);
-      --panel-strong: #fff;
-      --border: rgba(53, 80, 119, .15);
-      --text: #14223a;
-      --muted: #536782;
-      --subtle: #7487a2;
-      --cyan: #087f83;
-      --blue: #2862c7;
-      --violet: #7552bb;
-      --green: #14845c;
-      --amber: #a86400;
-      --shadow: 0 22px 60px rgba(44, 66, 104, .11);
+      color-scheme:light;
+      --bg:#f5f8f7;--bg-2:#edf3f1;--surface:#fff;--surface-2:#f7faf9;
+      --line:rgba(28,55,58,.12);--line-strong:rgba(28,55,58,.2);
+      --text:#122426;--muted:#52676a;--subtle:#718587;
+      --mint:#087f71;--mint-strong:#079b84;--blue:#346fac;--violet:#7159b1;
+      --amber:#95651d;--red:#b64449;--shadow:0 24px 70px rgba(31,60,60,.1);
     }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      min-width: 320px;
-      background:
-        radial-gradient(ellipse at 78% 5%, rgba(81, 128, 255, .15), transparent 34rem),
-        radial-gradient(ellipse at 10% 25%, rgba(71, 215, 200, .08), transparent 29rem),
-        var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.6;
-      transition: background .2s ease, color .2s ease;
-    }
-    a { color: inherit; text-decoration: none; }
-    button { font: inherit; }
-    .shell { width: min(1160px, calc(100% - 48px)); margin: 0 auto; }
-    .topbar {
-      position: sticky; top: 0; z-index: 10;
-      border-bottom: 1px solid var(--border);
-      background: color-mix(in srgb, var(--bg) 82%, transparent);
-      backdrop-filter: blur(18px);
-    }
-    .nav { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .brand { display: inline-flex; gap: 12px; align-items: center; font-size: 17px; font-weight: 760; letter-spacing: -.04em; }
-    .brand-mark {
-      width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px;
-      color: #07131c; background: linear-gradient(135deg, var(--cyan), var(--blue) 58%, var(--violet));
-      box-shadow: 0 7px 24px rgba(99, 230, 223, .18);
-    }
-    .brand-mark svg { width: 22px; height: 22px; }
-    .nav-links { display: flex; align-items: center; gap: 28px; color: var(--muted); font-size: 13px; font-weight: 600; }
-    .nav-links a:hover { color: var(--text); }
-    .nav-actions { display: flex; gap: 10px; align-items: center; }
-    .icon-button, .menu-button {
-      border: 1px solid var(--border); color: var(--muted); background: var(--panel);
-      width: 39px; height: 39px; border-radius: 12px; cursor: pointer; display: grid; place-items: center;
-    }
-    .icon-button:hover, .menu-button:hover { color: var(--text); border-color: color-mix(in srgb, var(--cyan) 50%, var(--border)); }
-    .icon-button svg { width: 17px; height: 17px; }
-    .button {
-      display: inline-flex; justify-content: center; align-items: center; gap: 9px;
-      min-height: 45px; padding: 0 17px; border-radius: 13px; font-size: 13px; font-weight: 700;
-      border: 1px solid var(--border); background: var(--panel); color: var(--text);
-      transition: transform .18s ease, border-color .18s ease, background .18s ease;
-    }
-    .button:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--cyan) 55%, var(--border)); }
-    .button.primary { color: #07151c; background: linear-gradient(110deg, #63e6df, #8ad7ff); border: 0; }
-    .button svg { width: 16px; height: 16px; }
-    .menu-button { display: none; }
-    .hero { padding: 88px 0 64px; }
-    .hero-grid { display: grid; grid-template-columns: 1.07fr .93fr; gap: 58px; align-items: center; }
-    .eyebrow {
-      display: inline-flex; gap: 9px; align-items: center; color: var(--cyan);
-      border: 1px solid color-mix(in srgb, var(--cyan) 25%, transparent);
-      background: color-mix(in srgb, var(--cyan) 8%, transparent);
-      border-radius: 999px; padding: 7px 12px; font-size: 11px; font-weight: 750;
-      text-transform: uppercase; letter-spacing: .11em;
-    }
-    .pulse { width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 5px color-mix(in srgb, var(--green) 14%, transparent); }
-    h1 { margin: 22px 0 20px; max-width: 660px; font-size: clamp(42px, 6.4vw, 75px); letter-spacing: -.065em; line-height: .99; font-weight: 800; }
-    .gradient-text { background: linear-gradient(100deg, var(--cyan) 5%, var(--blue) 52%, var(--violet)); color: transparent; background-clip: text; -webkit-background-clip: text; }
-    .hero-copy { max-width: 600px; color: var(--muted); font-size: 17px; line-height: 1.8; }
-    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 24px; }
-    .microcopy { color: var(--subtle); font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-    .microcopy span { display: inline-flex; align-items: center; gap: 6px; }
-    .microcopy b { color: var(--muted); font-weight: 650; }
-    .microcopy .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--subtle); }
-    .console {
-      position: relative; padding: 23px; border: 1px solid var(--border); border-radius: 25px;
-      background: linear-gradient(155deg, color-mix(in srgb, var(--panel-strong) 96%, transparent), color-mix(in srgb, var(--bg-soft) 95%, transparent));
-      box-shadow: var(--shadow); overflow: hidden;
-    }
-    .console:before { content: ""; position: absolute; width: 260px; height: 260px; right: -100px; top: -150px; background: rgba(104, 165, 255, .14); filter: blur(40px); border-radius: 50%; }
-    .console-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; position: relative; }
-    .console-label { color: var(--muted); font-size: 11px; letter-spacing: .1em; font-weight: 750; text-transform: uppercase; }
-    .window-dots { display: flex; gap: 5px; }
-    .window-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); opacity: .65; }
-    .workflow-line { position: relative; margin: 27px 0 23px; display: grid; gap: 11px; }
-    .workflow-row { display: grid; grid-template-columns: 35px 1fr auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--panel) 75%, transparent); }
-    .workflow-row.active { border-color: color-mix(in srgb, var(--cyan) 38%, var(--border)); background: color-mix(in srgb, var(--cyan) 6%, var(--panel)); }
-    .node-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
-    .node-icon.cyan { background: color-mix(in srgb, var(--cyan) 13%, transparent); color: var(--cyan); }
-    .node-icon.violet { background: color-mix(in srgb, var(--violet) 15%, transparent); color: var(--violet); }
-    .node-icon svg { width: 17px; height: 17px; }
-    .node-title { display: block; font-size: 13px; font-weight: 700; }
-    .node-sub { display: block; color: var(--subtle); font-size: 10px; margin-top: 2px; }
-    .tag { font-size: 10px; font-weight: 750; color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); border-radius: 999px; padding: 5px 8px; white-space: nowrap; }
-    .tag.neutral { color: var(--muted); background: var(--bg-soft); }
-    .console-foot { display: flex; justify-content: space-between; gap: 12px; padding-top: 15px; border-top: 1px solid var(--border); color: var(--subtle); font-size: 10px; }
-    .console-foot strong { color: var(--muted); font-weight: 700; }
-    .section { padding: 72px 0; border-top: 1px solid var(--border); }
-    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
-    .kicker { font-size: 10px; letter-spacing: .15em; text-transform: uppercase; font-weight: 800; color: var(--cyan); }
-    h2 { margin: 8px 0 0; font-size: clamp(27px, 3.3vw, 39px); line-height: 1.1; letter-spacing: -.045em; }
-    .section-intro { max-width: 430px; color: var(--muted); font-size: 13px; line-height: 1.8; margin: 0; }
-    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; }
-    .metric { padding: 20px; border: 1px solid var(--border); border-radius: 17px; background: var(--panel); }
-    .metric-label { color: var(--subtle); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .1em; }
-    .metric-value { margin: 10px 0 3px; font-size: 25px; font-weight: 790; letter-spacing: -.05em; }
-    .metric-note { color: var(--muted); font-size: 11px; }
-    .architecture { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-    .arch-card { position: relative; padding: 21px; min-height: 186px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); }
-    .arch-card:after { content: "→"; position: absolute; top: 24px; right: -13px; color: var(--subtle); font-size: 15px; z-index: 1; }
-    .arch-card:last-child:after { content: ""; }
-    .arch-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 13px; margin-bottom: 18px; background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
-    .arch-icon svg { width: 20px; height: 20px; }
-    .arch-card:nth-child(2) .arch-icon { background: color-mix(in srgb, var(--cyan) 12%, transparent); color: var(--cyan); }
-    .arch-card:nth-child(3) .arch-icon { background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); }
-    .arch-card:nth-child(4) .arch-icon { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
-    .arch-card h3 { font-size: 14px; margin: 0 0 7px; letter-spacing: -.02em; }
-    .arch-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
-    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; }
-    .feature { padding: 22px; border: 1px solid var(--border); background: var(--panel); border-radius: 18px; }
-    .feature-top { display: flex; gap: 12px; align-items: center; margin-bottom: 13px; }
-    .feature-icon { width: 35px; height: 35px; border-radius: 11px; display: grid; place-items: center; background: color-mix(in srgb, var(--cyan) 12%, transparent); color: var(--cyan); }
-    .feature-icon svg { width: 18px; height: 18px; }
-    .feature h3 { margin: 0; font-size: 14px; }
-    .feature p { margin: 0; font-size: 12px; line-height: 1.8; color: var(--muted); }
-    .status-grid { display: grid; grid-template-columns: .84fr 1.16fr; gap: 15px; }
-    .status-card { border: 1px solid var(--border); border-radius: 19px; padding: 24px; background: var(--panel); }
-    .progress-number { font-size: 54px; font-weight: 820; letter-spacing: -.075em; line-height: 1.1; margin: 20px 0 5px; }
-    .progress-number span { font-size: 20px; color: var(--subtle); font-weight: 600; letter-spacing: 0; }
-    .progress-track { width: 100%; height: 8px; background: var(--bg-soft); border-radius: 99px; overflow: hidden; margin: 20px 0 11px; }
-    .progress-fill { height: 100%; width: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--cyan), var(--blue), var(--violet)); }
-    .progress-caption { color: var(--muted); font-size: 11px; }
-    .milestones { display: grid; gap: 0; }
-    .milestone { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
-    .milestone:last-child { border-bottom: 0; }
-    .milestone-code { width: 38px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--bg-soft); color: var(--muted); font-size: 10px; font-weight: 800; }
-    .milestone.current .milestone-code { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 11%, transparent); }
-    .milestone strong { display: block; font-size: 12px; }
-    .milestone small { color: var(--subtle); font-size: 10px; display: block; }
-    .state { color: var(--green); font-size: 10px; font-weight: 750; }
-    .state.current { color: var(--amber); }
-    .cta {
-      display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 30px;
-      border: 1px solid color-mix(in srgb, var(--cyan) 24%, var(--border)); border-radius: 22px;
-      background: linear-gradient(115deg, color-mix(in srgb, var(--cyan) 9%, var(--panel)), color-mix(in srgb, var(--blue) 8%, var(--panel)));
-    }
-    .cta h2 { font-size: 25px; }
-    .cta p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
-    footer { border-top: 1px solid var(--border); padding: 25px 0 35px; color: var(--subtle); font-size: 11px; }
-    .footer-row { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
-    .footer-links { display: flex; gap: 18px; flex-wrap: wrap; }
-    .footer-links a:hover { color: var(--text); }
-    @media (max-width: 900px) {
-      .hero-grid { grid-template-columns: 1fr; gap: 38px; }
-      .hero { padding-top: 66px; }
-      .console { max-width: 620px; }
-      .architecture { grid-template-columns: repeat(2, 1fr); }
-      .arch-card:nth-child(2):after { content: ""; }
-      .feature-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 680px) {
-      .shell { width: min(100% - 32px, 560px); }
-      .nav { min-height: 66px; }
-      .nav-links { display: none; }
-      .menu-button { display: grid; }
-      .nav-actions .button { display: none; }
-      .hero { padding: 55px 0 45px; }
-      h1 { font-size: clamp(42px, 13vw, 60px); }
-      .hero-copy { font-size: 14px; }
-      .console { padding: 17px; }
-      .section { padding: 53px 0; }
-      .section-head { display: block; }
-      .section-intro { margin-top: 13px; }
-      .metrics { grid-template-columns: repeat(2, 1fr); }
-      .architecture, .feature-grid, .status-grid { grid-template-columns: 1fr; }
-      .arch-card { min-height: auto; }
-      .arch-card:after { display: none; }
-      .cta, .footer-row { align-items: flex-start; flex-direction: column; }
-      .progress-number { font-size: 46px; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *:before, *:after { scroll-behavior: auto !important; transition: none !important; }
-    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;scroll-padding-top:92px}
+    body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:15px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.012em}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:-2;background-image:linear-gradient(rgba(122,163,166,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(122,163,166,.035) 1px,transparent 1px);background-size:72px 72px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
+    body:after{content:"";position:fixed;inset:-20% -10% auto;z-index:-1;height:640px;pointer-events:none;background:radial-gradient(ellipse at 72% 18%,rgba(55,195,170,.13),transparent 43%),radial-gradient(ellipse at 25% 5%,rgba(69,126,179,.13),transparent 42%);filter:blur(14px)}
+    a{color:inherit;text-decoration:none}
+    button{font:inherit}
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+    .container{width:min(var(--max),calc(100% - 48px));margin-inline:auto}
+    .skip-link{position:absolute;left:12px;top:-50px;padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;z-index:100}
+    .skip-link:focus{top:12px}
+    .announcement{border-bottom:1px solid var(--line);background:rgba(9,17,22,.72);color:var(--muted);font-size:11px}
+    html[data-theme="light"] .announcement{background:rgba(245,248,247,.85)}
+    .announcement-inner{min-height:36px;display:flex;align-items:center;justify-content:center;gap:9px;text-align:center}
+    .announcement strong{color:var(--mint);font-weight:750;letter-spacing:.04em;text-transform:uppercase}
+    .announcement a{color:var(--text);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
+    .site-header{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}
+    .nav{height:74px;display:flex;align-items:center;justify-content:space-between;gap:26px}
+    .brand{display:inline-flex;align-items:center;gap:11px;font-weight:780;font-size:17px;letter-spacing:-.045em;white-space:nowrap}
+    .brand-mark{width:36px;height:36px;display:grid;place-items:center;border:1px solid rgba(117,230,208,.23);border-radius:12px;background:linear-gradient(145deg,rgba(117,230,208,.16),rgba(128,182,238,.05));color:var(--mint);box-shadow:inset 0 1px rgba(255,255,255,.07)}
+    .brand-mark svg{width:23px;height:23px}
+    .brand-word small{display:block;margin-top:-4px;font-size:8px;letter-spacing:.18em;color:var(--subtle);text-transform:uppercase;font-weight:750}
+    .nav-links{display:flex;align-items:center;gap:27px;color:var(--muted);font-size:12px;font-weight:650}
+    .nav-links a{transition:color .18s ease}
+    .nav-links a:hover{color:var(--mint)}
+    .nav-actions{display:flex;align-items:center;gap:9px}
+    .icon-btn,.menu-btn{width:39px;height:39px;border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:12px;display:grid;place-items:center;cursor:pointer}
+    .icon-btn svg{width:17px;height:17px}
+    .btn{min-height:43px;display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:0 16px;border:1px solid var(--line-strong);border-radius:12px;background:var(--surface);color:var(--text);font-size:12px;font-weight:730;transition:transform .2s ease,border-color .2s ease,background .2s ease}
+    .btn:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--mint) 55%,var(--line-strong))}
+    .btn svg{width:15px;height:15px}
+    .btn-primary{background:linear-gradient(115deg,var(--mint),#9ce7da);border-color:transparent;color:#06201d;box-shadow:0 8px 28px rgba(53,201,173,.16)}
+    .btn-primary:hover{background:linear-gradient(115deg,#8af0dd,#b5f0e5)}
+    .menu-btn{display:none}
+    .hero{padding:88px 0 67px}
+    .hero-grid{display:grid;grid-template-columns:minmax(0,1.04fr) minmax(420px,.96fr);align-items:center;gap:65px}
+    .eyebrow{display:inline-flex;align-items:center;gap:9px;padding:7px 11px;border:1px solid rgba(117,230,208,.23);border-radius:99px;color:var(--mint);background:rgba(117,230,208,.055);font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+    .eyebrow-dot{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 4px rgba(117,230,208,.12)}
+    h1{max-width:720px;margin:23px 0 21px;font-size:clamp(48px,6.15vw,78px);line-height:.99;letter-spacing:-.075em;font-weight:790}
+    .gradient{background:linear-gradient(105deg,#e9f8f4 0%,#8ce7d7 42%,#8db8ed 100%);color:transparent;background-clip:text;-webkit-background-clip:text}
+    html[data-theme="light"] .gradient{background-image:linear-gradient(105deg,#1c4742,#078c79 54%,#376eaa)}
+    .hero-copy{max-width:585px;color:var(--muted);font-size:17px;line-height:1.82}
+    .hero-copy strong{color:var(--text);font-weight:650}
+    .hero-actions{display:flex;gap:11px;flex-wrap:wrap;margin:29px 0 21px}
+    .hero-foot{display:flex;flex-wrap:wrap;align-items:center;gap:10px;color:var(--subtle);font-size:10px}
+    .hero-foot b{color:var(--muted);font-weight:680}
+    .sep{width:3px;height:3px;border-radius:50%;background:var(--subtle)}
+    .product-card{position:relative;padding:20px;border:1px solid var(--line-strong);border-radius:24px;background:linear-gradient(145deg,rgba(18,32,40,.97),rgba(11,20,27,.97));box-shadow:var(--shadow);overflow:hidden}
+    html[data-theme="light"] .product-card{background:linear-gradient(145deg,#fff,#f3f8f6)}
+    .product-card:before{content:"";position:absolute;width:300px;height:300px;right:-120px;top:-180px;background:rgba(63,207,177,.15);filter:blur(55px);border-radius:50%}
+    .card-top{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:15px;border-bottom:1px solid var(--line)}
+    .card-eyebrow{color:var(--subtle);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.16em}
+    .card-label{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--muted)}
+    .card-label .tiny-dot{width:6px;height:6px;border-radius:50%;background:var(--mint)}
+    .flow-stage{position:relative;display:grid;grid-template-columns:1fr 34px 1fr;gap:9px;align-items:stretch;padding:18px 0}
+    .flow-node{min-height:81px;padding:12px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.018)}
+    html[data-theme="light"] .flow-node{background:rgba(20,70,65,.025)}
+    .flow-node strong{display:block;margin:7px 0 2px;font-size:11px;letter-spacing:-.02em}
+    .flow-node small{display:block;color:var(--subtle);font-size:9px;line-height:1.55}
+    .flow-icon{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:rgba(117,230,208,.1);color:var(--mint)}
+    .flow-icon svg{width:14px;height:14px}
+    .flow-arrow{display:grid;place-items:center;color:var(--subtle);font-size:17px}
+    .flow-arrow span{width:100%;height:1px;background:linear-gradient(90deg,var(--line-strong),var(--mint),var(--line-strong));position:relative}
+    .flow-arrow span:after{content:"";position:absolute;right:0;top:-3px;width:6px;height:6px;border-top:1px solid var(--mint);border-right:1px solid var(--mint);transform:rotate(45deg)}
+    .flow-lower{display:grid;grid-template-columns:34px 1fr 34px 1fr;gap:9px;align-items:center}
+    .flow-bridge{height:23px;display:flex;justify-content:center;align-items:center}
+    .flow-bridge span{height:23px;width:1px;background:linear-gradient(var(--mint),var(--line))}
+    .flow-caption{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:15px;padding-top:13px;border-top:1px solid var(--line);font-size:9px;color:var(--subtle)}
+    .flow-caption strong{color:var(--muted);font-weight:730}
+    .proof-strip{border-block:1px solid var(--line);background:rgba(255,255,255,.012)}
+    .proof-grid{display:grid;grid-template-columns:repeat(4,1fr)}
+    .proof{padding:20px 24px;border-right:1px solid var(--line)}
+    .proof:last-child{border-right:0}
+    .proof strong{display:block;font-size:23px;font-weight:790;letter-spacing:-.06em}
+    .proof span{display:block;margin-top:3px;color:var(--subtle);font-size:10px;line-height:1.5}
+    .section{padding:88px 0;border-bottom:1px solid var(--line)}
+    .section-head{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:34px}
+    .kicker{color:var(--mint);font-size:9px;font-weight:850;letter-spacing:.17em;text-transform:uppercase}
+    h2{margin:9px 0 0;font-size:clamp(31px,3.5vw,45px);line-height:1.08;letter-spacing:-.06em;font-weight:760}
+    .section-copy{max-width:475px;margin:0;color:var(--muted);font-size:13px;line-height:1.8}
+    .architecture{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    .arch-card,.cap-card,.recovery-card,.doc-card{position:relative;min-width:0;padding:22px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(150deg,var(--surface),color-mix(in srgb,var(--surface) 65%,transparent));transition:transform .2s ease,border-color .2s ease,background .2s ease}
+    .arch-card:hover,.cap-card:hover,.recovery-card:hover,.doc-card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--mint) 45%,var(--line))}
+    .arch-icon{width:39px;height:39px;border:1px solid var(--line);border-radius:12px;display:grid;place-items:center;color:var(--mint);background:rgba(117,230,208,.06)}
+    .arch-icon svg{width:19px;height:19px}
+    .arch-card h3,.cap-card h3,.recovery-card h3,.doc-card h3{margin:17px 0 7px;font-size:14px;letter-spacing:-.035em}
+    .arch-card p,.cap-card p,.recovery-card p,.doc-card p{margin:0;color:var(--muted);font-size:11px;line-height:1.78}
+    .arch-index{position:absolute;right:18px;top:18px;color:var(--subtle);font-size:9px;letter-spacing:.09em}
+    .cap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .cap-card{padding:23px;min-height:190px}
+    .cap-card .cap-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .cap-state{padding:4px 7px;border:1px solid rgba(117,230,208,.18);border-radius:999px;color:var(--mint);background:rgba(117,230,208,.055);font-size:8px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+    .cap-card h3{margin-top:18px}
+    .cap-link{display:inline-flex;align-items:center;gap:6px;margin-top:15px;color:var(--mint);font-size:10px;font-weight:730}
+    .recovery-shell{display:grid;grid-template-columns:.78fr 1.22fr;gap:28px;align-items:start}
+    .recovery-intro{position:sticky;top:112px}
+    .recovery-intro p{color:var(--muted);font-size:13px;line-height:1.85}
+    .recovery-note{margin-top:22px;padding:15px;border-left:2px solid var(--amber);background:rgba(232,194,124,.055);color:var(--muted);font-size:10px;line-height:1.7}
+    .recovery-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    .recovery-card{padding:21px}
+    .recovery-step{color:var(--mint);font-size:9px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}
+    .recovery-card h3{margin-top:11px}
+    .evidence{display:inline-flex;align-items:center;gap:6px;margin-top:15px;color:var(--mint);font-size:9px;font-weight:760}
+    .evidence:before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+    .contract{padding:0}
+    .contract-panel{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line-strong);border-radius:22px;overflow:hidden;background:var(--surface)}
+    .contract-side{padding:30px}
+    .contract-side+ .contract-side{border-left:1px solid var(--line);background:color-mix(in srgb,var(--surface-2) 75%,transparent)}
+    .contract-side h3{margin:0 0 12px;font-size:19px;letter-spacing:-.045em}
+    .contract-side p{margin:0;color:var(--muted);font-size:12px;line-height:1.8}
+    .contract-list{display:grid;gap:9px;margin:18px 0 0;padding:0;list-style:none}
+    .contract-list li{display:flex;align-items:flex-start;gap:9px;color:var(--muted);font-size:11px}
+    .contract-list li:before{content:"✓";color:var(--mint);font-weight:900}
+    .contract-side+ .contract-side .contract-list li:before{content:"!" ;color:var(--amber)}
+    .code-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .code-card{overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#091116}
+    html[data-theme="light"] .code-card{background:#17252a}
+    .code-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid rgba(255,255,255,.09);color:#a8c1c4;font-size:9px;font-weight:760;letter-spacing:.12em;text-transform:uppercase}
+    .copy-btn{padding:5px 8px;border:1px solid rgba(255,255,255,.15);border-radius:8px;background:transparent;color:#b9d0d1;font-size:9px;cursor:pointer}
+    .code-card pre{margin:0;padding:20px 17px;overflow:auto;color:#e0f0ed;font:11px/1.9 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}
+    .code-note{padding:0 17px 16px;color:#8fa7a8;font-size:9px;line-height:1.6}
+    .docs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .doc-card{display:flex;flex-direction:column;min-height:190px}
+    .doc-card .doc-type{color:var(--mint);font-size:9px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}
+    .doc-card h3{margin-top:16px}
+    .doc-card .doc-link{display:inline-flex;align-items:center;gap:7px;margin-top:auto;padding-top:17px;color:var(--text);font-size:10px;font-weight:760}
+    .release-panel{display:grid;grid-template-columns:1fr auto;align-items:center;gap:30px;padding:30px;border:1px solid var(--line-strong);border-radius:22px;background:radial-gradient(ellipse at 88% 20%,rgba(117,230,208,.11),transparent 42%),var(--surface)}
+    .release-panel h2{font-size:clamp(25px,3vw,36px)}
+    .release-panel p{max-width:680px;color:var(--muted);font-size:12px;line-height:1.8}
+    .release-state{min-width:170px;padding:14px 16px;border:1px solid rgba(232,194,124,.23);border-radius:13px;background:rgba(232,194,124,.055)}
+    .release-state small{display:block;color:var(--amber);font-size:8px;font-weight:850;text-transform:uppercase;letter-spacing:.14em}
+    .release-state strong{display:block;margin-top:5px;font-size:13px}
+    .release-state span{display:block;margin-top:3px;color:var(--subtle);font-size:9px}
+    footer{padding:28px 0 42px;color:var(--subtle);font-size:10px}
+    .footer-top{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+    .footer-brand{display:flex;align-items:center;gap:9px;color:var(--muted);font-weight:760;font-size:13px}
+    .footer-brand .brand-mark{width:29px;height:29px}
+    .footer-links{display:flex;flex-wrap:wrap;gap:20px}
+    .footer-links a:hover{color:var(--mint)}
+    .footer-bottom{display:flex;justify-content:space-between;gap:20px;padding-top:15px}
+    .footer-bottom strong{color:var(--muted);font-weight:700}
+    [hidden]{display:none!important}
+    @media(max-width:1000px){.hero-grid{grid-template-columns:1fr;gap:38px}.hero{padding-top:66px}.product-card{max-width:700px}.architecture{grid-template-columns:repeat(2,1fr)}.recovery-shell{grid-template-columns:1fr}.recovery-intro{position:static;max-width:660px}}
+    @media(max-width:760px){.container{width:min(var(--max),calc(100% - 32px))}.nav{height:66px}.nav-links{display:none;position:absolute;left:16px;right:16px;top:72px;padding:15px;border:1px solid var(--line-strong);border-radius:15px;background:var(--surface);box-shadow:var(--shadow);align-items:stretch;gap:0;flex-direction:column}.nav-links.open{display:flex}.nav-links a{padding:12px 7px;border-bottom:1px solid var(--line)}.nav-links a:last-child{border:0}.nav-actions .nav-github{display:none}.menu-btn{display:grid}.hero{padding:55px 0 48px}.hero-grid{gap:30px}h1{font-size:clamp(45px,11vw,65px)}.hero-copy{font-size:14px}.proof-grid{grid-template-columns:repeat(2,1fr)}.proof:nth-child(2){border-right:0}.proof:nth-child(-n+2){border-bottom:1px solid var(--line)}.section{padding:66px 0}.section-head{display:block}.section-copy{margin-top:13px}.cap-grid,.docs-grid{grid-template-columns:repeat(2,1fr)}.release-panel{grid-template-columns:1fr}.release-state{width:100%}.footer-top,.footer-bottom{align-items:flex-start;flex-direction:column}}
+    @media(max-width:540px){.container{width:calc(100% - 28px)}.announcement-inner{padding:7px 0;font-size:9px}.nav{gap:10px}.brand{font-size:15px}.brand-mark{width:33px;height:33px}.hero{padding-top:43px}.hero-actions .btn{flex:1 1 100%}.product-card{padding:14px}.flow-stage{grid-template-columns:1fr 22px 1fr;gap:5px}.flow-node{padding:9px;min-height:88px}.flow-node strong{font-size:10px}.flow-node small{font-size:8px}.flow-lower{grid-template-columns:25px 1fr 25px 1fr;gap:5px}.proof{padding:16px 13px}.proof strong{font-size:20px}.architecture,.cap-grid,.recovery-grid,.docs-grid,.code-grid{grid-template-columns:1fr}.section{padding:55px 0}.contract-panel{grid-template-columns:1fr}.contract-side{padding:22px}.contract-side+.contract-side{border-left:0;border-top:1px solid var(--line)}.release-panel{padding:22px}.footer-links{gap:14px}.footer-bottom{line-height:1.7}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
   </style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="shell nav">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="announcement">
+    <div class="container announcement-inner">
+      <strong>Control plane API v1</strong>
+      <span>·</span>
+      <span>Stable 1.0.0 release preparation is in progress.</span>
+      <span>·</span>
+      <a href="https://github.com/pooya-labs/aetherflow/blob/main/docs/releases/v1-readiness.md">Release gates</a>
+    </div>
+  </div>
+
+  <header class="site-header">
+    <div class="container nav">
       <a class="brand" href="#top" aria-label="AetherFlow home">
-        <span class="brand-mark">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17.5 9.2 6l2.8 6 2-4 6 9.5"/><path d="M4 17.5h16"/></svg>
-        </span>
-        <span>AetherFlow</span>
+        <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18 9.2 5.5l3 6.2 2.1-4.2L20.5 18M3.5 18h17"/></svg></span>
+        <span class="brand-word">AetherFlow<small>Durable workflow control plane</small></span>
       </a>
-      <nav class="nav-links" aria-label="Main navigation">
-        <a href="#architecture">Architecture</a>
-        <a href="#reliability">Reliability</a>
-        <a href="#roadmap">Roadmap</a> &nbsp; · &nbsp; <a href="dashboard/">Dashboard</a>
+      <nav class="nav-links" id="primary-nav" aria-label="Primary navigation">
+        <a href="#platform">Platform</a>
+        <a href="#recovery">Recovery</a>
+        <a href="#developers">Developers</a>
+        <a href="#documentation">Documentation</a>
+        <a href="dashboard/">Console</a>
       </nav>
       <div class="nav-actions">
-        <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
-          <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
         </button>
-        <a class="button" href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">GitHub <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></a>
-        <button class="menu-button" id="menu-toggle" type="button" aria-label="Toggle navigation">☰</button>
+        <a class="btn nav-github" href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">View source <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3h7v7M10 14 21 3M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></a>
+        <button class="menu-btn" id="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="primary-nav">☰</button>
       </div>
-    </div>
-    <div class="shell" id="mobile-menu" hidden style="padding:0 0 16px;color:var(--muted);font-size:13px">
-      <a href="#architecture">Architecture</a> &nbsp; · &nbsp; <a href="#reliability">Reliability</a> &nbsp; · &nbsp; <a href="#roadmap">Roadmap</a>
     </div>
   </header>
 
-  <main id="top">
-    <section class="hero">
-      <div class="shell hero-grid">
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="container hero-grid">
         <div>
-          <div class="eyebrow"><span class="pulse"></span> Rust-native workflow infrastructure</div>
-          <h1>Workflows that <span class="gradient-text">survive the crash.</span></h1>
-          <p class="hero-copy">AetherFlow is building a durable workflow engine around recoverable execution, explicit state transitions, and event delivery you can reason about — even when processes disappear.</p>
+          <div class="eyebrow"><span class="eyebrow-dot"></span> Rust-native · API v1 · Self-hosted</div>
+          <h1>Durable workflows.<br><span class="gradient">Engineered for recovery.</span></h1>
+          <p class="hero-copy">AetherFlow is a workflow control plane for systems that cannot afford to forget what they were doing. It combines <strong>PostgreSQL-backed execution state</strong>, recoverable workers and explicit event-delivery semantics in one Rust workspace.</p>
           <div class="hero-actions">
-            <a class="button primary" href="#architecture">Explore the system <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
-            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Open roadmap</a>
-            <a class="button" href="dashboard/">Live dashboard</a>
+            <a class="btn btn-primary" href="#developers">Get started <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+            <a class="btn" href="dashboard/">Open control console</a>
+            <a class="btn" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/api/openapi.yaml" target="_blank" rel="noreferrer">API reference ↗</a>
           </div>
-          <div class="microcopy">
-            <span><b>Rust</b> · Tokio</span><i class="dot"></i>
-            <span><b>PostgreSQL 18</b></span><i class="dot"></i>
-            <span><b>NATS JetStream</b></span>
+          <div class="hero-foot">
+            <span><b>Rust 1.99.1</b></span><i class="sep"></i>
+            <span><b>PostgreSQL 18</b></span><i class="sep"></i>
+            <span><b>NATS JetStream 2.12</b></span>
+            <span>·</span><span>Apache-2.0 code</span>
           </div>
         </div>
 
-        <div class="console" aria-label="AetherFlow execution architecture preview">
-          <div class="console-head">
-            <span class="console-label">Production engineering / M08</span>
-            <span class="window-dots"><i></i><i></i><i></i></span>
+        <div class="product-card" aria-label="AetherFlow execution architecture">
+          <div class="card-top">
+            <span class="card-eyebrow">Execution path / reference architecture</span>
+            <span class="card-label"><span class="tiny-dot"></span> Durable by design</span>
           </div>
-          <div class="workflow-line">
-            <div class="workflow-row">
-              <span class="node-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg></span>
-              <span><span class="node-title">Workflow definition</span><span class="node-sub">Validated DAG · deterministic IDs</span></span>
-              <span class="tag">READY</span>
+          <div class="flow-stage">
+            <div class="flow-node">
+              <span class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg></span>
+              <strong>Workflow API</strong><small>Validate DAG and persist intent</small>
             </div>
-            <div class="workflow-row">
-              <span class="node-icon cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v4m10-4v4M4 9h16M5 5h14v16H5z"/><path d="m9 15 2 2 4-4"/></svg></span>
-              <span><span class="node-title">Durable worker</span><span class="node-sub">Lease · heartbeat · fencing token</span></span>
-              <span class="tag">RUNNING</span>
-            </div>
-            <div class="workflow-row active">
-              <span class="node-icon violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg></span>
-              <span><span class="node-title">PostgreSQL + outbox</span><span class="node-sub">Atomic state · retryable delivery</span></span>
-              <span class="tag">DURABLE</span>
-            </div>
-            <div class="workflow-row">
-              <span class="node-icon cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="m8 11 8-4m-8 6 8 4"/></svg></span>
-              <span><span class="node-title">JetStream + inbox</span><span class="node-sub">Broker ack · deduplicated consumer</span></span>
-              <span class="tag neutral">AT-LEAST-ONCE</span>
+            <div class="flow-arrow"><span></span></div>
+            <div class="flow-node">
+              <span class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/></svg></span>
+              <strong>PostgreSQL</strong><small>State, attempts, leases and outbox</small>
             </div>
           </div>
-          <div class="console-foot"><span><strong>Recovery model</strong> · database-owned time</span><span>v0 · experimental</span></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" aria-label="Platform capabilities">
-      <div class="shell">
-        <div class="metrics">
-          <div class="metric"><div class="metric-label">Milestone</div><div class="metric-value">M08</div><div class="metric-note">Production engineering · in progress</div></div>
-          <div class="metric"><div class="metric-label">Control API</div><div class="metric-value">v1</div><div class="metric-note">PostgreSQL-backed · integration tested</div></div>
-          <div class="metric"><div class="metric-label">Payload limit</div><div class="metric-value">1 MiB</div><div class="metric-note">Bounded task input / output</div></div>
-          <div class="metric"><div class="metric-label">Delivery model</div><div class="metric-value">At-least-once</div><div class="metric-note">Idempotency is explicit</div></div>
+          <div class="flow-bridge"><span></span></div>
+          <div class="flow-lower">
+            <div></div>
+            <div class="flow-node">
+              <span class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="8" cy="6" r="1" fill="currentColor"/><circle cx="16" cy="12" r="1" fill="currentColor"/></svg></span>
+              <strong>NATS JetStream</strong><small>Replicated event transport</small>
+            </div>
+            <div class="flow-arrow"><span></span></div>
+            <div class="flow-node">
+              <span class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v14H4z"/><path d="m8 12 2.5 2.5L16 9"/></svg></span>
+              <strong>Inbox consumer</strong><small>Claim, handle and deduplicate</small>
+            </div>
+          </div>
+          <div class="flow-caption">
+            <span><strong>Outbox → broker ack → inbox</strong></span>
+            <span>At-least-once delivery</span>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="section" id="architecture">
-      <div class="shell">
+    <section class="proof-strip" aria-label="Verified implementation facts">
+      <div class="container proof-grid">
+        <div class="proof"><strong>8</strong><span>Versioned PostgreSQL migrations</span></div>
+        <div class="proof"><strong>10</strong><span>Tenant tables protected by FORCE RLS</span></div>
+        <div class="proof"><strong>3 nodes</strong><span>JetStream recovery tested in CI</span></div>
+        <div class="proof"><strong>1 MiB</strong><span>Maximum decoded task input</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="platform">
+      <div class="container">
         <div class="section-head">
-          <div><div class="kicker">Architecture</div><h2>Small boundaries. Strong guarantees.</h2></div>
-          <p class="section-intro">The runtime stays transport-neutral. PostgreSQL owns durable execution state, while JetStream carries committed events between services.</p>
+          <div><div class="kicker">The platform</div><h2>One control plane.<br>Explicit execution boundaries.</h2></div>
+          <p class="section-copy">AetherFlow keeps workflow state, worker ownership and event transport separate so each part can recover without pretending failures do not happen.</p>
         </div>
         <div class="architecture">
-          <article class="arch-card">
-            <span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
-            <h3>Rust core & runtime</h3>
-            <p>Typed workflow identities, DAG validation, bounded scheduling, handler registry, cancellation, and dependency outputs.</p>
-          </article>
-          <article class="arch-card">
-            <span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
-            <h3>Durable PostgreSQL</h3>
-            <p>Atomic claims, migrations with checksums, attempts, leases, fencing, transactional outbox, and inbox deduplication.</p>
-          </article>
-          <article class="arch-card">
-            <span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="8" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="2" fill="currentColor" stroke="none"/></svg></span>
-            <h3>Event transport</h3>
-            <p>NATS JetStream publisher and pull consumer with stable message IDs, broker acknowledgements, and retry handling.</p>
-          </article>
-          <article class="arch-card">
-            <span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 7v5c0 5-3.4 8-8 9-4.6-1-8-4-8-9V7z"/><path d="m8 12 2.5 2.5L16 9"/></svg></span>
-            <h3>Recovery & idempotency</h3>
-            <p>Fresh-process lease recovery, duplicate suppression, lease renewal, and fencing against stale workers.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="reliability">
-      <div class="shell">
-        <div class="section-head">
-          <div><div class="kicker">Reliability model</div><h2>Failure is part of the design.</h2></div>
-          <p class="section-intro">A lease is temporary permission to work, not proof that the previous process has stopped. Every boundary states what happens next.</p>
-        </div>
-        <div class="feature-grid">
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M5 8h14M5 16h14"/><circle cx="12" cy="8" r="2"/><circle cx="12" cy="16" r="2"/></svg></span><h3>Fenced ownership</h3></div><p>Heartbeat and completion are guarded by worker identity, version, and monotonically increasing fencing tokens.</p></article>
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12a8 8 0 1 0 2.3-5.6L4 8.5"/><path d="M4 4v4.5h4.5M12 8v4l3 2"/></svg></span><h3>Restart recovery</h3></div><p>A fresh worker can recover expired work from database state without relying on the old process's memory.</p></article>
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16v13H4zM8 7V4h8v3"/><path d="m8 13 2.5 2.5L16 10"/></svg></span><h3>Transactional outbox</h3></div><p>Events are published outside database transactions and acknowledged only after JetStream confirms storage.</p></article>
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14v12H5z"/><path d="M8 10h8M8 14h5"/><path d="m16 4 3 2-3 2"/></svg></span><h3>Durable inbox</h3></div><p>Logical duplicates are keyed by consumer and event ID. A repeated delivery does not re-run a completed handler.</p></article>
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M3 12h18"/><path d="M7 7l10 10M17 7 7 17"/></svg></span><h3>Long-handler heartbeat</h3></div><p>Active inbox leases are renewed and JetStream receives progress acknowledgements while a handler continues.</p></article>
-          <article class="feature"><div class="feature-top"><span class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h14v14H5z"/><path d="m8 12 2.5 2.5L16 9"/><path d="M3 3l18 18"/></svg></span><h3>Honest delivery guarantees</h3></div><p>Delivery is at-least-once, not magical exactly-once. External side effects still need idempotency or a shared transaction.</p></article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="roadmap">
-      <div class="shell">
-        <div class="section-head">
-          <div><div class="kicker">Project status</div><h2>Built in verifiable milestones.</h2></div>
-          <p class="section-intro">This is an active engineering project. M00–M07 are complete and verified. M08 has added structured request telemetry, bounded Prometheus metrics, W3C tracing, opt-in OTLP, a local PostgreSQL 18/three-node NATS stack, backup/restore and schema-upgrade runbooks, API and worker outage recovery drills, JetStream full-cluster recovery, repeatable scheduler and end-to-end load benchmarks, and authenticated-principal rate limiting. Remaining work focuses on trusted ingress protection, matched-runner regression verification, broader failure-injection, and production operational controls.</p>
-        </div>
-        <div class="status-grid">
-          <div class="status-card">
-            <div class="kicker">M07 · complete</div>
-            <div class="progress-number">100<span>%</span></div>
-            <div class="progress-track"><div class="progress-fill"></div></div>
-            <div class="progress-caption">M00–M07 are complete, including the control-plane v1 API, CLI, Rust SDK, tenant-scoped authorization and forced RLS, read-only dashboard, and verified HTTPS/database TLS boundaries. M08 observability, recovery drills, Compose infrastructure, operations runbooks, benchmark suites, and authenticated-principal rate limiting are implemented; production hardening and matched-runner performance evidence remain.</div>
-            <div style="margin-top:23px"><a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Read the full roadmap ↗</a></div>
-          </div>
-          <div class="status-card">
-            <div class="milestones">
-              <div class="milestone"><span class="milestone-code">M00</span><span><strong>Architecture baseline</strong><small>Project charter, ADRs, recovery plan</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M01</span><span><strong>Rust workspace</strong><small>Crates, CI, health endpoint</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M02</span><span><strong>Execution domain</strong><small>Typed IDs, lifecycle, retry semantics</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M03</span><span><strong>Single-node runtime</strong><small>Scheduler, DAGs, cancellation, shutdown</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M04</span><span><strong>Durable persistence</strong><small>PostgreSQL, outbox, inbox, JetStream, process recovery</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M05</span><span><strong>Distributed coordination</strong><small>Node membership, worker registration, partition fencing</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M06</span><span><strong>WASM extension runtime</strong><small>WIT ABI, Wasmtime sandbox, scheduler-backed plugin tasks</small></span><span class="state">Complete</span></div>
-              <div class="milestone"><span class="milestone-code">M07</span><span><strong>Control plane</strong><small>Versioned API, CLI/SDK, tenant isolation, read-only dashboard</small></span><span class="state">Complete</span></div>
-              <div class="milestone current"><span class="milestone-code">M08</span><span><strong>Production engineering</strong><small>Telemetry, failure recovery, benchmarks, operations hardening</small></span><span class="state current">In progress</span></div>
-            </div>
-          </div>
+          <article class="arch-card"><span class="arch-index">01 / CORE</span><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg></span><h3>Rust runtime</h3><p>Typed execution states, DAG validation, dependency scheduling, bounded concurrency, retries and cancellation.</p></article>
+          <article class="arch-card"><span class="arch-index">02 / STATE</span><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span><h3>PostgreSQL storage</h3><p>Transactional state changes, attempts, worker leases, fencing tokens, immutable migrations and forced tenant isolation.</p></article>
+          <article class="arch-card"><span class="arch-index">03 / EVENTS</span><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/></svg></span><h3>JetStream transport</h3><p>Transactional outbox, stable message identity, broker acknowledgements, pull consumers and durable inbox deduplication.</p></article>
+          <article class="arch-card"><span class="arch-index">04 / EXTENSIONS</span><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16"/></svg></span><h3>WASM boundary</h3><p>Versioned WIT interface, default-deny imports, fresh bounded stores and resource-limited Wasmtime execution.</p></article>
         </div>
       </div>
     </section>
 
     <section class="section">
-      <div class="shell">
-        <div class="cta">
-          <div><div class="kicker">Explore the implementation</div><h2>Follow the code, not the hype.</h2><p>Browse the source, inspect the persistence contract, or pick up from the next unchecked milestone.</p></div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <a class="button primary" href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">Source repository ↗</a>
-            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/api/openapi.yaml" target="_blank" rel="noreferrer">OpenAPI v1 ↗</a>
-            <a class="button" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Full roadmap ↗</a>
+      <div class="container">
+        <div class="section-head">
+          <div><div class="kicker">Control plane v1</div><h2>Operate through a contract,<br>not a database connection.</h2></div>
+          <p class="section-copy">A versioned HTTP API, CLI and typed Rust SDK expose operator and tenant scopes. The browser console is read-only and connects to an API endpoint you operate.</p>
+        </div>
+        <div class="cap-grid">
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg></span><span class="cap-state">Implemented</span></div><h3>Versioned HTTP API</h3><p>Workflow submission, paginated history, task inspection, event metadata, worker inventory and tenant-scoped endpoints.</p><a class="cap-link" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/api/openapi.yaml">OpenAPI 3.1 ↗</a></article>
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h4"/></svg></span><span class="cap-state">Implemented</span></div><h3>CLI and Rust SDK</h3><p>Typed requests, operator and tenant credential scopes, URL safety, redirect blocking, bounded payloads and redacted errors.</p><a class="cap-link" href="https://github.com/pooya-labs/aetherflow/tree/main/crates/aetherflow-sdk">Explore the SDK ↗</a></article>
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"/></svg></span><span class="cap-state">Read-only</span></div><h3>Browser console</h3><p>Connect to your own HTTPS API to inspect workflow runs, task snapshots, redacted event history and active workers.</p><a class="cap-link" href="dashboard/">Open the console ↗</a></article>
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M4 8h16M4 16h16"/><circle cx="12" cy="8" r="2"/><circle cx="12" cy="16" r="2"/></svg></span><span class="cap-state">Implemented</span></div><h3>Tenant boundaries</h3><p>Credential-derived identity, role permissions, composite ownership and FORCE ROW LEVEL SECURITY across tenant tables.</p><a class="cap-link" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/decisions/0012-tenant-ownership-and-row-level-authorization.md">Security decision ↗</a></article>
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v14H4zM8 9h8M8 13h5M8 17h3"/></svg></span><span class="cap-state">Implemented</span></div><h3>Operational telemetry</h3><p>Structured logs, request traces, W3C trace context, bounded Prometheus metrics and opt-in OTLP export.</p><a class="cap-link" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/operations/slo-proposal.md">SLO and telemetry ↗</a></article>
+          <article class="cap-card"><div class="cap-top"><span class="arch-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 20 7v5c0 5-3.4 8-8 9-4.6-1-8-4-8-9V7z"/><path d="m8 12 2.5 2.5L16 9"/></svg></span><span class="cap-state">Tested in CI</span></div><h3>Recovery drills</h3><p>API restart, in-flight worker completion during API outage, full JetStream outage and isolated restore-to-runtime.</p><a class="cap-link" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/operations/backup-restore.md">Recovery runbook ↗</a></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="recovery">
+      <div class="container recovery-shell">
+        <div class="recovery-intro">
+          <div class="kicker">Designed for failure</div>
+          <h2>Recovery is an execution path.</h2>
+          <p>Tests do more than assert a process starts. They stop the API, terminate a worker, remove the full broker cluster, restore durable state and verify the work continues from recorded state.</p>
+          <div class="recovery-note"><strong>Delivery contract:</strong> AetherFlow provides at-least-once delivery. External side effects still need application-level idempotency or a transaction shared with the downstream state.</div>
+        </div>
+        <div class="recovery-grid">
+          <article class="recovery-card"><span class="recovery-step">Scenario 01 / API restart</span><h3>Accepted work survives API loss</h3><p>A workflow accepted over HTTP remains readable after the API process is killed and restarted against the same PostgreSQL state.</p><span class="evidence">Hosted integration test</span></article>
+          <article class="recovery-card"><span class="recovery-step">Scenario 02 / Worker loss</span><h3>In-flight work is independent</h3><p>A separate worker can complete its active handler while the control API remains offline.</p><span class="evidence">Hosted restore rehearsal</span></article>
+          <article class="recovery-card"><span class="recovery-step">Scenario 03 / Broker outage</span><h3>Outbox retains retryable events</h3><p>All three JetStream members are stopped; PostgreSQL retains the unpublished event and the consumer processes it after quorum returns.</p><span class="evidence">Three-node fault test</span></article>
+          <article class="recovery-card"><span class="recovery-step">Scenario 04 / Restore</span><h3>Restored services resume execution</h3><p>An isolated PostgreSQL and JetStream restore is followed by a real API submission, worker execution, event publication and inbox commit.</p><span class="evidence">Hosted CI rehearsal</span></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section contract">
+      <div class="container">
+        <div class="section-head">
+          <div><div class="kicker">The contract</div><h2>Clear guarantees.<br>Clear limits.</h2></div>
+          <p class="section-copy">Reliable infrastructure starts by stating what it guarantees — and what remains the responsibility of the application built on top.</p>
+        </div>
+        <div class="contract-panel">
+          <div class="contract-side">
+            <h3>What AetherFlow provides</h3>
+            <p>Durable coordination primitives with explicit state transitions.</p>
+            <ul class="contract-list"><li>Transactional workflow and task state in PostgreSQL</li><li>Lease ownership, heartbeats and monotonically increasing fencing tokens</li><li>Outbox publication and inbox-backed logical deduplication</li><li>Tenant-scoped authorization and forced row-level security</li><li>Recoverable worker and broker paths verified by integration tests</li></ul>
           </div>
+          <div class="contract-side">
+            <h3>What your application still owns</h3>
+            <p>Distributed execution cannot make an arbitrary external side effect transactional by itself.</p>
+            <ul class="contract-list"><li>Idempotency for payments, emails and other external side effects</li><li>Secrets, TLS certificates and production NATS credentials</li><li>Shared ingress throttling across API replicas</li><li>Production backups, PITR and owner-approved RPO/RTO</li><li>Deployment topology, SLO targets and on-call ownership</li></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="developers">
+      <div class="container">
+        <div class="section-head">
+          <div><div class="kicker">Developer workflow</div><h2>Start with the source.<br>Run the infrastructure locally.</h2></div>
+          <p class="section-copy">The repository includes a pinned Rust toolchain and a loopback-only PostgreSQL 18 / three-node JetStream development stack. Use disposable data only.</p>
+        </div>
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-head"><span>01 / Clone and prepare</span><button class="copy-btn" type="button" data-copy="clone-code">Copy</button></div>
+            <pre id="clone-code">git clone https://github.com/pooya-labs/aetherflow.git
+cd aetherflow
+rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy</pre>
+            <div class="code-note">The repository pins its compiler and formatting/lint components for repeatable builds.</div>
+          </div>
+          <div class="code-card">
+            <div class="code-head"><span>02 / Start local dependencies</span><button class="copy-btn" type="button" data-copy="compose-code">Copy</button></div>
+            <pre id="compose-code">docker compose --env-file .env.example up --detach --wait
+docker compose ps</pre>
+            <div class="code-note">Development fixture only. The sample values and loopback plaintext database must never be reused in a network deployment.</div>
+          </div>
+          <div class="code-card">
+            <div class="code-head"><span>03 / Verify the workspace</span><button class="copy-btn" type="button" data-copy="verify-code">Copy</button></div>
+            <pre id="verify-code">cargo +1.99.1 fmt --all -- --check
+cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings
+cargo +1.99.1 test --workspace --locked
+cargo +1.99.1 build --workspace --release --locked</pre>
+            <div class="code-note">Database and JetStream integration suites have additional disposable-service environment variables in the development guide.</div>
+          </div>
+          <div class="code-card">
+            <div class="code-head"><span>04 / Explore the API</span><button class="copy-btn" type="button" data-copy="api-code">Copy</button></div>
+            <pre id="api-code">cargo run -p aetherflow-server
+cargo run -p aetherflow-cli -- --help
+curl --fail http://127.0.0.1:8080/health</pre>
+            <div class="code-note">The server starts in health-only mode without database configuration. Follow the development guide before using durable routes.</div>
+          </div>
+        </div>
+        <p style="margin:17px 0 0;color:var(--subtle);font-size:10px">For full server configuration, database roles, TLS, tenant credentials and real integration suites, follow the <a href="https://github.com/pooya-labs/aetherflow/blob/main/docs/development.md" style="color:var(--mint);text-decoration:underline;text-underline-offset:3px">Development Guide ↗</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="documentation">
+      <div class="container">
+        <div class="section-head">
+          <div><div class="kicker">Documentation</div><h2>Everything has a source of truth.</h2></div>
+          <p class="section-copy">Explore the API contract, persistence semantics, operational runbooks and the release gate directly in the repository.</p>
+        </div>
+        <div class="docs-grid">
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/development.md"><span class="doc-type">Getting started</span><h3>Development guide</h3><p>Toolchain, Compose services, server setup, CLI, SDK and integration-test instructions.</p><span class="doc-link">Read guide ↗</span></a>
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/api/openapi.yaml"><span class="doc-type">API reference</span><h3>OpenAPI 3.1</h3><p>Versioned control-plane routes, request models, security schemes and response contracts.</p><span class="doc-link">Inspect schema ↗</span></a>
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/persistence/postgres-transaction-contract.md"><span class="doc-type">Data integrity</span><h3>PostgreSQL contract</h3><p>Transaction boundaries, durable state, ownership, leases and persistence invariants.</p><span class="doc-link">Read contract ↗</span></a>
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/operations/backup-restore.md"><span class="doc-type">Operations</span><h3>Backup & restore</h3><p>Coordinated PostgreSQL and JetStream recovery procedures and verification boundaries.</p><span class="doc-link">Open runbook ↗</span></a>
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/security/threat-model.md"><span class="doc-type">Security</span><h3>Threat model</h3><p>Assets, trust boundaries, abuse cases, mitigations and remaining production risks.</p><span class="doc-link">Review security ↗</span></a>
+          <a class="doc-card" href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md"><span class="doc-type">Project status</span><h3>Master roadmap</h3><p>Milestones, hosted verification, current checkpoint and remaining engineering work.</p><span class="doc-link">View roadmap ↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="release-panel">
+          <div>
+            <div class="kicker">Release engineering</div>
+            <h2>API v1 is implemented.<br>Stable 1.0.0 is being prepared.</h2>
+            <p>The versioned control-plane contract, CLI, SDK, tenant isolation and recovery tests are in place. The stable release remains gated on matching-runner regression verification, production ingress and operations sign-off, backup objectives, security review and release provenance. This site is the product interface; it does not imply a hosted production control plane is included.</p>
+            <div class="hero-actions" style="margin-bottom:0">
+              <a class="btn btn-primary" href="https://github.com/pooya-labs/aetherflow/blob/main/docs/releases/v1-readiness.md">Review v1 release gates ↗</a>
+              <a class="btn" href="https://github.com/pooya-labs/aetherflow/actions">CI evidence ↗</a>
+            </div>
+          </div>
+          <div class="release-state"><small>Release state</small><strong>Engineering candidate</strong><span>Not yet tagged as v1.0.0</span></div>
         </div>
       </div>
     </section>
   </main>
 
   <footer>
-    <div class="shell footer-row">
-      <span>© 2026 AetherFlow · Experimental software, built with Rust.</span>
-      <div class="footer-links">
-        <a href="https://github.com/pooya-labs/aetherflow" target="_blank" rel="noreferrer">GitHub</a>
-        <a href="https://github.com/pooya-labs/aetherflow/blob/main/README.md" target="_blank" rel="noreferrer">README</a>
-        <a href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Roadmap</a>
-        <a href="https://github.com/pooya-labs/aetherflow/blob/main/docs/architecture/overview.md" target="_blank" rel="noreferrer">Architecture</a>
+    <div class="container">
+      <div class="footer-top">
+        <a class="footer-brand" href="#top"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 18 9.2 5.5l3 6.2 2.1-4.2L20.5 18M3.5 18h17"/></svg></span>AetherFlow</a>
+        <div class="footer-links"><a href="https://github.com/pooya-labs/aetherflow">GitHub</a><a href="dashboard/">Console</a><a href="https://github.com/pooya-labs/aetherflow/blob/main/README.md">README</a><a href="https://github.com/pooya-labs/aetherflow/blob/main/ROADMAP.md">Roadmap</a><a href="https://github.com/pooya-labs/aetherflow/blob/main/LICENSE">Apache-2.0</a></div>
       </div>
+      <div class="footer-bottom"><span>© <span id="year">2026</span> AetherFlow · Built with Rust.</span><span><strong>API v1</strong> · Self-hosted infrastructure · Stable 1.0.0 release preparation</span></div>
     </div>
   </footer>
-
-  <script>
-    const root = document.documentElement;
-    const toggle = document.getElementById("theme-toggle");
-    const themeIcon = document.getElementById("theme-icon");
-    const savedTheme = (() => { try { return localStorage.getItem("aetherflow-theme"); } catch (_) { return null; } })();
-    if (savedTheme === "light" || savedTheme === "dark") root.dataset.theme = savedTheme;
-    toggle.addEventListener("click", () => {
-      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
-      try { localStorage.setItem("aetherflow-theme", root.dataset.theme); } catch (_) {}
-    });
-    const menuToggle = document.getElementById("menu-toggle");
-    const mobileMenu = document.getElementById("mobile-menu");
-    menuToggle.addEventListener("click", () => { mobileMenu.hidden = !mobileMenu.hidden; });
-    mobileMenu.querySelectorAll("a").forEach(link => link.addEventListener("click", () => { mobileMenu.hidden = true; }));
-  </script>
+  <script src="site.js" defer></script>
 </body>
 </html>
