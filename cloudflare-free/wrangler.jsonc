@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schemas.cloudflare.com/wrangler.json",
+  "name": "aetherflow-free-runtime",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-08",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": false,
+      "head_sampling_rate": 0.1,
+      "persist": true
+    },
+    "redact_query_string": true
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "https://pooya-labs.github.io"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aetherflow-free",
+      "database_id": "2117e7e0-f2cb-4562-85f4-25171dcff859"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "aetherflow-execution",
+      "binding": "AETHERFLOW_EXECUTIONS",
+      "class_name": "AetherFlowExecution",
+      "default_retention": {
+        "success_retention": "3 days",
+        "error_retention": "3 days"
+      }
+    }
+  ]
+}
