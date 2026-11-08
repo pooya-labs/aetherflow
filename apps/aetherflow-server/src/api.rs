@@ -1558,6 +1558,11 @@ fn hash_api_token(api_token: &str) -> Result<[u8; 32], std::io::Error> {
     hash_secret_token("AETHERFLOW_API_TOKEN", api_token)
 }
 
+/// Validates the deployment's edge-to-origin secret before startup performs DDL.
+pub(crate) fn validate_ingress_token_value(token: &str) -> Result<(), std::io::Error> {
+    hash_secret_token("AETHERFLOW_INGRESS_TOKEN", token).map(|_| ())
+}
+
 fn secret_header_matches(
     expected: &[u8; 32],
     headers: &HeaderMap,
