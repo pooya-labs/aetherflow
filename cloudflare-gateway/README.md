@@ -13,7 +13,7 @@ Client
   v
 Cloudflare Worker: aetherflow-gateway
   |
-  +--> SHA-256(CF-Connecting-IP)
+  +--> HMAC-SHA-256(CF-Connecting-IP, AETHERFLOW_INGRESS_TOKEN)
   |       |
   |       v
   |    One SQLite-backed Durable Object per client IP
@@ -39,7 +39,7 @@ The Worker never selects an origin from request headers, query parameters, or ca
 ## Security properties
 
 - The client identity is taken from Cloudflare's `CF-Connecting-IP` edge header. `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`, and other client-supplied identity headers are removed before proxying.
-- Raw client addresses are hashed with SHA-256 before use as Durable Object names.
+- Raw client addresses are keyed with HMAC-SHA-256 before use as Durable Object names, so an observer of DO names cannot cheaply enumerate likely client IPs.
 - Each address maps to its own SQLite-backed Durable Object. This avoids one global hot object while keeping a client's token bucket strongly consistent across Worker replicas and locations.
 - Token-bucket reads and writes are synchronous SQLite operations in one Durable Object turn. A rejected request does not accumulate negative token debt.
 - If the origin or ingress secret is missing, if the Durable Object cannot be reached, or if the client address is unavailable, the Worker fails closed.
@@ -61,7 +61,7 @@ Required values:
 | `AETHERFLOW_GATEWAY_BURST` | Worker text binding | Initial default 60 requests |
 | `AETHERFLOW_GATEWAY_PER_SECOND` | Worker text binding | Initial refill 20 requests/second |
 
-Generate a high-entropy token, for example with `openssl rand -hex 32`. Store it only in the API secret manager and as the Worker Secret `AETHERFLOW_INGRESS_TOKEN`. Do not place it in Git, `.env.example`, logs, or ordinary Worker variables. Rotate it by updating both sides in a coordinated deployment.
+Generate a high-entropy token, for example with `openssl rand -hex 32`. Store it only in the API secret manager and as the Worker Secret `AETHERFLOW_INGRESS_TOKEN`. Do not place it in Git, `.env.example`, logs, or ordinary Worker variables. Rotate it by updating both sides in a coordinated deployment. The same secret keys the per-client HMAC names; rotating it intentionally starts fresh Durable Object buckets for all clients.
 
 The 60-request burst / 20-per-second refill is only a starting policy, not a production SLO. Tune it against expected concurrency, five-repeat API load tests, and legitimate shared-NAT behavior.
 
