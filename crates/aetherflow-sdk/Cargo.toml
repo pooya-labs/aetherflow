@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "Typed Rust client for the AetherFlow v1 control-plane API."
 
 [dependencies]

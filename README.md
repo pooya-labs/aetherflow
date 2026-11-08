@@ -79,6 +79,7 @@ Operational procedures are documented for a coordinated PostgreSQL/JetStream bac
 - [PostgreSQL schema upgrade runbook](docs/operations/schema-upgrades.md)
 - [Operational guide](docs/operations/production-guide.md)
 - [SLO proposal (draft)](docs/operations/slo-proposal.md)
+- [Version 1.0.0 release readiness checklist](docs/releases/v1-readiness.md)
 - [Security threat model](docs/security/threat-model.md)
 
 ## Operations telemetry
@@ -133,7 +134,9 @@ License selection remains an owner-only release decision; no project license fil
 
 ## License
 
-License selection is pending; no license grant is made yet.
+AetherFlow is distributed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [LICENSE](LICENSE) for the complete terms. Every Rust package in this workspace inherits the Apache-2.0 SPDX identifier from the root workspace metadata.
+
+The license does not grant permission to use the AetherFlow or Pooya Labs names, logos, or trademarks. Third-party dependencies and separately supplied assets remain subject to their own license terms.
 
 ## Persistence status
 
