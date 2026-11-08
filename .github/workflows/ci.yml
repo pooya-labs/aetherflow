@@ -183,3 +183,17 @@ jobs:
           path: Cargo.lock
           if-no-files-found: error
           retention-days: 1
+
+  cloudflare-free-smoke:
+    name: Smoke-test deployed Cloudflare Free runtime
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify the deployed no-Origin runtime end to end
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python3 scripts/smoke-cloudflare-free.py
