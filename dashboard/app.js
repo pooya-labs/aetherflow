@@ -847,6 +847,7 @@
 
   async function connectCloudflareFree() {
     const config = window.AETHERFLOW_RUNTIME_CONFIG;
+    if (config && config.mode === "manual") return;
     if (!config || config.mode !== "cloudflare-free" || !config.apiBase || !config.bootstrapPath) {
       setConnection("The free serverless runtime is not configured.", "bad");
       return;
