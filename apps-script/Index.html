@@ -66,7 +66,15 @@
               ready = true;
               bootstrapping = false;
               setStatus("Connected · private demo workspace · session expires in 6 hours");
-              postToFrame({ type: "AETHERFLOW_BRIDGE_INIT", payload: payload });
+              postToFrame({
+                type: "AETHERFLOW_BRIDGE_INIT",
+                payload: {
+                  workspace: payload.workspace,
+                  user: payload.user,
+                  expiresInSeconds: payload.expiresInSeconds,
+                  mode: payload.mode
+                }
+              });
             })
             .withFailureHandler(function (error) {
               bootstrapping = false;
