@@ -2,7 +2,7 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-08
+**Last reviewed:** 2026-11-09
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
@@ -19,13 +19,14 @@ The restore rehearsal proved that a restored PostgreSQL v10/RLS database and res
 
 The exact-source PostgreSQL/NATS run archived five repeats for each shape: fan-out median throughput 7.314 workflows/s and p95 7,863.339 ms; chain median throughput 7.244 workflows/s and p95 7,999.233 ms. Each repeat reconciled 896 outbox/inbox events with zero duplicate events or errors. The candidate runner fingerprint did not match the stored AMD EPYC 9V45 reference, so the comparator correctly reported SKIP and applied no numeric threshold. The repository does contain two independent five-repeat EPYC 9V45 reference sessions (ten samples per shape), but the current candidate has not yet exercised the comparator's numeric branch on that matching fingerprint. These numbers are not production SLOs.
 
-## Latest main-head validation — 2026-11-08
+## Latest main-head validation — 2026-11-09
 
-- Rust CI passed on the current main head `2ce6c7450186a6e50332c12872b17f4b01196739`: [run 42515007044](https://github.com/pooya-labs/aetherflow/actions/runs/42515007044). Formatting, Clippy, workspace tests, build, scheduler benchmark smoke, WebAssembly lint/build, ABI v1 example execution, docs build, and the Compose stack all completed successfully.
-- Supply-chain checks passed on the same head: [run 42515007075](https://github.com/pooya-labs/aetherflow/actions/runs/42515007075). GitHub Pages deployed successfully: [run 42515006542](https://github.com/pooya-labs/aetherflow/actions/runs/42515006542).
-- PostgreSQL/NATS validation passed on `df0ab8f63646708e25b6136b26a72484d702feab`: [run 42512751327](https://github.com/pooya-labs/aetherflow/actions/runs/42512751327), including the disposable NATS TLS fixture, trusted-CA JetStream publish, and wrong-host rejection. The three subsequent commits through `2ce6c74` changed only `README.md`; the tested executable and workflow source is unchanged at current main.
-- The regular Cloudflare Free CI smoke (health and Pages CORS) passed on current main. The full two-workflow live smoke was attempted on `df0ab8f` but the public Worker correctly returned HTTP 429 `workflow_daily_limit`: the project's 25 workflow launches/day had already been consumed by earlier live tests. This is a quota skip, not a runtime crash; do not raise the free-tier cap to force a test. Re-run the full smoke once after the UTC daily reset, preferably only when the account budget is otherwise unused.
-
+- Current main HEAD dc1edea3946e89e8ca0dd1430552487401080eaa passed Rust CI [42522117027](https://github.com/pooya-labs/aetherflow/actions/runs/42522117027), including formatting, Clippy, workspace tests, release build, scheduler benchmark smoke, WebAssembly lint/build and ABI example execution, docs and Compose checks.
+- Supply-chain and full-history secret checks passed on the same HEAD: [run 42522117055](https://github.com/pooya-labs/aetherflow/actions/runs/42522117055). GitHub Pages built and deployed on the same HEAD: [run 42522116708](https://github.com/pooya-labs/aetherflow/actions/runs/42522116708).
+- PostgreSQL/NATS integration validation [42512751327](https://github.com/pooya-labs/aetherflow/actions/runs/42512751327) passed on df0ab8f63646708e25b6136b26a72484d702feab, including a live TLS-enabled JetStream fixture, trusted-CA publish, hostname-mismatch rejection, storage/API integration, schema invariants and restore-to-runtime verification. The commits from that tested runtime source through dc1edea do not modify Rust, PostgreSQL migration/storage, server, or NATS transport source; still re-run this workflow if any of those paths change for release.
+- Product-site and Apps Script browser acceptance last passed 12/12 tests on 7c2852f in [run 42521608664](https://github.com/pooya-labs/aetherflow/actions/runs/42521608664). This is not the current main HEAD. The present owner-attribution patch adds browser assertions for the official mark, destination link and image loading on the product site and console; its pull-request run is the required verification for those changes.
+- Apps Script owner persistence was live-tested with gas-smoke-61f2c9e5308d4978ae69d39ddf6bf5d6. The source correction that keeps future storage-only submissions pending is committed, but is not active in the deployed Web App until the owner copies the checked-in Code.gs and publishes a new version. The existing private Spreadsheet and /exec URL must be retained; no setup rerun or new database is required.
+- The release remains blocked by the unchecked production and benchmark gates below. A green Rust CI, security scan and Pages deployment do not close infrastructure, operational approval or release-provenance requirements.
 ## Additional verified engineering slices
 
 - The schema v10 operational-metrics extension passed PostgreSQL/JetStream CI [42494177393](https://github.com/pooya-labs/aetherflow/actions/runs/42494177393) with 28/28 steps. It validates tenant-isolated HTTP/TLS metrics, migration/index assertions, JetStream, benchmark profiles and restore-to-runtime.
@@ -66,9 +67,13 @@ This track improves usability where an external Origin is unavailable, but it do
 
 The operator-owned deployment checklist is in [production-acceptance.md](../operations/production-acceptance.md). It covers gateway source throttling and origin bypass, TLS/secrets, restricted PostgreSQL roles, production NATS controls, approved recovery objectives, SLO evidence and sign-off. It is a template; no production owner has approved it yet.
 
+## Project ownership and branding
+
+AetherFlow is a Pooya Labs Platform project. The owner credit is linked from the repository README, product website and browser console. The monogram is stored at assets/brand/pooya-monogram.webp as a black rounded-square tile and was sourced from the official [Pooya Labs Platform brand asset](https://github.com/pooya-labs/pooya-labs-platform/blob/main/apps/platform/public/brand/pooya-monogram.webp). Keep the owner attribution link and canonical asset path aligned when changing the site or console.
+
 ## Licensing
 
-The repository code is licensed under Apache License 2.0. The root LICENSE file is authoritative, and each Cargo package inherits the Apache-2.0 SPDX identifier through workspace metadata. The license does not grant rights to the AetherFlow or Pooya Labs names, logos, or trademarks. Verify third-party dependency and separately supplied asset notices as part of release packaging.
+The repository code is licensed under Apache License 2.0. The root LICENSE file is authoritative, and each Cargo package inherits the Apache-2.0 SPDX identifier through workspace metadata. The Apache license applies to the repository code; it does not grant rights to the AetherFlow or Pooya Labs names, logos, or trademarks. The monogram remains a separately supplied owner brand asset. Verify third-party dependency and asset notices as part of release packaging.
 
 ## Explicit non-goals and claims to avoid
 
