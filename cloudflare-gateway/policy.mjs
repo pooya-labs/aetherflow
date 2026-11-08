@@ -102,6 +102,9 @@ export function consumeTokenBucket(previous, nowMs, capacity, refillPerSecond) {
     throw new TypeError("Stored token-bucket state is invalid");
   }
 
+  // Never move the persisted clock backwards: otherwise the next request
+  // could count the same elapsed interval twice and over-refill the bucket.
+  const updatedAt = Math.max(storedAt, nowMs);
   const elapsedSeconds = Math.max(0, nowMs - storedAt) / 1000;
   const available = Math.min(capacity, Math.max(0, storedTokens) + elapsedSeconds * refillPerSecond);
   const allowed = available >= 1;
@@ -113,7 +116,7 @@ export function consumeTokenBucket(previous, nowMs, capacity, refillPerSecond) {
   return {
     allowed,
     tokens,
-    updated_at_ms: nowMs,
+    updated_at_ms: updatedAt,
     retry_after_seconds: retryAfterSeconds,
   };
 }
