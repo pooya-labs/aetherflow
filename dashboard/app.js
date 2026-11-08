@@ -449,9 +449,12 @@
       state.page += 1;
       renderRuns();
       $("loadMore").disabled = !state.cursor;
-      $("welcomeText").textContent = "Connected to " + state.base + " · " + (state.scope === "tenant" ? "Tenant view" : "Operator view");
-      $("scopePill").textContent = state.scope === "tenant" ? "Tenant" : "Operator";
-      setConnection("Connected · live data", "good");
+      const appsScriptDemo = Boolean(window.AetherFlowAppsScriptBridge && window.AetherFlowAppsScriptBridge.isActive());
+      $("welcomeText").textContent = appsScriptDemo
+        ? "Connected to the Apps Script demo · synthetic workflow records in an owner-private Sheet."
+        : "Connected to " + state.base + " · " + (state.scope === "tenant" ? "Tenant view" : "Operator view");
+      $("scopePill").textContent = appsScriptDemo ? "Demo" : (state.scope === "tenant" ? "Tenant" : "Operator");
+      setConnection(appsScriptDemo ? "Connected · synthetic demo data" : "Connected · live data", "good");
       if (!append) {
         const metricsRequest = loadOperationalSnapshot(connectionRevision);
         const detailRequest = state.runs.length
@@ -679,7 +682,8 @@
     form.classList.add("hidden");
     $("disconnectButton").classList.add("hidden");
     $("connectionTitle").textContent = "Demo workspace";
-    $(".connection-copy")?.replaceChildren(document.createTextNode("Connected through the owner-managed Apps Script runtime. Each browser receives a separate synthetic workspace."));
+    const connectionCopy = document.querySelector(".connection-copy");
+    if (connectionCopy) connectionCopy.textContent = "Connected through the owner-managed Apps Script runtime. Each browser receives a separate synthetic workspace.";
     const securityNote = document.querySelector(".security-note");
     if (securityNote) securityNote.textContent = "Private demo session. The short-lived session capability stays inside the bridge and is never stored in the dashboard URL, cookies, or local storage.";
     const notice = document.querySelector(".notice span:last-child");
