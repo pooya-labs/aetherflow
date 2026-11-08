@@ -37,14 +37,17 @@ Independent worker / publisher / inbox-consumer processes
 
 The process-local authenticated-principal and failed-authentication limiters are secondary controls. They do not coordinate budgets across API replicas. Behind a reverse proxy, the application sees the proxy's TCP peer address. The gateway must enforce the shared client-source policy before forwarding.
 
+**Implementation checkpoint (not deployment acceptance):** [`cloudflare-gateway/`](../../cloudflare-gateway/README.md) now contains a Cloudflare Worker, SQLite-backed Durable Object rate limiter, a closed-by-default `cloudflare.config.ts`, and Node policy tests. The Worker derives identity from `CF-Connecting-IP`, hashes client addresses before DO routing, strips untrusted forwarding/identity headers, preserves API Bearer credentials, injects a Worker Secret as `X-AetherFlow-Ingress-Token`, and fails closed when rate limiting is unavailable. The Rust API now refuses non-loopback binds without `AETHERFLOW_INGRESS_TOKEN` and requires the matching header on every route except `/health`. These are repository implementation details only: the Worker is not deployed, the account has no active Zone or Tunnel, and AetherFlow has no verified API origin. Complete the evidence and owner sign-off below before marking this section accepted.
+
+
 ## 2. Gateway and origin acceptance
 
 - [ ] All public API traffic enters through one managed gateway/WAF policy with a shared counter store across gateway nodes.
-- [ ] Source identity is derived from the actual client connection at the trusted edge, including documented IPv4/IPv6 and NAT behavior.
-- [ ] Incoming X-Forwarded-For, Forwarded, X-Real-IP and identity headers are stripped. A canonical trusted header may be injected only when a future AetherFlow trusted-proxy integration is explicitly configured; the current binary ignores these headers.
-- [ ] The gateway rate-limits missing, malformed and invalid operator credentials and tenant credentials before forwarding. The same shared policy applies regardless of which API replica receives the request.
+- [ ] Verify the deployed Worker uses the edge-provided `CF-Connecting-IP` value, hashes it before DO routing, and behaves correctly for IPv4, IPv6, NATed clients and connection reuse. The code path is implemented but has not yet been exercised against a deployed gateway.
+- [ ] Verify the deployed Worker strips `CF-Connecting-IP`, `True-Client-IP`, `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, and caller-supplied `X-AetherFlow-Ingress-Token`; it injects only the server-side ingress token. No forwarded client identity is trusted by the API.
+- [ ] Verify the deployed Durable Object token bucket rate-limits requests from each client address before any operator/tenant credential reaches the API, and that the same budget is shared across Worker replicas and locations. The Worker implementation covers all API requests, not only invalid Bearer tokens; production thresholds still require load/NAT tuning.
 - [ ] Throttled requests return HTTP 429 with a bounded Retry-After. Requests below the throttle threshold continue to receive the authentication error contract, not an invented success response.
-- [ ] Request-body size, header size, connection count, concurrent requests, idle timeout and request timeout are bounded at the edge.
+- [ ] Verify the 2 MiB declared-body check and the API's streamed-body limit. Separately configure and test header-size, connection-count, concurrent-request, idle-timeout and request-timeout controls at the deployed edge/origin boundary; those controls are not all supplied by the Worker code.
 - [ ] API origins, alternate replicas, node ports and service IPs are not publicly reachable. Network policy/security groups permit ingress only from gateway egress.
 - [ ] Bypass tests prove that direct requests to every origin/replica fail from an untrusted network and that repeated unauthenticated attempts across multiple gateway nodes share one quota.
 - [ ] Spoofed forwarding headers do not reset, evade or transfer the source quota. Test IPv4, IPv6, NATed clients and connection reuse.
@@ -53,7 +56,7 @@ Record the evidence: gateway configuration revision, source-key policy, threshol
 
 ## 3. API, identity and secrets
 
-- [ ] API replicas use non-loopback binds only with valid TLS certificates and private keys. Remote PostgreSQL connections require certificate and hostname verification.
+- [ ] API replicas use non-loopback binds only with valid TLS certificates/private keys and the shared `AETHERFLOW_INGRESS_TOKEN`; direct requests without `X-AetherFlow-Ingress-Token` must receive 403 on every route except `/health`. Remote PostgreSQL connections require certificate and hostname verification.
 - [ ] The deployment has a secret manager for operator/tenant credentials, database credentials, NATS credentials, TLS keys and OTLP exporter headers. No secret is stored in the repository, image, logs, shell history or public deployment metadata.
 - [ ] Credential issuance, revocation, expiry, emergency rotation and restart/rollout behavior are tested.
 - [ ] Operator identity limitations are accepted explicitly: the current platform API uses one shared operator token, so audit spans can identify only a shared operator credential, not a human. Do not claim per-person operator attribution until distinct operator identities or an approved external identity layer exists.
