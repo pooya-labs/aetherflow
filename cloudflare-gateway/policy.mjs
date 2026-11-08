@@ -123,6 +123,8 @@ export function buildUpstreamRequest(request, origin, ingressToken) {
   };
   if (request.method !== "GET" && request.method !== "HEAD") {
     init.body = request.body;
+    // Required by Node's fetch implementation for streamed bodies; harmless in Workers.
+    init.duplex = "half";
   }
   return new Request(target, init);
 }
