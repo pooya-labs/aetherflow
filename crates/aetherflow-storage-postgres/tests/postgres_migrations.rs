@@ -56,7 +56,12 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .count();
     let already_current = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 10, .. }))
+        .filter(|outcome| {
+            matches!(
+                outcome,
+                MigrationOutcome::AlreadyCurrent { version: 10, .. }
+            )
+        })
         .count();
     assert_eq!(applied, 1);
     assert_eq!(already_current, 1);

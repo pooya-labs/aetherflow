@@ -1153,12 +1153,7 @@ fn render_tenant_operational_metrics(metrics: &TenantOperationalMetrics) -> Stri
         .expect("write tenant metrics");
     }
 
-    const TERMINAL_WORKFLOW_STATUSES: [&str; 4] = [
-        "succeeded",
-        "failed",
-        "cancelled",
-        "timed_out",
-    ];
+    const TERMINAL_WORKFLOW_STATUSES: [&str; 4] = ["succeeded", "failed", "cancelled", "timed_out"];
     writeln!(
         output,
         "# HELP aetherflow_tenant_workflow_completions_last_30m Workflow runs that reached a terminal state in the rolling 30-minute window."
@@ -3054,15 +3049,18 @@ mod tests {
 
         assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"running\"} 2"));
         assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"failed\"} 0"));
-        assert!(rendered.contains(
-            "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 3"
-        ));
-        assert!(rendered.contains(
-            "aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1"
-        ));
-        assert!(rendered.contains(
-            "aetherflow_tenant_workflow_success_execution_samples_last_30m 3"
-        ));
+        assert!(
+            rendered.contains(
+                "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 3"
+            )
+        );
+        assert!(
+            rendered
+                .contains("aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1")
+        );
+        assert!(
+            rendered.contains("aetherflow_tenant_workflow_success_execution_samples_last_30m 3")
+        );
         assert!(rendered.contains(
             "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m 6.000000"
         ));
@@ -4276,23 +4274,29 @@ mod tests {
         assert!(
             tenant_metrics_text.contains("aetherflow_tenant_workflow_runs{status=\"cancelled\"} 1")
         );
-        assert!(tenant_metrics_text.contains(
-            "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 1"
-        ));
-        assert!(tenant_metrics_text.contains(
-            "aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1"
-        ));
-        assert!(tenant_metrics_text.contains(
-            "aetherflow_tenant_workflow_completions_last_30m{status=\"cancelled\"} 1"
-        ));
-        assert!(tenant_metrics_text.contains(
-            "aetherflow_tenant_workflow_success_execution_samples_last_30m 1"
-        ));
+        assert!(
+            tenant_metrics_text.contains(
+                "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 1"
+            )
+        );
+        assert!(
+            tenant_metrics_text
+                .contains("aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1")
+        );
+        assert!(
+            tenant_metrics_text.contains(
+                "aetherflow_tenant_workflow_completions_last_30m{status=\"cancelled\"} 1"
+            )
+        );
+        assert!(
+            tenant_metrics_text
+                .contains("aetherflow_tenant_workflow_success_execution_samples_last_30m 1")
+        );
         let success_execution_p95 = tenant_metrics_text
             .lines()
             .find_map(|line| {
                 line.strip_prefix(
-                    "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m "
+                    "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m ",
                 )
                 .and_then(|value| value.parse::<f64>().ok())
             })
