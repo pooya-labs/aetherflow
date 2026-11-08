@@ -1200,8 +1200,8 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("restore migration ledger row");
 
     // A database schema newer than the binary is never downgraded or ignored.
-    let future_version = 9_i64;
-    let future_name = "0009_future_schema.sql";
+    let future_version = 10_i64;
+    let future_name = "0010_future_schema.sql";
     let future_checksum = "a".repeat(64);
     client
         .execute(
@@ -1214,13 +1214,13 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     assert!(matches!(
         store.migrate().await,
         Err(StorageError::NewerSchema {
-            found: 9,
+            found: 10,
             supported: 9
         })
     ));
     client
         .execute(
-            "DELETE FROM aetherflow_schema_migrations WHERE version = 9",
+            "DELETE FROM aetherflow_schema_migrations WHERE version = 10",
             &[],
         )
         .await
