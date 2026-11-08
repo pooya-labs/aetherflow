@@ -26,6 +26,7 @@ For a PostgreSQL-backed server, supply independent values through a secret manag
 | `AETHERFLOW_API_TOKEN` | High-entropy platform/operator Bearer credential |
 | `DATABASE_SSL_MODE` | Leave at verified TLS mode for remote PostgreSQL; `disable` is only for disposable local Compose |
 | `AETHERFLOW_BIND` | Listener address; plaintext is allowed only on loopback |
+| `AETHERFLOW_INGRESS_TOKEN` | High-entropy 32–256 character URL-safe edge-to-origin secret; required whenever `AETHERFLOW_BIND` is non-loopback |
 | `AETHERFLOW_TLS_CERT_PATH`, `AETHERFLOW_TLS_KEY_PATH` | Required valid Rustls identity for non-loopback HTTP listener binds |
 | `AETHERFLOW_CORS_ALLOWED_ORIGINS` | Exact browser origins; CORS is not authentication |
 | `AETHERFLOW_API_RATE_LIMIT_BURST` | Positive integer; default 30 authenticated requests per process-local principal bucket |
@@ -45,11 +46,11 @@ The operator token is shared and rotating it requires process restart. Authentic
 
 ### Required ingress policy for external deployments
 
-An externally reachable deployment must still sit behind a managed ingress/API gateway that is the only public route to the API. The application's source limiter is process-local and sees the gateway's socket address rather than the original client; it cannot enforce a distributed client quota. Enforce a shared, distributed source-address rate limit at the gateway **before** forwarding requests, including missing/malformed/invalid Bearer credentials on both operator and tenant routes. Derive the source from the actual client connection, strip incoming forwarding/identity headers, and return `429` with a bounded `Retry-After`; keep `401` for requests below the throttle threshold. Apply request-size and connection/concurrency limits at the same boundary. Tune thresholds from expected legitimate NAT concentration and load tests rather than copying arbitrary per-IP values.
+The repository now includes a Cloudflare Worker implementation under [`cloudflare-gateway/`](../../cloudflare-gateway/README.md). It uses one SQLite-backed Durable Object per SHA-256-hashed client IP for a shared token bucket across Worker replicas and locations, limits API traffic before authentication is forwarded, returns `429` with `Retry-After`, and fails closed if the limiter is unavailable. The Worker exposes only `/api/v1/*` and `/health`, accepts only GET/HEAD/POST/OPTIONS, rejects declared request bodies larger than the API's 2 MiB limit, and refuses upstream redirects. The API's existing Axum body limit remains the authoritative streamed-body ceiling.
 
-The gateway must derive the source key from the actual client connection, not a caller-supplied `X-Forwarded-For`, `Forwarded`, or similar header. Strip incoming forwarding/identity headers and, only if the deployment later adds an explicitly configured trusted-proxy integration, inject a canonical value from the gateway. The API must not treat arbitrary forwarded headers as identity. Restrict the API listener/security group to gateway egress so clients cannot bypass the shared limiter by reaching an origin or alternate replica directly. Verify this bypass protection and aggregate enforcement across all API replicas during deployment acceptance.
+The Worker derives source identity from Cloudflare's edge-provided `CF-Connecting-IP`; it hashes the value before using it as a Durable Object name. It strips `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`, caller-supplied `CF-Connecting-IP`, and the caller-supplied ingress-token header. It preserves the API's operator or tenant Bearer token and injects `X-AetherFlow-Ingress-Token` from a Cloudflare Worker Secret. The Rust API stores only the SHA-256 digest of `AETHERFLOW_INGRESS_TOKEN` and compares the supplied header in constant time. The API ignores all forwarded identity headers.
 
-This is an operational architecture requirement, not a feature provided by the current binary. The application's authenticated-principal and failed-authentication limiters remain process-local and do not replace the shared ingress control or direct-origin network restrictions. Certificate issuance, renewal, private-key protection, PostgreSQL trust roots, and OTLP collector security remain deployment-operator responsibilities.
+The Rust server now refuses a non-loopback bind unless `AETHERFLOW_INGRESS_TOKEN` is configured, and the API rejects requests missing the matching edge header on every route except public `/health`. This closes the application-level direct-origin bypass when the shared secret remains private. It does not replace network isolation: restrict API origins and alternate replicas to Cloudflare egress or a private Tunnel. The Worker source/configuration is committed but not deployed or routed yet; the Cloudflare account currently has no active Zone or Tunnel, and no AetherFlow API origin has been provisioned. Certificate issuance, network policy, Tunnel setup, API hosting, secret distribution/rotation, concurrency policy and deployment acceptance remain operator-owned gates.
 
 ## 3. Database and transport
 
@@ -72,6 +73,7 @@ The credentials file is loaded when a client connection is created; the helper d
 - `GET /health` is a public process-liveness endpoint only. It does not prove PostgreSQL migrations, NATS connectivity, or end-to-end workflow readiness.
 - API control routes require the operator Bearer token; tenant routes require a tenant credential with the appropriate role.
 - A non-loopback listener must have a valid certificate and private key before the server starts.
+- A non-loopback listener also requires `AETHERFLOW_INGRESS_TOKEN`; all non-health API routes reject requests without the corresponding `X-AetherFlow-Ingress-Token` header.
 - Run migrations as part of a controlled deployment window and verify the exact migration ledger after upgrade.
 - Use the PostgreSQL schema workflow and Rust CI as pre-deployment evidence, not as a substitute for a production canary.
 
