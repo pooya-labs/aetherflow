@@ -64,7 +64,7 @@
     $("statusFilter").disabled = value || !state.token;
     $("workersButton").disabled = value || !state.token || state.scope !== "operator";
     const sampleButton = $("runSample");
-    if (sampleButton) sampleButton.disabled = value || !state.token || state.runtime !== "cloudflare-free";
+    if (sampleButton) sampleButton.disabled = value || !state.token || !["cloudflare-free", "apps-script"].includes(state.runtime);
   }
 
   function isCurrentConnection(revision) {
@@ -717,50 +717,80 @@
   });
 
   $("runSample")?.addEventListener("click", async () => {
-    if (state.runtime !== "cloudflare-free" || !state.token || state.busy) return;
-    const workflowRunId = "demo-" + crypto.randomUUID().replace(/-/g, "");
-    const submission = {
-      workflow_id: "serverless-showcase",
-      workflow_run_id: workflowRunId,
-      retry_policy: {
-        max_attempts: 2,
-        initial_backoff_ms: 100,
-        max_backoff_ms: 1000
-      },
-      tasks: [
-        {
-          task_id: "format-message",
-          depends_on: [],
-          input_base64: encodeJsonBase64({
-            type: "uppercase",
-            input: "AetherFlow runs without a separate Origin"
-          })
-        },
-        {
-          task_id: "fingerprint-message",
-          depends_on: [],
-          input_base64: encodeJsonBase64({
-            type: "sha256",
-            input: "AetherFlow · Cloudflare Free · D1"
-          })
-        },
-        {
-          task_id: "collect-results",
-          depends_on: ["format-message", "fingerprint-message"],
-          input_base64: encodeJsonBase64({ type: "collect" })
+    const runtime = state.runtime;
+    const appsScriptDemo = runtime === "apps-script";
+    if (!["cloudflare-free", "apps-script"].includes(runtime) || !state.token || state.busy) return;
+
+    const workflowRunId = (appsScriptDemo ? "gas-smoke-" : "demo-") + crypto.randomUUID().replace(/-/g, "");
+    const submission = appsScriptDemo
+      ? {
+          workflow_id: "apps-script-persistence-smoke",
+          workflow_run_id: workflowRunId,
+          retry_policy: {
+            max_attempts: 1,
+            initial_backoff_ms: 0,
+            max_backoff_ms: 0
+          },
+          tasks: [{
+            task_id: "stored-only-record",
+            depends_on: [],
+            input_base64: encodeJsonBase64({
+              purpose: "Apps Script persistence smoke test",
+              execution: "stored-only",
+              note: "This payload is persisted for inspection; the Apps Script profile does not execute tasks."
+            })
+          }]
         }
-      ]
-    };
+      : {
+          workflow_id: "serverless-showcase",
+          workflow_run_id: workflowRunId,
+          retry_policy: {
+            max_attempts: 2,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 1000
+          },
+          tasks: [
+            {
+              task_id: "format-message",
+              depends_on: [],
+              input_base64: encodeJsonBase64({
+                type: "uppercase",
+                input: "AetherFlow runs without a separate Origin"
+              })
+            },
+            {
+              task_id: "fingerprint-message",
+              depends_on: [],
+              input_base64: encodeJsonBase64({
+                type: "sha256",
+                input: "AetherFlow · Cloudflare Free · D1"
+              })
+            },
+            {
+              task_id: "collect-results",
+              depends_on: ["format-message", "fingerprint-message"],
+              input_base64: encodeJsonBase64({ type: "collect" })
+            }
+          ]
+        };
 
     const button = $("runSample");
     button.disabled = true;
-    setConnection("Submitting a sample workflow to Cloudflare…", "");
+    setConnection(
+      appsScriptDemo ? "Storing a persistence-test workflow in the private Sheet…" : "Submitting a sample workflow to Cloudflare…",
+      ""
+    );
     try {
       const receipt = await apiWrite("/api/v1/workflow-runs", submission);
       if (!isCurrentConnection(state.connectionRevision)) return;
       await loadRuns(false);
       if (isCurrentConnection(state.connectionRevision)) {
-        setConnection("Workflow accepted · " + receipt.workflow_run_id, "good");
+        setConnection(
+          appsScriptDemo
+            ? "Workflow stored · task not executed · " + receipt.workflow_run_id
+            : "Workflow accepted · " + receipt.workflow_run_id,
+          "good"
+        );
       }
     } catch (error) {
       setConnection("Workflow submission failed · " + error.message, "bad");
@@ -794,7 +824,12 @@
     const footer = document.querySelector(".footer");
     const sampleButton = $("runSample");
     if (sampleButton) {
-      sampleButton.classList.toggle("hidden", runtime !== "cloudflare-free");
+      const canSubmitSample = runtime === "cloudflare-free" || runtime === "apps-script";
+      sampleButton.classList.toggle("hidden", !canSubmitSample);
+      sampleButton.textContent = runtime === "apps-script" ? "＋ Store persistence test" : "▶ Run sample workflow";
+      sampleButton.title = runtime === "apps-script"
+        ? "Persist one synthetic workflow and its event in the private Sheet. The task will not execute."
+        : "Submit a bounded sample DAG to Cloudflare Workflows.";
       sampleButton.disabled = true;
     }
     if (runtime === "apps-script") {
