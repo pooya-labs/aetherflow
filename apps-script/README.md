@@ -10,7 +10,7 @@ This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded wor
 
 The owner confirmed that the dashboard displays `Read-only · Connected · synthetic demo data` and loads four seeded workflows. The bridge bootstrap and private Spreadsheet read path are therefore working. The sample IDs `demo-index-003` and `demo-retry-004` are expected seed records created by `createWorkspace_()`.
 
-The `Read-only` label belongs to the dashboard's selected-run inspection interface and is expected; it is not a connection failure. The owner confirmed that the storage action writes and reads back a workflow through the private Sheet. For this working deployment, do **not** rerun `_setupAetherFlowDemo_` or create another database. The owner completed the live persistence test: `gas-smoke-61f2c9e5308d4978ae69d39ddf6bf5d6` remained visible after a full-page reload, with its single task and `workflow.submitted` event. This confirms the real private Sheet write/read path. The task was stored, not executed. Chromium QA also covers the interaction with a persistent bridge fixture.
+The `Read-only` label belongs to the dashboard's selected-run inspection interface and is expected; it is not a connection failure. The owner confirmed that the storage action writes and reads back a workflow through the private Sheet. For this working deployment, do **not** rerun `_setupAetherFlowDemo_` or create another database. The owner completed the live persistence test: `gas-smoke-61f2c9e5308d4978ae69d39ddf6bf5d6` remained visible after a full-page reload, with its single task and `workflow.submitted` event. This confirms the real private Sheet write/read path. The task was stored, not executed. Chromium QA [42521608664](https://github.com/pooya-labs/aetherflow/actions/runs/42521608664) also passed all 12 tests, including the pending-state and persistence fixture.
 
 ## Included
 
@@ -42,7 +42,7 @@ Google may restrict anonymous Web App deployments for some account types or regi
 
 ## Update deployment
 
-After modifying the files, paste the updated source into the corresponding Apps Script editor files, save, then Deploy → Manage deployments → Edit and create a new version. The /exec URL remains the same.
+After modifying the files, paste the updated source into the corresponding Apps Script editor files, save, then Deploy → Manage deployments → Edit and create a new version. The /exec URL remains the same. The current repository correction to pending-only Apps Script submissions is in `apps-script/Code.gs`; the existing live deployment does not receive GitHub changes automatically.
 
 ## Limits and safety
 
