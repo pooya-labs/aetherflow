@@ -494,12 +494,25 @@ async function markTaskRunning(db, payload, task, attempt) {
   const row = await db.prepare(
     "UPDATE demo_tasks SET status = 'running', version = version + 1, attempts_started = ?, " +
     "started_at = COALESCE(started_at, ?), updated_at = ?, last_error_kind = NULL, last_error_message = NULL " +
-    "WHERE workspace_id = ? AND workflow_run_id = ? AND task_id = ? AND status IN ('ready', 'running') RETURNING version"
+    "WHERE workspace_id = ? AND workflow_run_id = ? AND task_id = ? AND status IN ('ready', 'running', 'retry_waiting') RETURNING version"
   ).bind(attempt, stamp, stamp, payload.workspace_id, payload.workflow_run_id, task.task_id).first();
   if (!row) throw new Error("The task is no longer runnable.");
   await db.batch([await insertEvent(db, payload.workspace_id, payload.workflow_run_id, "task_run",
     payload.task_run_ids[task.task_id], row.version, "task.running", stamp)]);
   return row.version;
+}
+
+async function markTaskRetryWaiting(db, payload, task, attempt, error) {
+  const stamp = nowIso();
+  const message = String(error && error.message || "Task attempt failed").slice(0, 300);
+  const row = await db.prepare(
+    "UPDATE demo_tasks SET status = 'retry_waiting', version = version + 1, attempts_started = ?, " +
+    "updated_at = ?, last_error_kind = 'retryable_error', last_error_message = ?, claimed_by = NULL, lease_expires_at = NULL " +
+    "WHERE workspace_id = ? AND workflow_run_id = ? AND task_id = ? AND status = 'running' RETURNING version"
+  ).bind(attempt, stamp, message, payload.workspace_id, payload.workflow_run_id, task.task_id).first();
+  if (!row) return;
+  await db.batch([await insertEvent(db, payload.workspace_id, payload.workflow_run_id, "task_run",
+    payload.task_run_ids[task.task_id], row.version, "task.retry_waiting", stamp)]);
 }
 
 async function executeBuiltinTask(task, dependencies, attempt) {
@@ -634,9 +647,16 @@ export class AetherFlowExecution extends WorkflowEntrypoint {
           async function (context) {
             const attempt = Number(context && context.attempt) || 1;
             await markTaskRunning(db, payload, task, attempt);
-            const result = await executeBuiltinTask(task, dependencies, attempt);
-            await finishTask(db, payload, task, result);
-            return result;
+            try {
+              const result = await executeBuiltinTask(task, dependencies, attempt);
+              await finishTask(db, payload, task, result);
+              return result;
+            } catch (error) {
+              if (attempt < payload.retry_policy.max_attempts) {
+                await markTaskRetryWaiting(db, payload, task, attempt, error);
+              }
+              throw error;
+            }
           }
         );
         results[task.task_id] = output;
