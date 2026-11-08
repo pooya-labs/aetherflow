@@ -85,3 +85,5 @@ node --check dashboard/app.js
 node --check cloudflare-free/worker.mjs
 ```
 
+On ordinary pushes, GitHub Actions checks the deployed Worker health endpoint and the public Pages CORS contract only. Use the **Run workflow** button for the full live submission, DAG, retry, and D1 event-history smoke. That explicit manual run creates two durable Workflow instances and therefore consumes the project's daily Workflow budget.
+
