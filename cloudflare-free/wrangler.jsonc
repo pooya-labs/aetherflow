@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schemas.cloudflare.com/wrangler.json",
   "name": "aetherflow-free-runtime",
   "main": "worker.mjs",
   "compatibility_date": "2026-11-08",
