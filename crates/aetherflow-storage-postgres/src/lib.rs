@@ -61,7 +61,10 @@ const DASHBOARD_HISTORY_INDEX_MIGRATION_SQL: &str =
 const TENANT_OPERATIONAL_METRICS_INDEX_MIGRATION_SQL: &str = include_str!(
     "../../aetherflow-runtime/migrations/postgres/0009_tenant_operational_metrics_index.sql"
 );
-const MIGRATION_VERSION: i64 = 9;
+const WORKFLOW_COMPLETION_METRICS_INDEX_SQL: &str = include_str!(
+    "../../aetherflow-runtime/migrations/postgres/0010_workflow_completion_metrics_index.sql"
+);
+const MIGRATION_VERSION: i64 = 10;
 const MIGRATION_ADVISORY_LOCK: i64 = 0x4145_5448_4552;
 
 #[derive(Clone, Copy)]
@@ -71,7 +74,7 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: [Migration; 9] = [
+const MIGRATIONS: [Migration; 10] = [
     Migration {
         version: 1,
         name: "0001_initial_schema.sql",
@@ -116,6 +119,11 @@ const MIGRATIONS: [Migration; 9] = [
         version: 9,
         name: "0009_tenant_operational_metrics_index.sql",
         sql: TENANT_OPERATIONAL_METRICS_INDEX_MIGRATION_SQL,
+    },
+    Migration {
+        version: 10,
+        name: "0010_workflow_completion_metrics_index.sql",
+        sql: WORKFLOW_COMPLETION_METRICS_INDEX_SQL,
     },
 ];
 
@@ -491,6 +499,11 @@ mod tests {
             MIGRATIONS[8].name,
             "0009_tenant_operational_metrics_index.sql"
         );
+        assert_eq!(MIGRATIONS[9].version, 10);
+        assert_eq!(
+            MIGRATIONS[9].name,
+            "0010_workflow_completion_metrics_index.sql"
+        );
 
         let initial = initial_migration_checksum();
         let inbox = migration_checksum(&MIGRATIONS[1]);
@@ -501,6 +514,7 @@ mod tests {
         let worker_grant_lock_rls = migration_checksum(&MIGRATIONS[6]);
         let dashboard_history_indexes = migration_checksum(&MIGRATIONS[7]);
         let tenant_operational_metrics_index = migration_checksum(&MIGRATIONS[8]);
+        let workflow_completion_metrics_index = migration_checksum(&MIGRATIONS[9]);
         for checksum in [
             initial,
             inbox,
@@ -511,6 +525,7 @@ mod tests {
             worker_grant_lock_rls,
             dashboard_history_indexes,
             tenant_operational_metrics_index,
+            workflow_completion_metrics_index,
         ] {
             assert_eq!(checksum.len(), 64);
             assert!(checksum.bytes().all(|byte| byte.is_ascii_hexdigit()));
