@@ -37,7 +37,9 @@ struct OutboxEnvelope<'a> {
 /// Publishes AetherFlow outbox events to a configured JetStream subject.
 ///
 /// The subject must be captured by an existing JetStream stream. Stream
-/// provisioning and credentials remain deployment responsibilities.
+/// provisioning, secret delivery, and server-side account/ACL policy remain
+/// deployment responsibilities. Use `NatsConnectionConfig` to establish the
+/// client connection with the configured credentials and TLS policy.
 #[derive(Clone)]
 pub struct NatsJetStreamPublisher {
     context: Context,
