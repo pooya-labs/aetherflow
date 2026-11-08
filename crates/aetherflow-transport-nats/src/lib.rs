@@ -5,7 +5,10 @@
 //! publications within the stream's configured duplicate window. Consumers
 //! must still use the durable PostgreSQL inbox for longer-lived deduplication.
 
+mod connection;
 mod consumer;
+
+pub use connection::{NatsConnectionConfig, NatsConnectionError};
 
 pub use consumer::{
     ConsumerMetrics, ConsumerMetricsSnapshot, EventHandlerFuture, JetStreamEvent,
