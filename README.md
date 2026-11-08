@@ -62,7 +62,7 @@ The versioned v1 control-plane API is implemented in apps/aetherflow-server and 
 | GET | /api/v1/tenant/task-runs/{task_run_id} | Read a tenant-owned task |
 | POST | /api/v1/tenant/task-runs/{task_run_id}/cancel | Cancel a tenant-owned task with an expected_version guard |
 
-The tenant-only `GET /api/v1/tenant/metrics` endpoint returns current workflow/queue/lease gauges plus terminal workflow outcome counts and successful execution p50/p95/p99 over a rolling 30-minute window. Completion duration uses persisted `started_at` and `finished_at`. The read-only, repeatable-read snapshot derives tenant scope from the validated credential, respects FORCE RLS, and exports only fixed status/state labels; it is not a platform-wide metric or a complete workflow SLO.
+The tenant-only `GET /api/v1/tenant/metrics` endpoint returns current workflow/queue/lease gauges plus terminal workflow outcome counts and successful completion-latency p50/p95/p99 over a rolling 30-minute window. Completion latency is measured from workflow acceptance (`started_at`) to terminal state (`finished_at`). The read-only, repeatable-read snapshot derives tenant scope from the validated credential, respects FORCE RLS, and exports only fixed status/state labels; it is not a platform-wide metric or a complete workflow SLO.
 
 The contract and its compatibility/security decisions are recorded in [ADR-0010](docs/decisions/0010-versioned-control-plane-api.md). Task input is base64 encoded and limited to 1 MiB after decoding; the HTTP request body is capped at 2 MiB. Inspection responses never return task input or output bytes. Reusing a workflow-run ID returns a conflict; the v1 API does not promise idempotent replay.
 
