@@ -13,9 +13,12 @@ import {
  * becomes a throughput bottleneck; each client's token bucket is strongly
  * consistent across all Worker replicas and Cloudflare locations.
  */
+const IDLE_BUCKET_TTL_MS = 24 * 60 * 60 * 1000;
+
 export class ClientRateLimiter {
-  constructor(ctx) {
+  constructor(ctx, now = () => Date.now()) {
     this.ctx = ctx;
+    this.now = now;
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS client_rate_limit (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -53,7 +56,8 @@ export class ClientRateLimiter {
     const previous = this.ctx.storage.sql
       .exec("SELECT tokens, updated_at_ms FROM client_rate_limit WHERE id = 1")
       .toArray()[0] ?? null;
-    const decision = consumeTokenBucket(previous, Date.now(), capacity, refillPerSecond);
+    const nowMs = this.now();
+    const decision = consumeTokenBucket(previous, nowMs, capacity, refillPerSecond);
 
     // Synchronous SQLite calls do not yield the Durable Object event loop.
     // The read/transition/write therefore executes as one non-interleaved turn.
@@ -67,10 +71,37 @@ export class ClientRateLimiter {
       decision.updated_at_ms,
     );
 
+    // Set the first idle-cleanup alarm only once per bucket lifetime. Active
+    // buckets are rescheduled from their last request when the alarm runs.
+    if (!previous) {
+      await this.ctx.storage.setAlarm(nowMs + IDLE_BUCKET_TTL_MS);
+    }
+
     return Response.json({
       allowed: decision.allowed,
       retry_after_seconds: decision.retry_after_seconds,
     });
+  }
+
+  async alarm() {
+    const row = this.ctx.storage.sql
+      .exec("SELECT updated_at_ms FROM client_rate_limit WHERE id = 1")
+      .toArray()[0] ?? null;
+
+    if (!row) {
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+
+    const expiresAt = Number(row.updated_at_ms) + IDLE_BUCKET_TTL_MS;
+    if (this.now() < expiresAt) {
+      await this.ctx.storage.setAlarm(expiresAt);
+      return;
+    }
+
+    // Delete all metadata and alarm state as well as the SQL row so inactive
+    // Durable Objects can be fully cleaned up and stop accruing storage.
+    await this.ctx.storage.deleteAll();
   }
 }
 
