@@ -20,6 +20,17 @@ The existing storage model has global workflow/task IDs and no tenant key on dur
 4. Every route below `/api/v1` requires the exact `Authorization: Bearer <token>` scheme. `GET /health` remains public and returns process liveness only.
 5. The credential grants the same operator-level access to all v1 control-plane routes. It is not a user identity, role system, per-tenant credential, or delegated authorization token. Rotation requires replacing the environment value and restarting the process.
 
+### Edge-to-origin gateway authentication
+
+1. For any non-loopback API bind, startup requires `AETHERFLOW_INGRESS_TOKEN` and validates its 32–256 character URL-safe format before connecting to PostgreSQL or running migrations.
+2. The server stores only the token's SHA-256 digest in process memory. Every request except public `GET /health` must include `X-AetherFlow-Ingress-Token`; supplied values are hashed and compared in constant time before any API route runs.
+3. The Cloudflare Worker removes a caller-supplied ingress header, then injects the value from a Worker Secret. The Worker also removes untrusted forwarded/identity headers and preserves the operator/tenant Bearer token unchanged.
+4. The Worker uses HMAC-SHA-256 with the same high-entropy ingress Secret to derive per-client Durable Object names. Rotating the Secret intentionally resets the per-client token-bucket identities and must be coordinated across the Worker and API.
+5. This is an application-layer origin guard, not a substitute for network isolation. Production deployments must still restrict the origin to Cloudflare egress or a private Tunnel and prove that all alternate replicas and service ports are unreachable from untrusted networks.
+6. The default loopback development bind does not require this extra token. A non-loopback bind without the token fails before database migration or listener startup.
+
+The Worker source is in `cloudflare-gateway/`. It is intentionally configured with `workersDev: false` and preview URLs disabled. No production route is attached until a verified HTTPS origin and active Zone or Tunnel exist.
+
 ### PostgreSQL TLS
 
 1. The server uses `tokio-postgres-rustls` with Rustls and the platform's native trusted CA store. No certificate-verification bypass or accept-all verifier is installed.
@@ -41,6 +52,7 @@ Tenant ownership, tenant-authenticated routes, forced RLS on tenant tables, and 
 ## Consequences
 
 - Local API clients must supply a Bearer token whenever PostgreSQL-backed routes are enabled.
+- Non-loopback API deployments also require a private edge-to-origin ingress token; direct requests without it are rejected before operator/tenant route handling. The matching Cloudflare Worker is source-complete but not deployed.
 - Health checks remain unauthenticated and must not be interpreted as database health.
 - A shared operator token is intentionally simple and is appropriate only for one trusted operator/service boundary.
 - The PostgreSQL client now uses encrypted transport by default and fails closed on untrusted certificates or a hostname mismatch.
