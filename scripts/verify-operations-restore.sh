@@ -102,8 +102,8 @@ stop_restored_api_abruptly() {
 
 echo "Checking the source PostgreSQL schema before backup..."
 source_migrations="$(psql_source --command "SELECT count(*) || ':' || max(version) FROM aetherflow_schema_migrations")"
-if [[ "$source_migrations" != "9:9" ]]; then
-  printf 'Expected source schema migration ledger 9:9, got %s.\n' "$source_migrations" >&2
+if [[ "$source_migrations" != "10:10" ]]; then
+  printf 'Expected source schema migration ledger 10:10, got %s.\n' "$source_migrations" >&2
   exit 1
 fi
 
@@ -434,4 +434,4 @@ if [[ "$retained_after_execution" != "3" ]]; then
   exit 1
 fi
 
-echo "PASS: restored PostgreSQL v9/RLS state and JetStream messages survived restore; AetherFlow started, accepted an HTTP workflow, completed its task, published all outbox events, and committed every event to the PostgreSQL inbox."
+echo "PASS: restored PostgreSQL v10/RLS state and JetStream messages survived restore; AetherFlow started, accepted an HTTP workflow, completed its task, published all outbox events, and committed every event to the PostgreSQL inbox."
