@@ -184,7 +184,7 @@ def main() -> None:
         token=token,
     )
     retry_event_types = {event.get("event_type") for event in retry_events.get("events", [])}
-    if not {"task.succeeded", "workflow.succeeded"}.issubset(retry_event_types):
+    if not {"task.retry_waiting", "task.succeeded", "workflow.succeeded"}.issubset(retry_event_types):
         raise SystemExit(f"Cloudflare retry/DAG event history is incomplete: {retry_event_types}")
 
     print("Cloudflare Free live smoke: health, CORS, bootstrap, submit, durable execution, retry, DAG dependencies, D1 state and event history: OK")
