@@ -93,7 +93,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.goto(self.base_url + "/", wait_until="networkidle")
 
         self.assertIn("AetherFlow", page.title())
-        self.assertIn("Engineered for recovery", page.locator(".welcome h1").inner_text())
+        self.assertIn("Engineered for recovery", page.locator(".hero h1").inner_text())
         self.assertEqual(page.locator(".architecture .arch-card").count(), 4)
         self.assertEqual(page.locator(".cap-grid .cap-card").count(), 6)
         self.assertEqual(page.locator(".recovery-grid .recovery-card").count(), 4)
@@ -149,7 +149,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.on("request", lambda request: api_requests.append(request.url) if "/api/v1/" in request.url else None)
         page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
 
-        self.assertIn("Control console", page.locator("h1").inner_text())
+        self.assertIn("Control console", page.locator(".welcome h1").inner_text())
         self.assertIn("Not connected", page.locator("#connectionStatus").inner_text())
         self.assertEqual(page.locator("#apiToken").get_attribute("type"), "password")
         self.assertEqual(page.locator("#statTotal").inner_text(), "—")
