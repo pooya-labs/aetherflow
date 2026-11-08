@@ -283,15 +283,22 @@ test("gateway replaces spoofed headers and preserves tenant Bearer credentials",
   }
 });
 
-test("Durable Object uses the SQLite storage interface for bucket state", async () => {
+test("Durable Object uses SQLite storage and expires idle rate-limit buckets", async () => {
+  let now = 1_000;
+  const ttl = 24 * 60 * 60 * 1000;
   const state = {
     row: null,
+    alarmAt: null,
+    deleteAllCalls: 0,
     storage: {
       sql: {
         exec(sql, ...params) {
           if (sql.startsWith("CREATE TABLE")) return { toArray: () => [] };
-          if (sql.startsWith("SELECT")) {
+          if (sql.includes("SELECT tokens, updated_at_ms")) {
             return { toArray: () => (state.row ? [state.row] : []) };
+          }
+          if (sql.includes("SELECT updated_at_ms")) {
+            return { toArray: () => (state.row ? [{ updated_at_ms: state.row.updated_at_ms }] : []) };
           }
           if (sql.startsWith("INSERT")) {
             state.row = { tokens: params[0], updated_at_ms: params[1] };
@@ -300,19 +307,42 @@ test("Durable Object uses the SQLite storage interface for bucket state", async 
           throw new Error("unexpected SQL in test");
         },
       },
+      async setAlarm(timestamp) {
+        state.alarmAt = timestamp;
+      },
+      async deleteAll() {
+        state.deleteAllCalls += 1;
+        state.row = null;
+        state.alarmAt = null;
+      },
     },
   };
-  const limiter = new ClientRateLimiter(state);
+  const limiter = new ClientRateLimiter(state, () => now);
   const first = await limiter.fetch(new Request("https://limiter.internal/check", {
-    method: "POST",
-    body: JSON.stringify({ capacity: 1, refill_per_second: 1 }),
-  }));
-  const second = await limiter.fetch(new Request("https://limiter.internal/check", {
     method: "POST",
     body: JSON.stringify({ capacity: 1, refill_per_second: 1 }),
   }));
   assert.equal(first.status, 200);
   assert.equal((await first.json()).allowed, true);
-  assert.equal((await second.json()).allowed, false);
   assert.ok(state.row);
+  assert.equal(state.alarmAt, now + ttl);
+
+  now += 1_000;
+  const second = await limiter.fetch(new Request("https://limiter.internal/check", {
+    method: "POST",
+    body: JSON.stringify({ capacity: 1, refill_per_second: 1 }),
+  }));
+  assert.equal((await second.json()).allowed, true);
+  assert.equal(state.alarmAt, 1_000 + ttl, "ordinary requests do not reschedule the alarm");
+
+  now = state.alarmAt;
+  await limiter.alarm();
+  assert.ok(state.row, "a recently active bucket is retained at its first alarm");
+  assert.equal(state.alarmAt, state.row.updated_at_ms + ttl);
+
+  now = state.alarmAt;
+  await limiter.alarm();
+  assert.equal(state.row, null, "an idle bucket deletes all SQLite and alarm state");
+  assert.equal(state.alarmAt, null);
+  assert.equal(state.deleteAllCalls, 1);
 });
