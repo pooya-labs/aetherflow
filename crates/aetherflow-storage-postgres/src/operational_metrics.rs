@@ -16,6 +16,16 @@ pub struct TenantOperationalMetrics {
     pub workflow_runs_by_status: Vec<(String, i64)>,
     /// Age of the oldest pending or running workflow, in seconds.
     pub oldest_active_workflow_age_seconds: f64,
+    /// Terminal workflow outcomes recorded in the rolling 30-minute window.
+    pub workflow_completions_last_30m_by_status: Vec<(String, i64)>,
+    /// Successful workflow executions with usable start/finish timestamps in the rolling window.
+    pub workflow_success_execution_samples_last_30m: i64,
+    /// Median successful workflow execution duration from started_at to finished_at.
+    pub workflow_success_execution_p50_seconds_last_30m: Option<f64>,
+    /// 95th percentile successful workflow execution duration from started_at to finished_at.
+    pub workflow_success_execution_p95_seconds_last_30m: Option<f64>,
+    /// 99th percentile successful workflow execution duration from started_at to finished_at.
+    pub workflow_success_execution_p99_seconds_last_30m: Option<f64>,
     /// Number of unpublished outbox events.
     pub outbox_pending_events: i64,
     /// Number of unpublished outbox events currently eligible for a claim.
@@ -105,6 +115,52 @@ impl PgTenantOperationalMetricsRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?
             .get(0);
+
+        let workflow_completion_rows = transaction
+            .query(
+                "SELECT status, count(*)::BIGINT
+                 FROM workflow_runs
+                 WHERE tenant_id = $1
+                   AND finished_at >= clock_timestamp() - INTERVAL '30 minutes'
+                   AND status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
+                 GROUP BY status",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let workflow_completions_last_30m_by_status = workflow_completion_rows
+            .iter()
+            .map(|row| (row.get::<_, String>(0), row.get::<_, i64>(1)))
+            .collect();
+
+        let workflow_success_execution_row = transaction
+            .query_one(
+                "SELECT
+                    count(*)::BIGINT,
+                    percentile_cont(0.50) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                    )::DOUBLE PRECISION,
+                    percentile_cont(0.95) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                    )::DOUBLE PRECISION,
+                    percentile_cont(0.99) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                    )::DOUBLE PRECISION
+                 FROM workflow_runs
+                 WHERE tenant_id = $1
+                   AND status = 'succeeded'
+                   AND started_at IS NOT NULL
+                   AND finished_at IS NOT NULL
+                   AND finished_at >= started_at
+                   AND finished_at >= clock_timestamp() - INTERVAL '30 minutes'",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(|error| StorageError::Database(error.to_string()))?;
+        let workflow_success_execution_samples_last_30m = workflow_success_execution_row.get(0);
+        let workflow_success_execution_p50_seconds_last_30m = workflow_success_execution_row.get(1);
+        let workflow_success_execution_p95_seconds_last_30m = workflow_success_execution_row.get(2);
+        let workflow_success_execution_p99_seconds_last_30m = workflow_success_execution_row.get(3);
 
         let outbox_row = transaction
             .query_one(
@@ -211,6 +267,11 @@ impl PgTenantOperationalMetricsRepository {
         Ok(TenantOperationalMetrics {
             workflow_runs_by_status,
             oldest_active_workflow_age_seconds,
+            workflow_completions_last_30m_by_status,
+            workflow_success_execution_samples_last_30m,
+            workflow_success_execution_p50_seconds_last_30m,
+            workflow_success_execution_p95_seconds_last_30m,
+            workflow_success_execution_p99_seconds_last_30m,
             outbox_pending_events,
             outbox_ready_events,
             outbox_oldest_ready_lag_seconds,
