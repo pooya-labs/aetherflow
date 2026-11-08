@@ -762,10 +762,147 @@ aetherflow_tenant_task_expired_running_leases 0
         self.assertTrue(all(task.get("input_base64") for task in submission["tasks"]))
         self.assert_no_page_errors()
 
-    def test_dashboard_hides_sample_execution_for_manual_and_apps_script_profiles(self) -> None:
+    def test_dashboard_hides_sample_submission_for_manual_profile(self) -> None:
         page = self.page
         page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
         self.assertTrue(page.locator("#runSample").is_hidden())
+
+    def test_dashboard_persists_sample_workflow_on_apps_script_profile(self) -> None:
+        page = self.page
+
+        bridge_mock = r"""
+        (() => {
+          const KEY = "browser-qa-apps-script-sheet";
+          const seeded = [
+            ["demo-invoice-001", "invoice-pipeline", "succeeded", 3],
+            ["demo-media-002", "media-export", "running", 3],
+            ["demo-index-003", "nightly-index", "failed", 2],
+            ["demo-retry-004", "retry-example", "running", 2]
+          ];
+          const now = "2026-11-08T12:00:00.000Z";
+          function load() {
+            try {
+              const stored = JSON.parse(localStorage.getItem(KEY) || "null");
+              if (stored && Array.isArray(stored.runs)) return stored;
+            } catch (_) {}
+            const runs = seeded.map(([id, workflow, status, taskCount], index) => ({
+              workflow_run_id: id, workflow_id: workflow, status, version: status === "failed" || status === "succeeded" ? 4 : 2,
+              task_count: taskCount, created_at: new Date(Date.parse(now) - (index + 1) * 3600000).toISOString(), updated_at: now
+            }));
+            const store = { runs, snapshots: {}, events: {} };
+            localStorage.setItem(KEY, JSON.stringify(store));
+            return store;
+          }
+          function save(store) { localStorage.setItem(KEY, JSON.stringify(store)); }
+          const store = load();
+          window.__appsScriptBridgeRequests = [];
+          window.AetherFlowAppsScriptBridge = Object.freeze({
+            isActive: () => true,
+            start: async () => ({ mode: "apps-script-demo", expiresInSeconds: 21600 }),
+            request: async ({ method, path, body = {} }) => {
+              window.__appsScriptBridgeRequests.push({ method, path, body });
+              const pathname = path.split("?")[0];
+              if (method === "GET" && pathname === "/api/v1/workflow-runs") {
+                return { status: 200, body: { items: store.runs.slice().sort((a,b) => b.created_at.localeCompare(a.created_at)), next_cursor: null } };
+              }
+              if (method === "POST" && pathname === "/api/v1/workflow-runs") {
+                if (store.runs.some(run => run.workflow_run_id === body.workflow_run_id)) {
+                  return { status: 409, body: { error: { message: "workflow_conflict" } } };
+                }
+                const stamp = new Date().toISOString();
+                const snapshot = {
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  created_at: stamp, updated_at: stamp,
+                  task_runs: body.tasks.map(task => ({
+                    task_id: task.task_id, task_run_id: "tr-" + task.task_id, status: (task.depends_on || []).length ? "pending" : "ready",
+                    version: 1, attempts_started: 0, input_size_bytes: 0, output_present: false
+                  }))
+                };
+                store.runs.unshift({
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  task_count: body.tasks.length, created_at: stamp, updated_at: stamp
+                });
+                store.snapshots[body.workflow_run_id] = snapshot;
+                store.events[body.workflow_run_id] = [{
+                  event_id: 1001, event_type: "workflow.submitted", aggregate_type: "workflow_run",
+                  aggregate_id: body.workflow_run_id, created_at: stamp, published_at: null, status: "recorded"
+                }];
+                save(store);
+                return { status: 201, body: {
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  task_runs: snapshot.task_runs.map(task => ({ task_id: task.task_id, task_run_id: task.task_run_id, status: task.status }))
+                }};
+              }
+              const detailMatch = pathname.match(/^\/api\/v1\/workflow-runs\/([A-Za-z0-9_-]+)$/);
+              if (method === "GET" && detailMatch) {
+                const run = store.runs.find(item => item.workflow_run_id === detailMatch[1]);
+                const snapshot = store.snapshots[detailMatch[1]];
+                if (snapshot) return { status: 200, body: snapshot };
+                if (run) return { status: 200, body: {
+                  workflow_id: run.workflow_id, workflow_run_id: run.workflow_run_id, status: run.status, version: run.version,
+                  created_at: run.created_at, updated_at: run.updated_at, task_runs: []
+                }};
+                return { status: 404, body: { error: { message: "not_found" } } };
+              }
+              const eventsMatch = pathname.match(/^\/api\/v1\/workflow-runs\/([A-Za-z0-9_-]+)\/events$/);
+              if (method === "GET" && eventsMatch) {
+                return { status: 200, body: { events: store.events[eventsMatch[1]] || [], next_cursor: null } };
+              }
+              return { status: 404, body: { error: { message: "Unexpected bridge route: " + method + " " + pathname } } };
+            }
+          });
+        })();
+        """
+        page.route(
+            "**/apps-script-bridge.js",
+            lambda route: route.fulfill(status=200, content_type="application/javascript", body=bridge_mock),
+        )
+        page.goto(self.base_url + "/dashboard/?aetherflowRuntime=apps-script", wait_until="networkidle")
+
+        page.get_by_text("Connected · synthetic demo data").wait_for()
+        page.locator(".run-item").filter(has_text="demo-index-003").wait_for()
+        page.locator(".run-item").filter(has_text="demo-retry-004").wait_for()
+        self.assertEqual(page.locator(".run-item").count(), 4)
+
+        store_button = page.locator("#runSample")
+        store_button.wait_for(state="visible")
+        self.assertIn("Store persistence test", store_button.inner_text())
+        self.assertFalse(store_button.is_disabled())
+        store_button.click()
+
+        page.get_by_text("Workflow stored · task not executed", exact=False).wait_for()
+        new_run = page.evaluate(
+            """() => {
+              const data = JSON.parse(localStorage.getItem("browser-qa-apps-script-sheet"));
+              return data.runs.find(run => run.workflow_id === "apps-script-persistence-smoke");
+            }"""
+        )
+        self.assertIsNotNone(new_run)
+        workflow_id = new_run["workflow_run_id"]
+        self.assertTrue(workflow_id.startswith("gas-smoke-"))
+        self.assertEqual(page.locator(".run-item").count(), 5)
+        page.locator(".run-item").filter(has_text=workflow_id).wait_for()
+        self.assertIn("stored-only-record", page.locator("#detailContent").inner_text())
+        self.assertIn("workflow.submitted · workflow_run", page.locator("#detailContent").inner_text())
+
+        post_requests = page.evaluate(
+            "() => window.__appsScriptBridgeRequests.filter(request => request.method === 'POST')"
+        )
+        self.assertEqual(len(post_requests), 1)
+        self.assertEqual(post_requests[0]["path"], "/api/v1/workflow-runs")
+        submission = post_requests[0]["body"]
+        self.assertEqual(submission["workflow_id"], "apps-script-persistence-smoke")
+        self.assertEqual([task["task_id"] for task in submission["tasks"]], ["stored-only-record"])
+        self.assertEqual(submission["retry_policy"]["max_attempts"], 1)
+        self.assert_no_page_errors()
+
+        page.reload(wait_until="networkidle")
+        page.get_by_text("Connected · synthetic demo data").wait_for()
+        page.locator(".run-item").filter(has_text=workflow_id).wait_for()
+        self.assertEqual(page.locator(".run-item").count(), 5)
+        self.assertIn("stored-only-record", page.locator("#detailContent").inner_text())
+        self.assertIn("workflow.submitted · workflow_run", page.locator("#detailContent").inner_text())
+        self.assert_no_page_errors()
 
     def test_dashboard_mobile_layout_and_theme_persistence(self) -> None:
         page = self.page
