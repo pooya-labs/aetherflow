@@ -52,11 +52,11 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     ];
     let applied = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 9, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::Applied { version: 10, .. }))
         .count();
     let already_current = outcomes
         .iter()
-        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 9, .. }))
+        .filter(|outcome| matches!(outcome, MigrationOutcome::AlreadyCurrent { version: 10, .. }))
         .count();
     assert_eq!(applied, 1);
     assert_eq!(already_current, 1);
@@ -1200,8 +1200,8 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
         .expect("restore migration ledger row");
 
     // A database schema newer than the binary is never downgraded or ignored.
-    let future_version = 10_i64;
-    let future_name = "0010_future_schema.sql";
+    let future_version = 11_i64;
+    let future_name = "0011_future_schema.sql";
     let future_checksum = "a".repeat(64);
     client
         .execute(
@@ -1214,13 +1214,13 @@ async fn postgres_migration_is_atomic_locked_checksummed_and_fail_closed() {
     assert!(matches!(
         store.migrate().await,
         Err(StorageError::NewerSchema {
-            found: 10,
-            supported: 9
+            found: 11,
+            supported: 10
         })
     ));
     client
         .execute(
-            "DELETE FROM aetherflow_schema_migrations WHERE version = 10",
+            "DELETE FROM aetherflow_schema_migrations WHERE version = 11",
             &[],
         )
         .await
@@ -1320,7 +1320,7 @@ async fn tenant_migration_backfills_existing_v1_to_v3_rows() {
     );
     assert!(matches!(
         outcome,
-        MigrationOutcome::Applied { version: 9, .. }
+        MigrationOutcome::Applied { version: 10, .. }
     ));
 
     let inbox_primary_key: String = client
