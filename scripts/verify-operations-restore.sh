@@ -102,8 +102,8 @@ stop_restored_api_abruptly() {
 
 echo "Checking the source PostgreSQL schema before backup..."
 source_migrations="$(psql_source --command "SELECT count(*) || ':' || max(version) FROM aetherflow_schema_migrations")"
-if [[ "$source_migrations" != "8:8" ]]; then
-  printf 'Expected source schema migration ledger 8:8, got %s.\n' "$source_migrations" >&2
+if [[ "$source_migrations" != "9:9" ]]; then
+  printf 'Expected source schema migration ledger 9:9, got %s.\n' "$source_migrations" >&2
   exit 1
 fi
 
