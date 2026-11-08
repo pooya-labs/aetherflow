@@ -18,7 +18,7 @@ ORIGIN = "https://pooya-labs.github.io"
 
 
 def request(path: str, method: str = "GET", body: dict | None = None, token: str | None = None):
-    headers = {"Accept": "application/json", "Origin": ORIGIN}
+    headers = {"Accept": "application/json", "Origin": ORIGIN, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
     data = None
     if body is not None:
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -51,6 +51,7 @@ def main() -> None:
         API_BASE + "/api/v1/demo/bootstrap",
         headers={
             "Origin": ORIGIN,
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "content-type",
         },
