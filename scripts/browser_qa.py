@@ -36,6 +36,15 @@ def json_response(route, payload: dict, status: int = 200) -> None:
     )
 
 
+def text_response(route, payload: str, status: int = 200) -> None:
+    route.fulfill(
+        status=status,
+        content_type="text/plain; version=0.0.4; charset=utf-8",
+        headers={"cache-control": "no-store"},
+        body=payload,
+    )
+
+
 class AetherFlowBrowserQA(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -255,6 +264,8 @@ class AetherFlowBrowserQA(unittest.TestCase):
                 json_response(route, events)
             elif parsed.path == "/api/v1/task-runs/task-run-browser-qa-001":
                 json_response(route, task_snapshot)
+            elif parsed.path == "/api/v1/tenant/metrics":
+                json_response(route, {"error": {"message": "Operator must not request tenant metrics"}}, status=403)
             else:
                 json_response(route, {"error": {"message": "Unexpected test route"}}, status=404)
 
@@ -275,6 +286,12 @@ class AetherFlowBrowserQA(unittest.TestCase):
         self.assertNotIn("undefined", run_meta)
         self.assertIn("browser-qa-demo", page.locator("#detailContent").inner_text())
         self.assertEqual(page.locator("#apiToken").input_value(), "")
+        self.assertTrue(page.locator("#opsSnapshot").is_hidden())
+        self.assertNotIn(
+            "/api/v1/tenant/metrics",
+            [item["path"] for item in requests],
+            "Operator scope must never request tenant-scoped operational telemetry.",
+        )
 
         storage = page.evaluate(
             """() => ({
@@ -342,6 +359,26 @@ class AetherFlowBrowserQA(unittest.TestCase):
             "updated_at": FIXED_TIME,
             "task_runs": [],
         }
+        metrics_exposition = """# HELP aetherflow_tenant_workflow_completions_last_30m recent workflow outcomes
+# TYPE aetherflow_tenant_workflow_completions_last_30m gauge
+aetherflow_tenant_workflow_completions_last_30m{status="succeeded"} 4
+aetherflow_tenant_workflow_completions_last_30m{status="failed"} 1
+aetherflow_tenant_workflow_completions_last_30m{status="cancelled"} 2
+aetherflow_tenant_workflow_completions_last_30m{status="timed_out"} 0
+aetherflow_tenant_workflow_success_completion_samples_last_30m 4
+aetherflow_tenant_workflow_success_completion_p50_seconds_last_30m 2.250000
+aetherflow_tenant_workflow_success_completion_p95_seconds_last_30m 5.000000
+aetherflow_tenant_workflow_success_completion_p99_seconds_last_30m 8.000000
+aetherflow_tenant_outbox_events{state="pending"} 3
+aetherflow_tenant_outbox_events{state="ready"} 2
+aetherflow_tenant_outbox_oldest_ready_lag_seconds 3.500000
+aetherflow_tenant_outbox_expired_claims 1
+aetherflow_tenant_inbox_events{state="pending"} 2
+aetherflow_tenant_inbox_events{state="processing"} 1
+aetherflow_tenant_inbox_oldest_unprocessed_age_seconds 12.500000
+aetherflow_tenant_inbox_expired_processing_leases 1
+aetherflow_tenant_task_expired_running_leases 0
+"""
         event_pages = [
             {
                 "events": [
@@ -385,6 +422,8 @@ class AetherFlowBrowserQA(unittest.TestCase):
             elif parsed.path == "/api/v1/tenant/workflow-runs/run-tenant-001/events":
                 page_index = 1 if query.get("cursor") == ["older-events-2"] else 0
                 json_response(route, event_pages[page_index])
+            elif parsed.path == "/api/v1/tenant/metrics":
+                text_response(route, metrics_exposition)
             else:
                 json_response(route, {"error": {"message": "Unexpected tenant test route"}}, status=404)
 
@@ -396,7 +435,15 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.locator("#connectButton").click()
 
         page.get_by_text("Connected · live data").wait_for()
+        page.locator("#opsSnapshot").wait_for(state="visible")
         page.locator(".run-item").filter(has_text="run-tenant-001").wait_for()
+        self.assertEqual(page.locator("#opsSuccess").inner_text(), "4")
+        self.assertEqual(page.locator("#opsFailed").inner_text(), "1")
+        self.assertEqual(page.locator("#opsCompletionSamples").inner_text(), "4")
+        self.assertEqual(page.locator("#opsP95").inner_text(), "5.0 s")
+        self.assertEqual(page.locator("#opsOutboxPending").inner_text(), "3")
+        self.assertEqual(page.locator("#opsOutboxLag").inner_text(), "3.5 s")
+        self.assertEqual(page.locator("#opsInboxProcessing").inner_text(), "1")
         page.get_by_text("task.succeeded · task_run").wait_for()
         self.assertTrue(page.locator("#workersButton").is_disabled())
         self.assertEqual(page.locator(".event-row").count(), 1)
@@ -411,6 +458,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
         self.assertEqual(page.locator("#statTotal").inner_text(), "2")
 
         paths = [request["path"] for request in requests]
+        self.assertIn("/api/v1/tenant/metrics", paths)
         self.assertTrue(paths)
         self.assertTrue(
             all(path.startswith("/api/v1/tenant/") for path in paths),
@@ -424,6 +472,8 @@ class AetherFlowBrowserQA(unittest.TestCase):
             "cursor=workflow-page-2",
             next(request["query"] for request in requests if request["path"] == "/api/v1/tenant/workflow-runs" and "cursor=" in request["query"]),
         )
+        page.set_viewport_size({"width": 390, "height": 844})
+        self.mobile_width_is_safe()
         self.assert_no_page_errors()
 
     def test_dashboard_ignores_stale_workflow_selection_responses(self) -> None:
