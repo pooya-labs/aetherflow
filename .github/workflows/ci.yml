@@ -124,10 +124,13 @@ jobs:
       - name: Verify formatting
         run: cargo +1.99.1 fmt --all -- --check
 
-      - name: Validate product site and dashboard JavaScript syntax
+      - name: Validate product site, dashboard, and gateway JavaScript
         run: |
           node --check site.js
           node --check dashboard/app.js
+          node --check cloudflare-gateway/policy.mjs
+          node --check cloudflare-gateway/worker.mjs
+          node --test cloudflare-gateway/policy.test.mjs
       - name: Validate operations runbooks against migrations and RLS
         run: bash scripts/check-operations-docs.sh
 
