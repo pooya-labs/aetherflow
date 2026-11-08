@@ -96,6 +96,21 @@
   }
 
   async function api(path) {
+    const bridge = window.AetherFlowAppsScriptBridge;
+    if (bridge && bridge.isActive()) {
+      const response = await bridge.request({ method: "GET", path: path });
+      const payload = response.body;
+      if (response.status < 200 || response.status >= 300) {
+        const message = payload && payload.error && payload.error.message;
+        throw new Error(message || ("API request failed with HTTP " + response.status + "."));
+      }
+      if (typeof payload === "string") {
+        try { return JSON.parse(payload); }
+        catch (_) { throw new Error("The API returned a non-JSON response."); }
+      }
+      return payload;
+    }
+
     const response = await fetch(state.base + path, {
       method: "GET",
       headers: {
@@ -122,6 +137,17 @@
   }
 
   async function apiText(path) {
+    const bridge = window.AetherFlowAppsScriptBridge;
+    if (bridge && bridge.isActive()) {
+      const response = await bridge.request({ method: "GET", path: path });
+      if (response.status < 200 || response.status >= 300) {
+        const payload = response.body;
+        const message = payload && payload.error && payload.error.message;
+        throw new Error(message || ("API request failed with HTTP " + response.status + "."));
+      }
+      return typeof response.body === "string" ? response.body : JSON.stringify(response.body || {});
+    }
+
     const response = await fetch(state.base + path, {
       method: "GET",
       headers: {
@@ -645,4 +671,38 @@
     try { localStorage.setItem("aetherflow-theme", next); } catch (_) {}
     updateThemeButton();
   });
+
+  async function connectAppsScriptDemo() {
+    const bridge = window.AetherFlowAppsScriptBridge;
+    if (!bridge || !bridge.isActive()) return;
+
+    form.classList.add("hidden");
+    $("disconnectButton").classList.add("hidden");
+    $("connectionTitle").textContent = "Demo workspace";
+    $(".connection-copy")?.replaceChildren(document.createTextNode("Connected through the owner-managed Apps Script runtime. Each browser receives a separate synthetic workspace."));
+    const securityNote = document.querySelector(".security-note");
+    if (securityNote) securityNote.textContent = "Private demo session. The short-lived session capability stays inside the bridge and is never stored in the dashboard URL, cookies, or local storage.";
+    const notice = document.querySelector(".notice span:last-child");
+    if (notice) notice.textContent = "Apps Script demo mode. Workflow records are synthetic and stored in the owner's private Google Spreadsheet. No real task code is executed, and no NATS, WASM, or production telemetry is connected.";
+    const footer = document.querySelector(".footer");
+    if (footer && footer.children.length > 1) {
+      footer.children[1].textContent = "Apps Script + private Sheet · Synthetic demo data · Session-only capability";
+    }
+    setConnection("Connecting to the Apps Script demo…", "");
+    try {
+      await bridge.start();
+      state.connectionRevision += 1;
+      state.base = "Google Apps Script demo";
+      state.token = "apps-script-session";
+      state.scope = "operator";
+      state.status = "";
+      setBusy(false);
+      await loadRuns(false);
+    } catch (error) {
+      state.token = "";
+      setConnection(error.message, "bad");
+    }
+  }
+
+  connectAppsScriptDemo();
 })();
