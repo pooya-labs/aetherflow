@@ -60,13 +60,24 @@ export function isAllowedPath(pathname) {
   return pathname === "/health" || pathname.startsWith("/api/v1/");
 }
 
-/** SHA-256 keeps raw client addresses out of Durable Object names. */
-export async function clientBucketName(sourceIp) {
+/** HMAC prevents an observer of DO names from cheaply enumerating client IPs. */
+export async function clientBucketName(sourceIp, secret) {
   if (typeof sourceIp !== "string" || sourceIp.length < 2 || sourceIp.length > 64) {
     throw new TypeError("A trusted client address is required");
   }
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sourceIp));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (typeof secret !== "string" || secret.length < 32) {
+    throw new TypeError("A high-entropy bucket-name key is required");
+  }
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(sourceIp));
+  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
