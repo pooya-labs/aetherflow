@@ -19,7 +19,7 @@ The restore rehearsal proved that a restored PostgreSQL v10/RLS database and res
 
 The exact-source PostgreSQL/NATS run archived five repeats for each shape: fan-out median throughput 7.314 workflows/s and p95 7,863.339 ms; chain median throughput 7.244 workflows/s and p95 7,999.233 ms. Each repeat reconciled 896 outbox/inbox events with zero duplicate events or errors. The candidate runner fingerprint did not match the stored AMD EPYC 9V45 reference, so the comparator correctly reported SKIP and applied no numeric threshold. The repository does contain two independent five-repeat EPYC 9V45 reference sessions (ten samples per shape), but the current candidate has not yet exercised the comparator's numeric branch on that matching fingerprint. These numbers are not production SLOs.
 
-## Latest main-head validation — 2026-11-09
+## Main-head baseline before owner-attribution PR — 2026-11-09
 
 - Current main HEAD dc1edea3946e89e8ca0dd1430552487401080eaa passed Rust CI [42522117027](https://github.com/pooya-labs/aetherflow/actions/runs/42522117027), including formatting, Clippy, workspace tests, release build, scheduler benchmark smoke, WebAssembly lint/build and ABI example execution, docs and Compose checks.
 - Supply-chain and full-history secret checks passed on the same HEAD: [run 42522117055](https://github.com/pooya-labs/aetherflow/actions/runs/42522117055). GitHub Pages built and deployed on the same HEAD: [run 42522116708](https://github.com/pooya-labs/aetherflow/actions/runs/42522116708).
@@ -27,6 +27,16 @@ The exact-source PostgreSQL/NATS run archived five repeats for each shape: fan-o
 - Product-site and Apps Script browser acceptance last passed 12/12 tests on 7c2852f in [run 42521608664](https://github.com/pooya-labs/aetherflow/actions/runs/42521608664). This is not the current main HEAD. The present owner-attribution patch adds browser assertions for the official mark, destination link and image loading on the product site and console; its pull-request run is the required verification for those changes.
 - Apps Script owner persistence was live-tested with gas-smoke-61f2c9e5308d4978ae69d39ddf6bf5d6. The source correction that keeps future storage-only submissions pending is committed, but is not active in the deployed Web App until the owner copies the checked-in Code.gs and publishes a new version. The existing private Spreadsheet and /exec URL must be retained; no setup rerun or new database is required.
 - The release remains blocked by the unchecked production and benchmark gates below. A green Rust CI, security scan and Pages deployment do not close infrastructure, operational approval or release-provenance requirements.
+## Owner attribution PR verification — 2026-11-09
+
+PR #9 (owner branding, footer links, documentation refresh and browser assertions) passed all required pull-request checks on exact source 35ea59019ecf460cfa3f1497e1bd8829dd0a9ce4:
+
+- Rust CI [42525413006](https://github.com/pooya-labs/aetherflow/actions/runs/42525413006) — format, locked dependency resolution, JavaScript contracts, Clippy, workspace tests, full workspace build, scheduler benchmark smoke, WASM guest lint, ABI v1 example execution, documentation build and Compose validation.
+- Supply-chain and secret checks [42525413092](https://github.com/pooya-labs/aetherflow/actions/runs/42525413092) — full-history secret scan and Rust dependency/advisory audit.
+- Chromium desktop and mobile acceptance [42525413242](https://github.com/pooya-labs/aetherflow/actions/runs/42525413242) — all 12 tests passed, including owner-link destination, real monogram image loading, dashboard mobile layout and the Apps Script persistence fixture.
+
+The PR validation is against the pull-request source, not a production deployment or the external Google Apps Script Web App. After merge, GitHub Pages will deploy the site update; the owner must still publish the pending-only Apps Script source correction through the existing Web App deployment.
+
 ## Additional verified engineering slices
 
 - The schema v10 operational-metrics extension passed PostgreSQL/JetStream CI [42494177393](https://github.com/pooya-labs/aetherflow/actions/runs/42494177393) with 28/28 steps. It validates tenant-isolated HTTP/TLS metrics, migration/index assertions, JetStream, benchmark profiles and restore-to-runtime.
