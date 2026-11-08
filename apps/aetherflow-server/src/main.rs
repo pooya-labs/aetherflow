@@ -46,6 +46,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .into());
         }
     };
+    if let Some(token) = ingress_token.as_deref() {
+        api::validate_ingress_token_value(token)?;
+    }
     validate_ingress_token(address, ingress_token.is_some())?;
     // Validate the external-listener security boundary before applying DDL.
     // Non-loopback addresses are never served over cleartext HTTP.
