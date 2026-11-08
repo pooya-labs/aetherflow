@@ -30,7 +30,7 @@ This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded wor
 
 Do not share the spreadsheet. Public visitors receive only a workspace-scoped session capability; they never receive the spreadsheet ID or URL.
 
-Google may restrict anonymous Web App deployments for some account types or regions. Do not enable billing or choose a paid Google Cloud plan to work around a restriction. If the deployment selector does not offer anonymous access, stop and report the exact message.
+Google may restrict anonymous Web App deployments for some account types or regions. Do not enable billing or choose a paid Google Cloud plan to work around a restriction. If the deployment selector does not offer anonymous access, stop and report the exact message. **Iran note:** Google's Workspace availability guidance says access to some business services is restricted in Iran; selected personal-use services may differ. That does not guarantee Apps Script editor access or anonymous Web App deployment for a particular account. Validate the intended owner's personal Google account and the target network before relying on this profile. See [Google's regional availability guidance](https://knowledge.workspace.google.com/admin/support/troubleshooting/countries-or-regions-where-google-workspace-is-available).
 
 ## Update deployment
 

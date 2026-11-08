@@ -33,7 +33,7 @@ The account-owned runtime is configured at:
 - Workflow: `aetherflow-execution`
 - Worker: `aetherflow-free-runtime`
 
-This deployment uses the account's existing `workers.dev` subdomain. It has no custom domain, public Origin server, VPS, PostgreSQL connection, or NATS endpoint.
+This deployment uses the account's existing `workers.dev` subdomain. It has no custom domain, public Origin server, VPS, PostgreSQL connection, or NATS endpoint. `workers.dev` is a public Cloudflare hostname, but reachability from Iran still depends on the user's ISP, filtering, and national connectivity at the time of access; this deployment cannot guarantee availability across every Iranian network. Keep the built-in `/health` endpoint as the first connection check and do not treat a failed route from one ISP as proof that the Worker itself is down.
 
 ## Rebuilding or deploying from this folder
 
