@@ -97,7 +97,7 @@ async function applyClientRateLimit(request, env, settings) {
 
   let bucketName;
   try {
-    bucketName = await clientBucketName(sourceIp);
+    bucketName = await clientBucketName(sourceIp, settings.ingressToken);
   } catch {
     return jsonError(400, "client_address_invalid");
   }
@@ -175,6 +175,7 @@ export default {
       const headers = new Headers(upstream.headers);
       headers.delete("server");
       headers.delete("alt-svc");
+      headers.set("Cache-Control", "no-store");
       return new Response(upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
