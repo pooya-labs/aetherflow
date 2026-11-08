@@ -20,6 +20,25 @@
   const form = $("connectionForm");
   const runList = $("runList");
   const detail = $("detailContent");
+  const themeButton = $("themeButton");
+  const savedTheme = (() => {
+    try {
+      const value = localStorage.getItem("aetherflow-theme");
+      return value === "light" || value === "dark" ? value : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+
+  function updateThemeButton() {
+    const dark = document.documentElement.dataset.theme === "dark";
+    themeButton.textContent = dark ? "◐" : "◑";
+    themeButton.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+    themeButton.setAttribute("aria-pressed", String(!dark));
+  }
+
+  updateThemeButton();
 
   function setConnection(message, kind) {
     $("connectionStatus").textContent = message;
@@ -405,9 +424,10 @@
   $("loadMore").addEventListener("click", () => loadRuns(true));
   $("workersButton").addEventListener("click", loadWorkers);
   $("closeWorkers").addEventListener("click", () => $("workersPanel").classList.add("hidden"));
-  $("themeButton").addEventListener("click", () => {
+  themeButton.addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
-    $("themeButton").textContent = next === "dark" ? "◐" : "◑";
+    try { localStorage.setItem("aetherflow-theme", next); } catch (_) {}
+    updateThemeButton();
   });
 })();
