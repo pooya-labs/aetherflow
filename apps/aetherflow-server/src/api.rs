@@ -71,6 +71,7 @@ use aetherflow_storage_postgres::{
 pub struct AppState {
     database: Option<Arc<AppDatabase>>,
     api_token_hash: Option<[u8; 32]>,
+    ingress_token_hash: Option<[u8; 32]>,
     cors_allowed_origins: Arc<HashSet<String>>,
     principal_rate_limiter: Arc<PrincipalRateLimiter>,
     auth_failure_rate_limiter: Arc<AuthFailureRateLimiter>,
@@ -853,6 +854,13 @@ impl AppState {
         Ok(self)
     }
 
+    /// Adds a shared secret required on every non-health request before
+    /// the application routes are reached. The raw secret is never retained.
+    pub fn with_ingress_token(mut self, token: &str) -> Result<Self, std::io::Error> {
+        self.ingress_token_hash = Some(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", token)?);
+        Ok(self)
+    }
+
     /// Creates application state without a database connection.
     #[must_use]
     pub fn without_database() -> Self {
@@ -876,6 +884,7 @@ impl AppState {
                 operational_metrics,
             })),
             api_token_hash: Some(api_token_hash),
+            ingress_token_hash: None,
             cors_allowed_origins: Arc::default(),
             principal_rate_limiter: Arc::default(),
             auth_failure_rate_limiter: Arc::default(),
@@ -996,6 +1005,10 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             observe_http_request,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_gateway_token,
         ))
         .with_state(state)
 }
@@ -1444,6 +1457,27 @@ fn attach_cors_origin(response: &mut Response, origin: &str) {
     }
 }
 
+async fn require_gateway_token(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    // Liveness is deliberately public; it reveals no API or database state.
+    if request.uri().path() == "/health" {
+        return next.run(request).await;
+    }
+
+    let Some(expected) = state.ingress_token_hash.as_ref() else {
+        return next.run(request).await;
+    };
+
+    if !secret_header_matches(expected, request.headers(), "x-aetherflow-ingress-token") {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    next.run(request).await
+}
+
 async fn apply_browser_cors(
     State(state): State<AppState>,
     request: Request,
@@ -1506,18 +1540,34 @@ async fn apply_browser_cors(
     response
 }
 
-fn hash_api_token(api_token: &str) -> Result<[u8; 32], std::io::Error> {
-    let valid_alphabet = api_token
+fn hash_secret_token(name: &str, token: &str) -> Result<[u8; 32], std::io::Error> {
+    let valid_alphabet = token
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    if !(32..=256).contains(&api_token.len()) || !valid_alphabet {
+    if !(32..=256).contains(&token.len()) || !valid_alphabet {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "AETHERFLOW_API_TOKEN must be 32-256 ASCII letters, digits, '-' or '_' characters",
+            format!("{name} must be 32-256 ASCII letters, digits, '-' or '_' characters"),
         ));
     }
 
-    Ok(Sha256::digest(api_token.as_bytes()).into())
+    Ok(Sha256::digest(token.as_bytes()).into())
+}
+
+fn hash_api_token(api_token: &str) -> Result<[u8; 32], std::io::Error> {
+    hash_secret_token("AETHERFLOW_API_TOKEN", api_token)
+}
+
+fn secret_header_matches(
+    expected: &[u8; 32],
+    headers: &HeaderMap,
+    header_name: &'static str,
+) -> bool {
+    let Some(value) = headers.get(header_name).and_then(|header| header.to_str().ok()) else {
+        return false;
+    };
+    let supplied: [u8; 32] = Sha256::digest(value.as_bytes()).into();
+    bool::from(expected.as_slice().ct_eq(supplied.as_slice()))
 }
 
 fn authorization_matches(expected: &[u8; 32], headers: &HeaderMap) -> bool {
@@ -2643,7 +2693,7 @@ mod tests {
     use super::{
         AppState, AuthFailureRateLimiter, HttpMetrics, HttpOperation, HttpResponseClass,
         InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter,
-        TenantOperationalMetrics, authorization_matches, hash_api_token,
+        TenantOperationalMetrics, authorization_matches, hash_api_token, hash_secret_token,
         render_tenant_operational_metrics, request_source_ip, router,
     };
     use axum::body::{Body, to_bytes};
@@ -3258,6 +3308,59 @@ mod tests {
             .await
             .expect("invalid page-size response");
         assert_eq!(too_many.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn shared_gateway_token_uses_the_same_strict_secret_policy() {
+        assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", TEST_API_TOKEN).is_ok());
+        assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", "short").is_err());
+        assert!(hash_secret_token("AETHERFLOW_INGRESS_TOKEN", "contains spaces and is long enough").is_err());
+    }
+
+    #[tokio::test]
+    async fn direct_api_access_requires_gateway_token_when_ingress_secret_is_enabled() {
+        use super::AppState;
+        let state = AppState::without_database()
+            .with_ingress_token(TEST_API_TOKEN)
+            .expect("valid gateway ingress token");
+
+        let health = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("health request"),
+            )
+            .await
+            .expect("health response");
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let direct = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workers")
+                    .header("x-forwarded-for", "203.0.113.10")
+                    .header("x-aetherflow-ingress-token", "attacker-controlled-value")
+                    .body(Body::empty())
+                    .expect("direct request"),
+            )
+            .await
+            .expect("direct response");
+        assert_eq!(direct.status(), StatusCode::FORBIDDEN);
+
+        let gateway = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/workers")
+                    .header("x-aetherflow-ingress-token", TEST_API_TOKEN)
+                    .body(Body::empty())
+                    .expect("gateway request"),
+            )
+            .await
+            .expect("gateway response");
+        // The ingress secret passed; this health-only test state then reaches
+        // the normal router and returns its expected database-unavailable 503.
+        assert_eq!(gateway.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
