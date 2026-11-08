@@ -54,11 +54,12 @@ require("event.source !== frame.contentWindow" in gas_html, "Apps Script wrapper
 require("payload: payload" not in gas_html, "Apps Script session bootstrap must not relay the full token-bearing payload")
 require("typeof payload.sessionToken !== \"string\"" not in bridge, "iframe bridge must not require or handle the server-side session token")
 require("ORBIT" not in gas and "AETHERFLOW_DEMO_SPREADSHEET_ID" in gas, "Apps Script runtime must use its own private datastore")
-const gasSubmission = gas.split('if (route === "/api/v1/workflow-runs" && method === "POST") {', 2)[1].split("\\n  match = route.match", 1)[0];
-require('status: "pending", version: 1' in gasSubmission, "Apps Script storage-only workflow submissions must remain pending")
-require('task_id: task.task_id, status: "pending"' in gasSubmission, "Apps Script storage-only tasks must remain pending")
-require('"task.pending", stamp' in gasSubmission, "Apps Script storage-only submissions must emit pending task events")
-require('task.depends_on.length ? "task.ready"' not in gasSubmission, "Apps Script must not mark non-executed tasks ready")
+gas_submission = gas.split('if (route === "/api/v1/workflow-runs" && method === "POST") {', 2)[1].split('\n  match = route.match', 1)[0]
+require('status: "pending", version: 1' in gas_submission, "Apps Script storage-only workflow submissions must remain pending")
+require('task_id: task.task_id, status: "pending"' in gas_submission, "Apps Script storage-only tasks must remain pending")
+require('"task.pending", stamp' in gas_submission, "Apps Script storage-only submissions must emit pending task events")
+require('task.depends_on.length ? "task.ready"' not in gas_submission, "Apps Script must not mark non-executed tasks ready")
+
 for forbidden in ("UrlFetchApp.fetch", "MailApp.sendEmail", "GmailApp.sendEmail", "ScriptApp.getOAuthToken"):
     require(forbidden not in gas, "Apps Script demo must not use " + forbidden)
 
