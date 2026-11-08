@@ -1,0 +1,50 @@
+name: Cloudflare Gateway CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare-gateway/**"
+      - "apps/aetherflow-server/src/api.rs"
+      - "apps/aetherflow-server/src/main.rs"
+      - ".github/workflows/gateway.yml"
+  pull_request:
+    paths:
+      - "cloudflare-gateway/**"
+      - "apps/aetherflow-server/src/api.rs"
+      - "apps/aetherflow-server/src/main.rs"
+      - ".github/workflows/gateway.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-policy:
+    name: Edge proxy and Durable Object policy tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Record Node runtime
+        run: node --version
+
+      - name: Validate JavaScript modules
+        run: |
+          node --check cloudflare-gateway/policy.mjs
+          node --check cloudflare-gateway/worker.mjs
+          node --check cloudflare-gateway/index.mjs
+
+      - name: Run gateway policy tests
+        run: node --test cloudflare-gateway/policy.test.mjs
+
+      - name: Verify production route remains disabled
+        run: |
+          grep -Fq 'workersDev: false' cloudflare-gateway/cloudflare.config.ts
+          grep -Fq 'previewUrls: false' cloudflare-gateway/cloudflare.config.ts
+          grep -Fq 'https://origin-not-configured.invalid' cloudflare-gateway/cloudflare.config.ts
