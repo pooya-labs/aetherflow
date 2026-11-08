@@ -426,6 +426,169 @@ class AetherFlowBrowserQA(unittest.TestCase):
         )
         self.assert_no_page_errors()
 
+    def test_dashboard_ignores_stale_workflow_selection_responses(self) -> None:
+        page = self.page
+        page.add_init_script(
+            """
+            (() => {
+              window.__apiRequests = [];
+              window.fetch = (url, options = {}) => new Promise((resolve, reject) => {
+                const request = { url: String(url), options, resolve, reject };
+                window.__apiRequests.push(request);
+                if (options.signal) {
+                  options.signal.addEventListener(
+                    "abort",
+                    () => reject(new DOMException("The request was aborted.", "AbortError")),
+                    { once: true }
+                  );
+                }
+              });
+              window.__respondApi = (index, payload, status = 200) => {
+                const request = window.__apiRequests[index];
+                request.resolve({
+                  ok: status >= 200 && status < 300,
+                  status,
+                  text: async () => JSON.stringify(payload)
+                });
+              };
+            })();
+            """
+        )
+        page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
+        page.locator("#apiBase").fill(API_BASE)
+        page.locator("#apiToken").fill(TOKEN)
+        page.locator("#connectButton").click()
+        page.wait_for_function("window.__apiRequests.length === 1")
+
+        def respond(index: int, payload: dict) -> None:
+            page.evaluate(
+                "([index, payload]) => window.__respondApi(index, payload)",
+                [index, payload],
+            )
+
+        respond(
+            0,
+            {
+                "items": [
+                    {
+                        "workflow_run_id": "run-race-a",
+                        "workflow_id": "workflow-a",
+                        "status": "running",
+                        "version": 1,
+                        "task_count": 0,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                    },
+                    {
+                        "workflow_run_id": "run-race-b",
+                        "workflow_id": "workflow-b",
+                        "status": "succeeded",
+                        "version": 2,
+                        "task_count": 0,
+                        "created_at": FIXED_TIME,
+                        "updated_at": FIXED_TIME,
+                    },
+                ],
+                "next_cursor": None,
+            },
+        )
+        page.locator(".run-item").filter(has_text="run-race-a").wait_for()
+        page.wait_for_function("window.__apiRequests.length === 2")
+
+        page.locator(".run-item").filter(has_text="run-race-b").click()
+        page.wait_for_function("window.__apiRequests.length === 3")
+
+        respond(
+            2,
+            {
+                "workflow_run_id": "run-race-b",
+                "workflow_id": "workflow-b",
+                "status": "succeeded",
+                "version": 2,
+                "created_at": FIXED_TIME,
+                "updated_at": FIXED_TIME,
+                "task_runs": [],
+            },
+        )
+        page.wait_for_function("window.__apiRequests.length === 4")
+        respond(3, {"events": [], "next_cursor": None})
+        page.get_by_text("workflow-b", exact=True).wait_for()
+
+        # The first selection resolves last. It must not trigger an event fetch
+        # or replace the newer workflow currently shown in the console.
+        respond(
+            1,
+            {
+                "workflow_run_id": "run-race-a",
+                "workflow_id": "workflow-a",
+                "status": "running",
+                "version": 1,
+                "created_at": FIXED_TIME,
+                "updated_at": FIXED_TIME,
+                "task_runs": [],
+            },
+        )
+        page.wait_for_timeout(100)
+        self.assertEqual(page.evaluate("window.__apiRequests.length"), 4)
+        self.assertIn("run-race-b", page.locator("#detailContent").inner_text())
+        self.assertNotIn("run-race-a", page.locator("#detailContent").inner_text())
+        self.assert_no_page_errors()
+
+    def test_dashboard_disconnect_cancels_pending_api_requests(self) -> None:
+        page.add_init_script(
+            """
+            (() => {
+              window.__apiRequests = [];
+              window.fetch = (url, options = {}) => new Promise((resolve, reject) => {
+                const request = { url: String(url), options, resolve, reject };
+                window.__apiRequests.push(request);
+                if (options.signal) {
+                  options.signal.addEventListener(
+                    "abort",
+                    () => reject(new DOMException("The request was aborted.", "AbortError")),
+                    { once: true }
+                  );
+                }
+              });
+              window.__respondApi = (index, payload, status = 200) => {
+                const request = window.__apiRequests[index];
+                request.resolve({
+                  ok: status >= 200 && status < 300,
+                  status,
+                  text: async () => JSON.stringify(payload)
+                });
+              };
+            })();
+            """
+        )
+        page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
+        page.locator("#apiBase").fill(API_BASE)
+        page.locator("#apiToken").fill(TOKEN)
+        page.locator("#connectButton").click()
+        page.wait_for_function("window.__apiRequests.length === 1")
+
+        self.assertFalse(page.locator("#disconnectButton").is_disabled())
+        page.locator("#disconnectButton").click()
+        page.evaluate(
+            """() => window.__respondApi(0, {
+              items: [{
+                workflow_run_id: "late-run",
+                workflow_id: "late-workflow",
+                status: "succeeded",
+                version: 1,
+                task_count: 0
+              }],
+              next_cursor: null
+            })"""
+        )
+        page.wait_for_timeout(100)
+
+        self.assertIn("Not connected", page.locator("#connectionStatus").inner_text())
+        self.assertIn("Disconnected", page.locator("#runList").inner_text())
+        self.assertEqual(page.locator("#statTotal").inner_text(), "—")
+        self.assertEqual(page.locator(".run-item").count(), 0)
+        self.assert_no_page_errors()
+
     def test_dashboard_mobile_layout_and_theme_persistence(self) -> None:
         page = self.page
         page.set_viewport_size({"width": 390, "height": 844})
