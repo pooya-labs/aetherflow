@@ -13,7 +13,8 @@ const DEFAULTS = Object.freeze({
   maxBodyBytes: 16384,
   maxTaskBytes: 8192,
   maxTasks: 20,
-  maxVisitors: 500
+  maxVisitors: 500,
+  maxWorkflowsPerWorkspace: 50
 });
 
 class HttpError extends Error {
@@ -395,6 +396,25 @@ async function submitWorkflow(db, env, workspaceId, body, limits) {
     "SELECT workflow_run_id FROM demo_workflows WHERE workspace_id = ? AND workflow_run_id = ?"
   ).bind(workspaceId, submission.workflow_run_id).first();
   if (existing) throw new HttpError(409, "workflow_conflict", "That workflow-run identifier already exists in this workspace.");
+
+  const retained = await db.prepare(
+    "SELECT workflow_run_id FROM demo_workflows WHERE workspace_id = ? ORDER BY created_at ASC, workflow_run_id ASC"
+  ).bind(workspaceId).all();
+  if (retained.results.length >= limits.maxWorkflowsPerWorkspace) {
+    const oldestTerminal = await db.prepare(
+      "SELECT workflow_run_id FROM demo_workflows WHERE workspace_id = ? " +
+      "AND status IN ('succeeded','failed','cancelled','timed_out') " +
+      "ORDER BY updated_at ASC, workflow_run_id ASC LIMIT 1"
+    ).bind(workspaceId).first();
+    if (!oldestTerminal) {
+      throw new HttpError(429, "workspace_history_limit", "This demo workspace has reached its workflow history limit. No terminal run is available for cleanup.");
+    }
+    // D1 foreign-key cascades remove the terminal run's tasks and redacted events.
+    await db.prepare(
+      "DELETE FROM demo_workflows WHERE workspace_id = ? AND workflow_run_id = ? " +
+      "AND status IN ('succeeded','failed','cancelled','timed_out')"
+    ).bind(workspaceId, oldestTerminal.workflow_run_id).run();
+  }
 
   const stamp = nowIso();
   const workflowInstanceId = "af-" + (await sha256(workspaceId + "\u0000" + submission.workflow_run_id)).slice(0, 56);
