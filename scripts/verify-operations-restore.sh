@@ -434,4 +434,4 @@ if [[ "$retained_after_execution" != "3" ]]; then
   exit 1
 fi
 
-echo "PASS: restored PostgreSQL v8/RLS state and JetStream messages survived restore; AetherFlow started, accepted an HTTP workflow, completed its task, published all outbox events, and committed every event to the PostgreSQL inbox."
+echo "PASS: restored PostgreSQL v9/RLS state and JetStream messages survived restore; AetherFlow started, accepted an HTTP workflow, completed its task, published all outbox events, and committed every event to the PostgreSQL inbox."
