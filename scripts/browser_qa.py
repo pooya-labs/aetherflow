@@ -371,7 +371,7 @@ aetherflow_tenant_workflow_success_completion_p95_seconds_last_30m 5.000000
 aetherflow_tenant_workflow_success_completion_p99_seconds_last_30m 8.000000
 aetherflow_tenant_outbox_events{state="pending"} 3
 aetherflow_tenant_outbox_events{state="ready"} 2
-aetherflow_tenant_outbox_oldest_ready_lag_seconds 3.500000
+aetherflow_tenant_outbox_oldest_ready_lag_seconds 3599.900000
 aetherflow_tenant_outbox_expired_claims 1
 aetherflow_tenant_inbox_events{state="pending"} 2
 aetherflow_tenant_inbox_events{state="processing"} 1
@@ -441,8 +441,9 @@ aetherflow_tenant_task_expired_running_leases 0
         self.assertEqual(page.locator("#opsFailed").inner_text(), "1")
         self.assertEqual(page.locator("#opsCompletionSamples").inner_text(), "4")
         self.assertEqual(page.locator("#opsP95").inner_text(), "5.0 s")
+        self.assertIn("acceptance to terminal (queue included)", page.locator("#opsSnapshotStatus").inner_text())
         self.assertEqual(page.locator("#opsOutboxPending").inner_text(), "3")
-        self.assertEqual(page.locator("#opsOutboxLag").inner_text(), "3.5 s")
+        self.assertEqual(page.locator("#opsOutboxLag").inner_text(), "59m 59s")
         self.assertEqual(page.locator("#opsInboxProcessing").inner_text(), "1")
         page.get_by_text("task.succeeded · task_run").wait_for()
         self.assertTrue(page.locator("#workersButton").is_disabled())

@@ -167,11 +167,14 @@
     if (value < 60) return value.toFixed(1) + " s";
     if (value < 3600) {
       const minutes = Math.floor(value / 60);
-      const seconds = Math.round(value % 60);
+      const totalSeconds = Math.floor(value);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
       return minutes + "m " + seconds + "s";
     }
-    const hours = Math.floor(value / 3600);
-    const minutes = Math.floor((value % 3600) / 60);
+    const totalMinutes = Math.floor(value / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
     return hours + "h " + minutes + "m";
   }
 
@@ -233,7 +236,7 @@
       const exposition = await apiText("/api/v1/tenant/metrics");
       if (!isCurrentConnection(connectionRevision) || metricsRevision !== state.metricsRevision) return;
       renderOperationalSnapshot(exposition);
-      $("opsSnapshotStatus").textContent = "Tenant-scoped snapshot · refreshed " + new Date().toLocaleTimeString();
+      $("opsSnapshotStatus").textContent = "Tenant-scoped · acceptance to terminal (queue included) · refreshed " + new Date().toLocaleTimeString();
     } catch (error) {
       if (!isCurrentConnection(connectionRevision) || metricsRevision !== state.metricsRevision) return;
       $("opsSnapshotStatus").textContent = "Snapshot unavailable · " + error.message;
