@@ -34,7 +34,7 @@ async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
     let client = config.connect(vec![server]).await?;
     let jetstream = jetstream::new(client);
 
-    let stream = jetstream
+    jetstream
         .create_stream(StreamConfig {
             name: STREAM_NAME.to_owned(),
             subjects: vec![SUBJECT.to_owned()],
@@ -49,13 +49,13 @@ async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
 
     // The fixture certificate contains an IP SAN for 127.0.0.1 only. The
     // same trusted CA must not make a different DNS name valid.
-    let wrong_host = "tls://localhost:4225".parse::<ServerAddr>()?;
+    let wrong_host_url = env::var("AETHERFLOW_SECURE_NATS_WRONG_HOST_URL")?;
+    let wrong_host = wrong_host_url.parse::<ServerAddr>()?;
     let result = config.connect(vec![wrong_host]).await;
     assert!(
         matches!(result, Err(NatsConnectionError::Connect(_))),
         "the connector must reject a trusted certificate presented for another hostname"
     );
 
-    stream.delete().await?;
     Ok(())
 }
