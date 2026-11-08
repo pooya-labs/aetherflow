@@ -130,6 +130,7 @@ jobs:
           node --check dashboard/app.js
           node --check cloudflare-gateway/policy.mjs
           node --check cloudflare-gateway/worker.mjs
+          node --check cloudflare-gateway/index.mjs
           node --test cloudflare-gateway/policy.test.mjs
       - name: Validate operations runbooks against migrations and RLS
         run: bash scripts/check-operations-docs.sh
