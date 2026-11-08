@@ -4152,7 +4152,10 @@ mod tests {
                     .and_then(|value| value.parse::<f64>().ok())
             })
             .expect("oldest active workflow age gauge");
-        assert!(active_workflow_age >= 100.0, "workflow age was {active_workflow_age}");
+        assert!(
+            active_workflow_age >= 100.0,
+            "workflow age was {active_workflow_age}"
+        );
         assert!(
             tenant_metrics_text.contains("aetherflow_tenant_inbox_events{state=\"pending\"} 1")
         );
