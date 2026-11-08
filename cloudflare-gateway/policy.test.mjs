@@ -290,7 +290,11 @@ test("Durable Object uses SQLite storage and expires idle rate-limit buckets", a
     row: null,
     alarmAt: null,
     deleteAllCalls: 0,
-    blockConcurrencyWhile: async (callback) => callback(),
+    blockConcurrencyCalls: 0,
+    blockConcurrencyWhile: async (callback) => {
+      state.blockConcurrencyCalls += 1;
+      return callback();
+    },
     storage: {
       sql: {
         exec(sql, ...params) {
@@ -346,4 +350,5 @@ test("Durable Object uses SQLite storage and expires idle rate-limit buckets", a
   assert.equal(state.row, null, "an idle bucket deletes all SQLite and alarm state");
   assert.equal(state.alarmAt, null);
   assert.equal(state.deleteAllCalls, 1);
+  assert.equal(state.blockConcurrencyCalls, 2, "both alarm paths serialize against incoming requests");
 });
