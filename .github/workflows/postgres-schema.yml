@@ -437,7 +437,8 @@ jobs:
         run: |
           set -euo pipefail
           certificate_dir="$RUNNER_TEMP/aetherflow-nats-tls"
-          mkdir -p "$certificate_dir"
+          server_certificate_dir="$certificate_dir/server"
+          mkdir -p "$server_certificate_dir"
 
           openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
             -subj "/CN=AetherFlow CI Test CA" \
@@ -448,10 +449,10 @@ jobs:
 
           openssl req -newkey rsa:2048 -nodes \
             -subj "/CN=127.0.0.1" \
-            -keyout "$certificate_dir/server.key" \
-            -out "$certificate_dir/server.csr"
+            -keyout "$server_certificate_dir/server.key" \
+            -out "$server_certificate_dir/server.csr"
 
-          cat > "$certificate_dir/server.ext" <<'EOF'
+          cat > "$server_certificate_dir/server.ext" <<'EOF'
           basicConstraints=critical,CA:FALSE
           keyUsage=critical,digitalSignature,keyEncipherment
           extendedKeyUsage=serverAuth
@@ -459,19 +460,23 @@ jobs:
           EOF
 
           openssl x509 -req -sha256 -days 2 \
-            -in "$certificate_dir/server.csr" \
+            -in "$server_certificate_dir/server.csr" \
             -CA "$certificate_dir/ca.crt" \
             -CAkey "$certificate_dir/ca.key" \
             -CAcreateserial \
-            -extfile "$certificate_dir/server.ext" \
-            -out "$certificate_dir/server.crt"
+            -extfile "$server_certificate_dir/server.ext" \
+            -out "$server_certificate_dir/server.crt"
 
-          printf '%s\n' '127.0.0.1 aetherflow-wrong-host.test' \
+          # The NATS container runs as an unprivileged user. This private key
+          # belongs only to this short-lived, disposable CI fixture.
+          chmod 0644 "$server_certificate_dir/server.key" "$server_certificate_dir/server.crt"
+
+          printf '%s\\n' '127.0.0.1 aetherflow-wrong-host.test' \
             | sudo tee -a /etc/hosts >/dev/null
 
           docker run --detach --name aetherflow-nats-tls-client-test \
             --publish 127.0.0.1:4225:4222 \
-            --volume "$certificate_dir:/certs:ro" \
+            --volume "$server_certificate_dir:/certs:ro" \
             nats:2.12-alpine \
             -js -sd /data -m 8222 --tls \
             --tlscert=/certs/server.crt --tlskey=/certs/server.key
