@@ -138,13 +138,13 @@ impl PgTenantOperationalMetricsRepository {
                 "SELECT
                     count(*)::BIGINT,
                     percentile_cont(0.50) WITHIN GROUP (
-                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))::DOUBLE PRECISION
                     )::DOUBLE PRECISION,
                     percentile_cont(0.95) WITHIN GROUP (
-                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))::DOUBLE PRECISION
                     )::DOUBLE PRECISION,
                     percentile_cont(0.99) WITHIN GROUP (
-                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))
+                        ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))::DOUBLE PRECISION
                     )::DOUBLE PRECISION
                  FROM workflow_runs
                  WHERE tenant_id = $1
@@ -158,9 +158,12 @@ impl PgTenantOperationalMetricsRepository {
             .await
             .map_err(|error| StorageError::Database(error.to_string()))?;
         let workflow_success_execution_samples_last_30m = workflow_success_execution_row.get(0);
-        let workflow_success_execution_p50_seconds_last_30m = workflow_success_execution_row.get(1);
-        let workflow_success_execution_p95_seconds_last_30m = workflow_success_execution_row.get(2);
-        let workflow_success_execution_p99_seconds_last_30m = workflow_success_execution_row.get(3);
+        let workflow_success_execution_p50_seconds_last_30m: Option<f64> =
+            workflow_success_execution_row.get(1);
+        let workflow_success_execution_p95_seconds_last_30m: Option<f64> =
+            workflow_success_execution_row.get(2);
+        let workflow_success_execution_p99_seconds_last_30m: Option<f64> =
+            workflow_success_execution_row.get(3);
 
         let outbox_row = transaction
             .query_one(
