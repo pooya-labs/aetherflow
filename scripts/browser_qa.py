@@ -184,6 +184,7 @@ class AetherFlowBrowserQA(unittest.TestCase):
                     "workflow_run_id": "run-browser-qa-001",
                     "workflow_id": "browser-qa-demo",
                     "status": "succeeded",
+                    "version": 3,
                     "task_count": 1,
                     "created_at": FIXED_TIME,
                     "updated_at": FIXED_TIME,
@@ -268,6 +269,10 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.get_by_text("task.succeeded · task_run").wait_for()
         self.assertEqual(page.locator("#statTotal").inner_text(), "1")
         self.assertEqual(page.locator("#statSucceeded").inner_text(), "1")
+        run_meta = page.locator(".run-item .run-meta").inner_text()
+        self.assertIn("1 task", run_meta)
+        self.assertIn("v3", run_meta)
+        self.assertNotIn("undefined", run_meta)
         self.assertIn("browser-qa-demo", page.locator("#detailContent").inner_text())
         self.assertEqual(page.locator("#apiToken").input_value(), "")
 

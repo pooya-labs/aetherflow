@@ -160,11 +160,12 @@
       button.append(top);
       button.append(element("div", "run-workflow", run.workflow_id));
       const meta = element("div", "run-meta");
-      meta.append(
-        element("span", "", run.task_count + " tasks"),
-        element("span", "", "v" + run.version),
-        element("span", "", formatDate(run.created_at))
-      );
+      const taskCount = Number.isInteger(run.task_count) && run.task_count >= 0 ? run.task_count : null;
+      const version = Number.isInteger(run.version) && run.version >= 0 ? "v" + run.version : null;
+      const createdAt = formatDate(run.created_at);
+      if (taskCount !== null) meta.append(element("span", "", taskCount + (taskCount === 1 ? " task" : " tasks")));
+      if (version) meta.append(element("span", "", version));
+      if (createdAt !== "—") meta.append(element("span", "", createdAt));
       button.append(meta);
       runList.append(button);
     }
