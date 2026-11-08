@@ -24,14 +24,14 @@
   }
 
   function validateWorkflowSubmission(input, options) {
-    const config = Object.assign({ maxTasks: 100, maxBodyBytes: 16384, maxTaskBytes: 8192 }, options || {});
+    const config = Object.assign({ maxTasks: 20, maxBodyBytes: 16384, maxTaskBytes: 8192 }, options || {});
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid_request");
     if (!isIdentifier(input.workflow_id) || !isIdentifier(input.workflow_run_id)) throw new Error("invalid_identifier");
     if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > config.maxTasks) {
       throw new Error("invalid_workflow");
     }
     const retry = input.retry_policy;
-    if (!retry || !Number.isSafeInteger(retry.max_attempts) || retry.max_attempts < 1 || retry.max_attempts > 100 ||
+    if (!retry || !Number.isSafeInteger(retry.max_attempts) || retry.max_attempts < 1 || retry.max_attempts > 10 ||
         !Number.isSafeInteger(retry.initial_backoff_ms) || retry.initial_backoff_ms < 0 ||
         !Number.isSafeInteger(retry.max_backoff_ms) || retry.max_backoff_ms < retry.initial_backoff_ms ||
         retry.max_backoff_ms > 86400000) {
@@ -95,8 +95,7 @@
     }
     if (order.length !== tasks.length) throw new Error("workflow_cycle");
 
-    const encodedLength = JSON.stringify(input).length;
-    if (encodedLength > config.maxBodyBytes) throw new Error("request_too_large");
+    if (JSON.stringify(input).length > config.maxBodyBytes) throw new Error("request_too_large");
     return {
       workflow_id: input.workflow_id,
       workflow_run_id: input.workflow_run_id,
