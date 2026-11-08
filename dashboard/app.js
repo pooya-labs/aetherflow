@@ -63,6 +63,8 @@
     $("applyFilter").disabled = value || !state.token;
     $("statusFilter").disabled = value || !state.token;
     $("workersButton").disabled = value || !state.token || state.scope !== "operator";
+    const sampleButton = $("runSample");
+    if (sampleButton) sampleButton.disabled = value || !state.token || state.runtime !== "cloudflare-free";
   }
 
   function isCurrentConnection(revision) {
@@ -135,6 +137,51 @@
       throw new Error(message || ("API request failed with HTTP " + response.status + "."));
     }
     return payload;
+  }
+
+  async function apiWrite(path, body) {
+    const bridge = window.AetherFlowAppsScriptBridge;
+    if (bridge && bridge.isActive()) {
+      const response = await bridge.request({ method: "POST", path: path, body: body });
+      if (response.status < 200 || response.status >= 300) {
+        const payload = response.body;
+        const message = payload && payload.error && payload.error.message;
+        throw new Error(message || ("API request failed with HTTP " + response.status + "."));
+      }
+      return response.body;
+    }
+
+    const response = await fetch(state.base + path, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + state.token
+      },
+      body: JSON.stringify(body),
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      signal: state.requestController ? state.requestController.signal : undefined
+    });
+    const raw = await response.text();
+    let payload = null;
+    if (raw) {
+      try { payload = JSON.parse(raw); }
+      catch (_) { throw new Error("The API returned a non-JSON response."); }
+    }
+    if (!response.ok) {
+      const message = payload && payload.error && payload.error.message;
+      throw new Error(message || ("API request failed with HTTP " + response.status + "."));
+    }
+    return payload;
+  }
+
+  function encodeJsonBase64(value) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+    return btoa(binary);
   }
 
   async function apiText(path) {
@@ -669,6 +716,57 @@
     setConnection("Not connected", "");
   });
 
+  $("runSample")?.addEventListener("click", async () => {
+    if (state.runtime !== "cloudflare-free" || !state.token || state.busy) return;
+    const workflowRunId = "demo-" + crypto.randomUUID().replace(/-/g, "");
+    const submission = {
+      workflow_id: "serverless-showcase",
+      workflow_run_id: workflowRunId,
+      retry_policy: {
+        max_attempts: 2,
+        initial_backoff_ms: 100,
+        max_backoff_ms: 1000
+      },
+      tasks: [
+        {
+          task_id: "format-message",
+          depends_on: [],
+          input_base64: encodeJsonBase64({
+            type: "uppercase",
+            input: "AetherFlow runs without a separate Origin"
+          })
+        },
+        {
+          task_id: "fingerprint-message",
+          depends_on: [],
+          input_base64: encodeJsonBase64({
+            type: "sha256",
+            input: "AetherFlow · Cloudflare Free · D1"
+          })
+        },
+        {
+          task_id: "collect-results",
+          depends_on: ["format-message", "fingerprint-message"],
+          input_base64: encodeJsonBase64({ type: "collect" })
+        }
+      ]
+    };
+
+    const button = $("runSample");
+    button.disabled = true;
+    setConnection("Submitting a sample workflow to Cloudflare…", "");
+    try {
+      const receipt = await apiWrite("/api/v1/workflow-runs", submission);
+      if (!isCurrentConnection(state.connectionRevision)) return;
+      setConnection("Workflow accepted · " + receipt.workflow_run_id, "good");
+      await loadRuns(false);
+    } catch (error) {
+      setConnection("Workflow submission failed · " + error.message, "bad");
+    } finally {
+      setBusy(false);
+    }
+  });
+
   $("refreshButton").addEventListener("click", () => loadRuns(false));
   $("applyFilter").addEventListener("click", () => {
     state.status = $("statusFilter").value;
@@ -692,6 +790,11 @@
     const securityNote = document.querySelector(".security-note");
     const notice = document.querySelector(".notice span:last-child");
     const footer = document.querySelector(".footer");
+    const sampleButton = $("runSample");
+    if (sampleButton) {
+      sampleButton.classList.toggle("hidden", runtime !== "cloudflare-free");
+      sampleButton.disabled = true;
+    }
     if (runtime === "apps-script") {
       if (connectionCopy) connectionCopy.textContent = "Connected through the owner-managed Apps Script runtime. Each browser receives a separate bounded demo workspace.";
       if (securityNote) securityNote.textContent = "Private demo session. The short-lived capability stays inside the bridge and is never stored in the dashboard URL, cookies, or local storage.";
