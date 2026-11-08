@@ -745,8 +745,8 @@ aetherflow_tenant_task_expired_running_leases 0
 
         page.locator("#runSample").click()
         page.get_by_text("Workflow accepted", exact=False).wait_for()
-        page.get_by_text("serverless-showcase", exact=True).wait_for()
-        page.get_by_text("collect-results", exact=True).wait_for()
+        page.locator(".run-item .run-workflow").filter(has_text="serverless-showcase").wait_for()
+        page.locator("#detailContent .task-id").filter(has_text="collect-results").wait_for()
 
         self.assertEqual(len(created), 1)
         submission = created[0]
