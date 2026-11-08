@@ -20,7 +20,7 @@ use aetherflow_storage_postgres::{
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
-    NatsJetStreamPublisher,
+    NatsConnectionConfig, NatsJetStreamPublisher,
 };
 use async_nats::jetstream::{
     self, consumer::PullConsumer, consumer::pull::Config as PullConsumerConfig,
@@ -161,8 +161,12 @@ fn parse_nats_seed_urls(urls: &str) -> Vec<async_nats::ServerAddr> {
     servers
 }
 
-async fn connect_to_nats(urls: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
-    async_nats::connect(parse_nats_seed_urls(urls)).await
+async fn connect_to_nats(
+    urls: &str,
+) -> Result<async_nats::Client, aetherflow_transport_nats::NatsConnectionError> {
+    NatsConnectionConfig::from_env()?
+        .connect(parse_nats_seed_urls(urls))
+        .await
 }
 
 #[test]
