@@ -40,6 +40,12 @@
     .notice-mark{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:8px;color:var(--amber);background:rgba(232,194,124,.1);font-weight:900}
     .notice strong{color:var(--text)}.notice code{color:var(--amber);font:9px ui-monospace,monospace;overflow-wrap:anywhere}
     .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+    .ops-snapshot{margin-bottom:14px}.ops-status{margin:-3px 0 13px;color:var(--muted);font-size:9px}
+    .ops-groups{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+    .ops-group{min-width:0;padding:11px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--surface2) 62%,transparent)}
+    .ops-group h3{margin:0 0 9px;color:var(--muted);font-size:9px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}
+    .ops-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .ops-cell{min-width:0}.ops-cell small{display:block;color:var(--subtle);font-size:8px;line-height:1.5}.ops-cell b{display:block;margin-top:2px;font-size:17px;letter-spacing:-.04em;overflow-wrap:anywhere}.ops-cell .unit{font-size:8px;color:var(--subtle);font-weight:600;letter-spacing:0}
     .stat{padding:15px}.stat .label{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.08em;text-transform:uppercase}.stat strong{display:block;font-size:24px;letter-spacing:-.06em;margin:4px 0}.stat small{font-size:9px;color:var(--subtle)}
     .content-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(310px,.95fr);gap:13px;align-items:start}
     .card{padding:17px;min-width:0}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
@@ -65,8 +71,8 @@
     .workers{margin-top:14px}.worker-row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px}.worker-row b{font-size:9px;overflow-wrap:anywhere}.worker-row small{font-size:8px;color:var(--subtle)}
     .empty{padding:22px;text-align:center;color:var(--subtle);font-size:10px;line-height:1.7;border:1px dashed var(--line2);border-radius:12px}.error{color:var(--red)}.success{color:var(--mint)}.hidden{display:none!important}
     .footer{padding:19px 0 30px;color:var(--subtle);font-size:9px;display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line)}
-    @media(max-width:1100px){.layout{grid-template-columns:280px minmax(0,1fr)}.content-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:760px){.shell{width:min(100% - 28px,620px)}.layout{display:flex;flex-direction:column;padding-top:15px}.connect{position:static;width:100%}.main{width:100%}.welcome{align-items:flex-start;flex-direction:column}.welcome-actions{width:100%}.welcome-actions .btn{flex:1}.stats{gap:8px}.stat{padding:12px}.stat strong{font-size:21px}.card{padding:13px}.footer{flex-direction:column}.nav-right .nav-badge{display:none}}
+    @media(max-width:1100px){.layout{grid-template-columns:280px minmax(0,1fr)}.content-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-groups{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:760px){.shell{width:min(100% - 28px,620px)}.layout{display:flex;flex-direction:column;padding-top:15px}.connect{position:static;width:100%}.main{width:100%}.welcome{align-items:flex-start;flex-direction:column}.welcome-actions{width:100%}.welcome-actions .btn{flex:1}.stats{gap:8px}.stat{padding:12px}.stat strong{font-size:21px}.ops-group{padding:9px}.ops-cell b{font-size:15px}.card{padding:13px}.footer{flex-direction:column}.nav-right .nav-badge{display:none}}
     @media(max-width:390px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-grid{grid-template-columns:1fr}.nav{height:64px}}
     @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important}}
   </style>
@@ -150,6 +156,53 @@
       <div class="panel stat"><div class="label">Succeeded</div><strong id="statSucceeded">—</strong><small>In loaded pages</small></div>
       <div class="panel stat"><div class="label">Needs attention</div><strong id="statAttention">—</strong><small>Failed or timed out</small></div>
     </div>
+
+    <section class="panel card ops-snapshot hidden" id="opsSnapshot" aria-labelledby="opsSnapshotTitle">
+      <div class="card-head">
+        <div class="card-head-title"><span class="card-icon">⌁</span><div><div class="section-kicker">Tenant telemetry</div><h2 id="opsSnapshotTitle">Operational snapshot</h2></div></div>
+        <span class="pill">Rolling 30 minutes</span>
+      </div>
+      <div class="ops-status" id="opsSnapshotStatus" aria-live="polite">Waiting for a tenant connection.</div>
+      <div class="ops-groups" id="opsSnapshotGrid">
+        <section class="ops-group" aria-label="Workflow outcomes">
+          <h3>Workflow outcomes</h3>
+          <div class="ops-values">
+            <div class="ops-cell"><small>Succeeded</small><b id="opsSuccess">—</b></div>
+            <div class="ops-cell"><small>Failed</small><b id="opsFailed">—</b></div>
+            <div class="ops-cell"><small>Cancelled</small><b id="opsCancelled">—</b></div>
+            <div class="ops-cell"><small>Timed out</small><b id="opsTimedOut">—</b></div>
+          </div>
+        </section>
+        <section class="ops-group" aria-label="Successful workflow completion latency">
+          <h3>Completion latency</h3>
+          <div class="ops-values">
+            <div class="ops-cell"><small>Samples</small><b id="opsCompletionSamples">—</b></div>
+            <div class="ops-cell"><small>p50</small><b id="opsP50">—</b></div>
+            <div class="ops-cell"><small>p95</small><b id="opsP95">—</b></div>
+            <div class="ops-cell"><small>p99</small><b id="opsP99">—</b></div>
+          </div>
+        </section>
+        <section class="ops-group" aria-label="Outbox health">
+          <h3>Outbox</h3>
+          <div class="ops-values">
+            <div class="ops-cell"><small>Pending</small><b id="opsOutboxPending">—</b></div>
+            <div class="ops-cell"><small>Ready</small><b id="opsOutboxReady">—</b></div>
+            <div class="ops-cell"><small>Oldest ready</small><b id="opsOutboxLag">—</b></div>
+            <div class="ops-cell"><small>Expired claims</small><b id="opsOutboxExpired">—</b></div>
+          </div>
+        </section>
+        <section class="ops-group" aria-label="Inbox and task health">
+          <h3>Inbox &amp; tasks</h3>
+          <div class="ops-values">
+            <div class="ops-cell"><small>Inbox pending</small><b id="opsInboxPending">—</b></div>
+            <div class="ops-cell"><small>Processing</small><b id="opsInboxProcessing">—</b></div>
+            <div class="ops-cell"><small>Oldest inbox</small><b id="opsInboxAge">—</b></div>
+            <div class="ops-cell"><small>Expired inbox leases</small><b id="opsInboxExpired">—</b></div>
+            <div class="ops-cell"><small>Expired task leases</small><b id="opsTaskExpired">—</b></div>
+          </div>
+        </section>
+      </div>
+    </section>
 
     <div class="content-grid">
       <section class="panel card" aria-labelledby="runsTitle">
