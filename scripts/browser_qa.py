@@ -811,25 +811,28 @@ aetherflow_tenant_task_expired_running_leases 0
                 }
                 const stamp = new Date().toISOString();
                 const snapshot = {
-                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "pending", version: 1,
                   created_at: stamp, updated_at: stamp,
                   task_runs: body.tasks.map(task => ({
-                    task_id: task.task_id, task_run_id: "tr-" + task.task_id, status: (task.depends_on || []).length ? "pending" : "ready",
+                    task_id: task.task_id, task_run_id: "tr-" + task.task_id, status: "pending",
                     version: 1, attempts_started: 0, input_size_bytes: 0, output_present: false
                   }))
                 };
                 store.runs.unshift({
-                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "pending", version: 1,
                   task_count: body.tasks.length, created_at: stamp, updated_at: stamp
                 });
                 store.snapshots[body.workflow_run_id] = snapshot;
                 store.events[body.workflow_run_id] = [{
                   event_id: 1001, event_type: "workflow.submitted", aggregate_type: "workflow_run",
                   aggregate_id: body.workflow_run_id, created_at: stamp, published_at: null, status: "recorded"
+                }, {
+                  event_id: 1002, event_type: "task.pending", aggregate_type: "task_run",
+                  aggregate_id: "tr-stored-only-record", created_at: stamp, published_at: null, status: "recorded"
                 }];
                 save(store);
                 return { status: 201, body: {
-                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "running", version: 1,
+                  workflow_id: body.workflow_id, workflow_run_id: body.workflow_run_id, status: "pending", version: 1,
                   task_runs: snapshot.task_runs.map(task => ({ task_id: task.task_id, task_run_id: task.task_run_id, status: task.status }))
                 }};
               }
@@ -878,11 +881,13 @@ aetherflow_tenant_task_expired_running_leases 0
             }"""
         )
         self.assertIsNotNone(new_run)
+        self.assertEqual(new_run["status"], "pending")
         workflow_id = new_run["workflow_run_id"]
         self.assertTrue(workflow_id.startswith("gas-smoke-"))
         self.assertEqual(page.locator(".run-item").count(), 5)
         page.locator(".run-item").filter(has_text=workflow_id).wait_for()
         self.assertIn("stored-only-record", page.locator("#detailContent").inner_text())
+        self.assertIn("task.pending · task_run", page.locator("#detailContent").inner_text())
         self.assertIn("workflow.submitted · workflow_run", page.locator("#detailContent").inner_text())
 
         post_requests = page.evaluate(
@@ -901,6 +906,7 @@ aetherflow_tenant_task_expired_running_leases 0
         page.locator(".run-item").filter(has_text=workflow_id).wait_for()
         self.assertEqual(page.locator(".run-item").count(), 5)
         self.assertIn("stored-only-record", page.locator("#detailContent").inner_text())
+        self.assertIn("task.pending · task_run", page.locator("#detailContent").inner_text())
         self.assertIn("workflow.submitted · workflow_run", page.locator("#detailContent").inner_text())
         self.assert_no_page_errors()
 
