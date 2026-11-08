@@ -86,7 +86,7 @@
     </a>
     <div class="nav-right">
       <span class="nav-badge">API v1</span>
-      <span class="read-only">Read-only console</span>
+      <span class="read-only">Serverless console</span>
       <button class="icon-btn" id="themeButton" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button>
       <a class="btn ghost" href="../">← Product site</a>
     </div>
@@ -140,6 +140,7 @@
         <p id="welcomeText">Connect an API to inspect live workflow runs, task snapshots, redacted events and active workers.</p>
       </div>
       <div class="welcome-actions">
+        <button class="btn primary hidden" id="runSample" type="button" disabled>▶ Run sample workflow</button>
         <button class="btn" id="refreshButton" type="button" disabled>↻ Refresh</button>
         <button class="btn" id="workersButton" type="button" disabled>Workers</button>
       </div>
@@ -240,7 +241,7 @@
 </main>
 
 <footer class="shell footer">
-  <span>AetherFlow · API v1 · Read-only browser console</span>
+  <span>AetherFlow · API v1 · Serverless workflow console</span>
   <span>Bring your own API · Session-only credential · Manual refresh, no background polling</span>
 </footer>
 
