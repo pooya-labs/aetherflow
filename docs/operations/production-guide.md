@@ -34,6 +34,10 @@ For a PostgreSQL-backed server, supply independent values through a secret manag
 | `AETHERFLOW_AUTH_FAILURE_PER_SECOND` | Positive integer; default 2 failed-attempt token refills per second per peer |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional OTLP HTTP/protobuf destination |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Optional exporter credentials; protect and never log these values |
+| `AETHERFLOW_NATS_TLS_REQUIRED` | Require TLS for NATS connections; automatically inferred as true when credentials or TLS files are configured |
+| `AETHERFLOW_NATS_CREDENTIALS_FILE` | Secret-mounted NATS `.creds` file containing the user JWT and private NKey seed |
+| `AETHERFLOW_NATS_CA_FILE` | Optional PEM CA bundle for a private NATS server certificate authority |
+| `AETHERFLOW_NATS_CLIENT_CERT_FILE`, `AETHERFLOW_NATS_CLIENT_KEY_FILE` | Optional client certificate/key pair for mutual TLS; both are required together |
 
 Tenant credentials are provisioned and managed as tenant records, not as a substitute for the platform operator token. Generate credentials from a cryptographically secure source, keep the raw values out of source control and logs, and revoke them when no longer needed.
 
@@ -52,8 +56,16 @@ This is an operational architecture requirement, not a feature provided by the c
 1. Provision a dedicated database and PostgreSQL roles. Apply schema changes with the migration owner; connect the running service only with a restricted runtime role.
 2. Verify the runtime role is not SUPERUSER, BYPASSRLS, REPLICATION, CREATEROLE, CREATEDB, a member of another role, or owner of protected tables. Startup performs these checks and verifies FORCE RLS on ten tenant tables.
 3. Use certificate-validated PostgreSQL TLS for remote connections. Install private CA roots into the host's native trust store rather than bypassing certificate verification.
-4. Configure a production NATS JetStream cluster with its own credentials, access controls, transport encryption, retention, storage, monitoring, and failure policy. Do not infer that the local Compose cluster provides these controls.
+4. Configure a production NATS JetStream cluster with its own credentials, access controls, transport encryption, retention, storage, monitoring, and failure policy. The transport crate now exposes `NatsConnectionConfig` for a secret-mounted `.creds` file, mandatory TLS, a custom CA bundle, and an optional client mTLS certificate/key pair. This secures the client connection only; it does not provision server accounts, subject ACLs, stream retention, or cluster policy. Do not infer that the local Compose cluster provides those controls.
 5. Keep API, worker, migration, and broker permissions separated. Never run the application as the database owner.
+
+### NATS client authentication and TLS
+
+The `aetherflow-transport-nats` crate exports `NatsConnectionConfig`. Load it from the process environment and use its `connect` method when creating the JetStream client. The supported settings are listed above and are intentionally independent from the server's NATS account/ACL configuration.
+
+For an externally reachable deployment, mount the `.creds` file and any CA/client identity files from a secret manager rather than copying them into the repository, container image, or environment variable values. A NATS credentials file contains a user JWT and private NKey seed; protect it like a private key. The helper requires TLS whenever credentials, a custom CA, or an mTLS identity is configured. An incomplete client certificate/key pair or an explicit plaintext override is rejected. With no security settings, the default remains plaintext for the loopback-only local Compose cluster.
+
+The credentials file is loaded when a client connection is created; the helper does not watch or hot-reload secret files. Rotate NATS credentials by creating a new client from the updated secret and draining the old client under a controlled rollout. Server-side TLS policy, account provisioning, least-privilege publish/subscribe permissions, stream configuration, and credential revocation remain NATS operator responsibilities.
 
 ## 4. Startup and health checks
 
