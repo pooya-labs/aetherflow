@@ -196,4 +196,5 @@ jobs:
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AETHERFLOW_FULL_WORKFLOW_SMOKE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: python3 scripts/smoke-cloudflare-free.py
