@@ -95,6 +95,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             transport = "https",
             "AetherFlow control plane listening"
         );
+        // Pass the accepted TCP peer into ConnectInfo; auth throttling must
+        // never derive a security identity from caller-controlled forwarding headers.
         axum_server::bind_rustls(address, tls_config)
             .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
