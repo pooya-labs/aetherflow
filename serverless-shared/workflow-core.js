@@ -31,7 +31,7 @@
       throw new Error("invalid_workflow");
     }
     const retry = input.retry_policy;
-    if (!retry || !Number.isSafeInteger(retry.max_attempts) || retry.max_attempts < 1 || retry.max_attempts > 10 ||
+    if (!retry || !Number.isSafeInteger(retry.max_attempts) || retry.max_attempts < 1 || retry.max_attempts > 3 ||
         !Number.isSafeInteger(retry.initial_backoff_ms) || retry.initial_backoff_ms < 0 ||
         !Number.isSafeInteger(retry.max_backoff_ms) || retry.max_backoff_ms < retry.initial_backoff_ms ||
         retry.max_backoff_ms > 86400000) {
