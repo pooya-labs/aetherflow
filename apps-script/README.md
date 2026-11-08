@@ -8,9 +8,9 @@ This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded wor
 
 [Open the owner-provided Apps Script Web App](https://script.google.com/macros/s/AKfycby-RppnSarisz26pfexeZLjd-LD_FTmE8q6Ea3JtFLkl4iAfuyCCLX61p92nNZLlWyr/exec).
 
-The public URL responds with the expected page title, “AetherFlow — Apps Script Demo”. This confirms that the Web App HTML wrapper is reachable; it does **not** confirm that the private Spreadsheet is initialized or that `google.script.run` can complete the workflow lifecycle.
+The owner confirmed that the dashboard displays `Read-only · Connected · synthetic demo data` and loads four seeded workflows. The bridge bootstrap and private Spreadsheet read path are therefore working. The sample IDs `demo-index-003` and `demo-retry-004` are expected seed records created by `createWorkspace_()`.
 
-For an existing deployment, do not recreate the project or database. Confirm that `_setupAetherFlowDemo_` has been run successfully in the owning Apps Script project and that its Google Sheets authorization was approved. Then open the link above and verify that the wrapper status becomes “Connected · private demo workspace”. Submit one small built-in sample workflow, refresh the page, and verify that the workflow and event history remain available. Never share the owner-only Spreadsheet URL or ID.
+The `Read-only` label belongs to the dashboard's inspection interface and is expected; it is not a connection failure. For this working deployment, do **not** rerun `_setupAetherFlowDemo_` or create another database. The remaining acceptance item is a bounded owner-controlled POST test, followed by refresh and read-back of the new workflow and its events. The current dashboard does not expose its Cloudflare-only “Run sample” button in Apps Script mode, so do not look for that control. Never share the owner-only Spreadsheet URL or ID.
 
 ## Included
 
