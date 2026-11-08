@@ -80,7 +80,7 @@ The Rust API also has tests proving that a public bind without the ingress token
 
 ## Toolchain setup
 
-Use Node.js **22.18 or later**. The project pins the Cloudflare CLI beta as a development dependency so the `cf/config` import resolves from this project rather than relying on a globally installed, unpinned copy.
+Use Node.js **22.18 or later**. The project pins the Cloudflare CLI beta (`cf` 1.0.0-beta.23) as a development dependency so the `cf/config` import resolves from this project rather than relying on a globally installed, unpinned copy.
 
 From this directory:
 
