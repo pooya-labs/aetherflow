@@ -115,7 +115,7 @@ See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
 ## Browser quality checks
 
-The product website and read-only console have a real Chromium acceptance suite. It exercises desktop and mobile layouts, navigation anchors, responsive overflow, theme persistence, clipboard actions, HTTPS-only remote API validation, mocked workflow/task/event reads, disconnect behavior, and the session-only Bearer credential boundary. Tests use a local static server and a mocked control-plane endpoint; they do not require or claim a hosted production API.
+The product website and read-only console have a real Chromium acceptance suite. It exercises desktop and mobile layouts, navigation anchors, responsive overflow, theme persistence, clipboard actions, HTTPS-only remote API validation, tenant/operator route separation, workflow and event pagination, stale-response protection when switching workflows, in-flight request cancellation on disconnect, mocked workflow/task/event reads, and the session-only Bearer credential boundary. Tests use a local static server and a mocked control-plane endpoint; they do not require or claim a hosted production API.
 
 Run the suite locally after installing the pinned browser dependency and Chromium:
 
@@ -128,7 +128,7 @@ python3 -m venv .venv
 
 GitHub Actions archives desktop/mobile screenshots for review. Passing browser QA validates the Pages interface and mocked API contract only; production authentication, CORS, and a live deployment still require an operator-owned API environment.
 
-Latest exact-source Browser QA: commit `3a94c8da3bcf4b1479bd3b5a62de9c1b5a7295d0` passed all six Chromium tests in [run 42486030870](https://github.com/pooya-labs/aetherflow/actions/runs/42486030870). Rust CI [42486030882](https://github.com/pooya-labs/aetherflow/actions/runs/42486030882), Security [42486030909](https://github.com/pooya-labs/aetherflow/actions/runs/42486030909), and Pages deployment [42486030707](https://github.com/pooya-labs/aetherflow/actions/runs/42486030707) also passed on that SHA.
+Latest exact-source Browser QA: commit `645a747643497263ab031133e44745805d95694c` passed all nine Chromium desktop/mobile tests in 10.154 seconds ([run 42488524145](https://github.com/pooya-labs/aetherflow/actions/runs/42488524145)). GitHub Pages deployment [42488523321](https://github.com/pooya-labs/aetherflow/actions/runs/42488523321) and supply-chain/secret checks [42488524104](https://github.com/pooya-labs/aetherflow/actions/runs/42488524104) also passed on that SHA. Rust CI [42488524137](https://github.com/pooya-labs/aetherflow/actions/runs/42488524137) was still running when this entry was recorded. Browser QA uses mocked API responses; it verifies client behavior, not a hosted production backend.
 
 ## Reproducible scheduler benchmarks
 
