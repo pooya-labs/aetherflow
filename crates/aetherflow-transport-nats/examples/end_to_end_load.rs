@@ -25,7 +25,7 @@ use aetherflow_storage_postgres::{
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsJetStreamConsumer,
-    NatsJetStreamPublisher,
+    NatsConnectionConfig, NatsJetStreamPublisher,
 };
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -250,7 +250,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let migration = PgStore::from_pool(pool.clone()).migrate().await?;
     println!("schema: {migration:?}");
 
-    let nats_client = async_nats::connect(nats_seeds(&config.nats_urls)?).await?;
+    let nats_client = NatsConnectionConfig::from_env()?
+        .connect(nats_seeds(&config.nats_urls)?)
+        .await?;
     let jetstream = jetstream::new(nats_client);
     let stream_name = format!("AFLOW_LOAD_{}", suffix.to_ascii_uppercase());
     let subject = format!("aetherflow.load.{suffix}.events");
