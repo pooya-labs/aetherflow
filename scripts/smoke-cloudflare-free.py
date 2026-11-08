@@ -61,6 +61,10 @@ def main() -> None:
         if response.status != 204 or response.headers.get("Access-Control-Allow-Origin") != ORIGIN:
             raise SystemExit("Cloudflare CORS preflight did not accept the canonical Pages origin.")
 
+    if os.environ.get("AETHERFLOW_FULL_WORKFLOW_SMOKE") != "1":
+        print("Cloudflare Free edge smoke: health and CORS: OK (workflow quota preserved)")
+        return
+
     # A stable CI browser identity reuses one isolated workspace and avoids
     # consuming the public visitor ceiling on every push.
     client_id = "00000000-0000-4000-8000-000000000001"
