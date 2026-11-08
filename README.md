@@ -113,6 +113,21 @@ A typed asynchronous Rust client lives in `crates/aetherflow-sdk`. It models the
 
 See the [Rust SDK guide](crates/aetherflow-sdk/README.md) for a usage example.
 
+## Browser quality checks
+
+The product website and read-only console have a real Chromium acceptance suite. It exercises desktop and mobile layouts, navigation anchors, responsive overflow, theme persistence, clipboard actions, HTTPS-only remote API validation, mocked workflow/task/event reads, disconnect behavior, and the session-only Bearer credential boundary. Tests use a local static server and a mocked control-plane endpoint; they do not require or claim a hosted production API.
+
+Run the suite locally after installing the pinned browser dependency and Chromium:
+
+~~~bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/browser-qa-requirements.txt
+.venv/bin/python -m playwright install chromium
+.venv/bin/python scripts/browser_qa.py
+~~~
+
+GitHub Actions archives desktop/mobile screenshots for review. Passing browser QA validates the Pages interface and mocked API contract only; production authentication, CORS, and a live deployment still require an operator-owned API environment.
+
 ## Reproducible scheduler benchmarks
 
 The repository includes two complementary performance tools: an in-memory scheduler/DAG benchmark and a PostgreSQL 18 + NATS 2.12 end-to-end load profile covering the durable worker, outbox, JetStream, and inbox path. Both report CSV metrics and run in CI. The end-to-end guide records three five-repeat PostgreSQL/NATS sessions and a matched-fingerprint reference; the CI comparator applies conservative limits only to the normalized EPYC 9V45 fingerprint. The baseline is not a production capacity claim. See the [in-memory benchmark guide](docs/performance/benchmarks.md) and the [end-to-end PostgreSQL/JetStream load guide](docs/performance/end-to-end-load.md).

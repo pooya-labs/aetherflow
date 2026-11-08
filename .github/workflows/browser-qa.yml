@@ -1,0 +1,61 @@
+name: Product site browser QA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "site.js"
+      - "dashboard/**"
+      - "scripts/browser_qa.py"
+      - "scripts/browser-qa-requirements.txt"
+      - ".github/workflows/browser-qa.yml"
+  pull_request:
+    paths:
+      - "index.html"
+      - "site.js"
+      - "dashboard/**"
+      - "scripts/browser_qa.py"
+      - "scripts/browser-qa-requirements.txt"
+      - ".github/workflows/browser-qa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chromium:
+    name: Chromium desktop and mobile acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Create isolated Python environment
+        run: python3 -m venv .venv
+
+      - name: Install pinned Playwright Python package
+        run: |
+          .venv/bin/python -m pip install --disable-pip-version-check -r scripts/browser-qa-requirements.txt
+
+      - name: Install Chromium and operating-system dependencies
+        run: .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Run real-browser acceptance suite
+        env:
+          BROWSER_QA_ARTIFACTS: artifacts/browser-qa
+        run: .venv/bin/python scripts/browser_qa.py
+
+      - name: Upload desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: aetherflow-browser-qa-${{ github.sha }}
+          path: artifacts/browser-qa/
+          if-no-files-found: warn
+          retention-days: 7
