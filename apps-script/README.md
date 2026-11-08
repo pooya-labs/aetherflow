@@ -1,14 +1,16 @@
 # AetherFlow Apps Script runtime
 
+**Project owner:** [Pooya Labs Platform](https://pooya-labs.github.io/pooya-labs-platform/).
+
 This is the zero-cost, low-volume serverless demo profile for AetherFlow. It follows the Apps Script pattern used by ORBIT: GitHub Pages dashboard, an owner-deployed Apps Script Web App wrapper, a google.script.run message bridge, and one private Google Spreadsheet owned by the deployer.
 
 This profile is not the Rust/PostgreSQL/NATS engine. It persists the bounded workflow control-plane demo contract only. It does not run arbitrary task code, WASM plugins, worker leases, NATS JetStream, PostgreSQL outbox/inbox delivery, production tenant identity, or real customer workflows. The displayed sample workflow records are synthetic.
 
-## Current owner deployment — 2026-11-08
+## Current owner deployment — 2026-11-09
 
 [Open the owner-provided Apps Script Web App](https://script.google.com/macros/s/AKfycby-RppnSarisz26pfexeZLjd-LD_FTmE8q6Ea3JtFLkl4iAfuyCCLX61p92nNZLlWyr/exec).
 
-The owner confirmed that the dashboard displays `Read-only · Connected · synthetic demo data` and loads four seeded workflows. The bridge bootstrap and private Spreadsheet read path are therefore working. The sample IDs `demo-index-003` and `demo-retry-004` are expected seed records created by `createWorkspace_()`.
+The owner confirmed that the dashboard displays `Read-only · Connected · synthetic demo data` and loads four seeded workflows. The live Apps Script source currently predates the repository's pending-only correction; publish a new Web App version before describing that correction as live. The bridge bootstrap and private Spreadsheet read path are therefore working. The sample IDs `demo-index-003` and `demo-retry-004` are expected seed records created by `createWorkspace_()`.
 
 The `Read-only` label belongs to the dashboard's selected-run inspection interface and is expected; it is not a connection failure. The owner confirmed that the storage action writes and reads back a workflow through the private Sheet. For this working deployment, do **not** rerun `_setupAetherFlowDemo_` or create another database. The owner completed the live persistence test: `gas-smoke-61f2c9e5308d4978ae69d39ddf6bf5d6` remained visible after a full-page reload, with its single task and `workflow.submitted` event. This confirms the real private Sheet write/read path. The task was stored, not executed. Chromium QA [42521608664](https://github.com/pooya-labs/aetherflow/actions/runs/42521608664) also passed all 12 tests, including the pending-state and persistence fixture.
 
@@ -42,7 +44,11 @@ Google may restrict anonymous Web App deployments for some account types or regi
 
 ## Update deployment
 
-After modifying the files, paste the updated source into the corresponding Apps Script editor files, save, then Deploy → Manage deployments → Edit and create a new version. The /exec URL remains the same. The current repository correction to pending-only Apps Script submissions is in `apps-script/Code.gs`; the existing live deployment does not receive GitHub changes automatically.
+After modifying the files, paste the updated source into the corresponding Apps Script editor files, save, then Deploy → Manage deployments → Edit and create a new version. The /exec URL remains the same. The pending-only correction is in apps-script/Code.gs; GitHub changes do not sync into the owner deployment automatically.
+
+For the already-provisioned deployment, update **only** Code.gs for this correction. Do not run _setupAetherFlowDemo_, create another Spreadsheet, or clear existing rows. After publishing the new version, open the same /exec URL and use **Store persistence test** once. Confirm that the newly-created workflow and its task both remain **pending**, and that the selected event history includes **task.pending** and **workflow.submitted**. Refresh the full page and confirm the stored workflow is still listed. Older smoke records created by the previous source may continue to display their historical running/ready state; do not treat them as new execution or rewrite them as part of this rollout.
+
+The owner-side copy/save/deploy step is still required before the live Web App uses this source correction. Do not report the live deployment as updated until the post-deploy check above succeeds.
 
 ## Limits and safety
 
