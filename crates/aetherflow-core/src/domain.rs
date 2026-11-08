@@ -441,12 +441,7 @@ mod tests {
                 assert_eq!(next.version(), current_version);
             }
 
-            explore_transition_sequences(
-                next,
-                states,
-                allowed_edges,
-                remaining_steps - 1,
-            );
+            explore_transition_sequences(next, states, allowed_edges, remaining_steps - 1);
         }
     }
 
@@ -456,12 +451,7 @@ mod tests {
         depth: usize,
     ) {
         for initial in states.iter().copied() {
-            explore_transition_sequences(
-                Versioned::new(initial),
-                states,
-                allowed_edges,
-                depth,
-            );
+            explore_transition_sequences(Versioned::new(initial), states, allowed_edges, depth);
         }
     }
 
@@ -709,15 +699,7 @@ mod tests {
             WorkflowStatus::Cancelled,
             WorkflowStatus::TimedOut,
         ];
-        let allowed_edges = [
-            (0, 1),
-            (0, 4),
-            (0, 5),
-            (1, 2),
-            (1, 3),
-            (1, 4),
-            (1, 5),
-        ];
+        let allowed_edges = [(0, 1), (0, 4), (0, 5), (1, 2), (1, 3), (1, 4), (1, 5)];
 
         assert_bounded_transition_sequence_invariants(&states, &allowed_edges, 5);
     }
