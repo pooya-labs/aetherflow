@@ -78,6 +78,23 @@ The equivalent direct commands are `node --check policy.mjs`, `node --check work
 
 The Rust API also has tests proving that a public bind without the ingress token is rejected, a direct API request without the edge token receives 403, a valid edge token reaches the normal API middleware, and `/health` remains public.
 
+## Toolchain setup
+
+Use Node.js **22.18 or later**. The project pins the Cloudflare CLI beta as a development dependency so the `cf/config` import resolves from this project rather than relying on a globally installed, unpinned copy.
+
+From this directory:
+
+```sh
+node --version
+npm install
+npm run check
+npm test
+npx cf --version
+npx cf auth login
+```
+
+The `cf` CLI is currently in beta. Review its [current deployment documentation](https://developers.cloudflare.com/cf/projects/) before changing production resources.
+
 ## Build and deploy (only after prerequisites)
 
 The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.18 or later, install the Cloudflare CLI (`npm install --global cf`), and authenticate with `cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
@@ -87,7 +104,7 @@ From this directory:
 ```sh
 npm run check
 npm test
-cf deploy --dry-run --secrets-file .env.production
+npx cf deploy --dry-run --secrets-file .env.production
 ```
 
 The ignored local file `.env.production` may contain only the runtime Worker secret, for example:
@@ -96,7 +113,7 @@ The ignored local file `.env.production` may contain only the runtime Worker sec
 AETHERFLOW_INGRESS_TOKEN=<same high-entropy token configured on the API>
 ```
 
-Do not commit this file. The repository's root `.gitignore` excludes `.env.*` files. Replace the placeholder HTTPS origin in `cloudflare.config.ts` before building, and do not perform a live `cf deploy --secrets-file .env.production` until the API origin, API-side secret, network restriction, and production route prerequisites below are satisfied. The current Cloudflare account has no active Zone or Tunnel and there is no verified API origin, so the live deployment command is intentionally not run.
+Do not commit this file. The repository's root `.gitignore` excludes `.env.*` files. Replace the placeholder HTTPS origin in `cloudflare.config.ts` before building, and do not perform a live `npx cf deploy --secrets-file .env.production` until the API origin, API-side secret, network restriction, and production route prerequisites below are satisfied. The current Cloudflare account has no active Zone or Tunnel and there is no verified API origin, so the live deployment command is intentionally not run.
 
 ## Deployment prerequisites
 
