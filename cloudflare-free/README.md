@@ -9,6 +9,7 @@ The runtime accepts only a small set of built-in task operations (`echo`, `colle
 | Guard | Project default |
 | --- | ---: |
 | Daily workflow launches | 100 |
+| Retained workflows per workspace | 50 (oldest terminal run and related records are pruned before accepting another) |
 | Tasks per workflow | 20 |
 | Tasks per session | governed by the 60 mutation / 250 read cap |
 | Session lifetime | 6 hours |
