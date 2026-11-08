@@ -579,7 +579,12 @@ async function failWorkflow(db, payload, failedTask, error) {
 
 export class AetherFlowExecution extends WorkflowEntrypoint {
   async run(event, step) {
-    const payload = event.payload;
+    // Workflow binding calls pass an object; the REST API passes JSON-encoded params.
+    const payload = typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload;
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.tasks) ||
+        !Array.isArray(payload.execution_order) || !payload.task_run_ids) {
+      throw new Error("The workflow event payload is invalid.");
+    }
     const db = this.env.DB;
     const taskMap = new Map(payload.tasks.map(function (task) { return [task.task_id, task]; }));
     const results = {};
