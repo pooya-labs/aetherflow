@@ -102,6 +102,11 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.goto(self.base_url + "/", wait_until="networkidle")
 
         self.assertIn("AetherFlow", page.title())
+        owner = page.locator(".owner-credit")
+        self.assertEqual(owner.get_attribute("href"), "https://pooya-labs.github.io/pooya-labs-platform/")
+        self.assertIn("Pooya Labs Platform", owner.inner_text())
+        self.assertEqual(owner.locator("img").get_attribute("src"), "assets/brand/pooya-monogram.webp")
+        self.assertGreater(owner.locator("img").evaluate("img => img.naturalWidth"), 0)
         self.assertIn("Engineered for recovery", page.locator(".hero h1").inner_text())
         self.assertEqual(page.locator(".architecture .arch-card").count(), 4)
         self.assertEqual(page.locator(".cap-grid .cap-card").count(), 6)
@@ -159,6 +164,11 @@ class AetherFlowBrowserQA(unittest.TestCase):
         page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
 
         self.assertIn("Control console", page.locator(".welcome h1").inner_text())
+        owner = page.locator(".owner-credit")
+        self.assertEqual(owner.get_attribute("href"), "https://pooya-labs.github.io/pooya-labs-platform/")
+        self.assertIn("Pooya Labs Platform", owner.inner_text())
+        self.assertEqual(owner.locator("img").get_attribute("src"), "../assets/brand/pooya-monogram.webp")
+        self.assertGreater(owner.locator("img").evaluate("img => img.naturalWidth"), 0)
         self.assertIn("Not connected", page.locator("#connectionStatus").inner_text())
         self.assertEqual(page.locator("#apiToken").get_attribute("type"), "password")
         self.assertEqual(page.locator("#statTotal").inner_text(), "—")
@@ -915,6 +925,8 @@ aetherflow_tenant_task_expired_running_leases 0
         page.set_viewport_size({"width": 390, "height": 844})
         page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
         self.mobile_width_is_safe()
+        self.assertTrue(page.locator(".owner-credit").is_visible())
+        self.assertGreater(page.locator(".owner-credit img").evaluate("img => img.naturalWidth"), 0)
 
         page.locator("#themeButton").click()
         self.assertEqual(page.locator("html").get_attribute("data-theme"), "light")
