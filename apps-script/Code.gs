@@ -224,14 +224,14 @@ function createWorkspace_(sheet, browserHash) {
       };
       writeRecord_(sheet, "task_runs", workspaceId, taskRun);
     });
-    appendEvent_(sheet, workspaceId, "workflow_run", sample.workflow_run_id, 1, "workflow.submitted", created);
+    appendEvent_(sheet, workspaceId, sample.workflow_run_id, "workflow_run", sample.workflow_run_id, 1, "workflow.submitted", created);
     sample.tasks.forEach(function (task, taskIndex) {
       if (task.status !== "pending") {
-        appendEvent_(sheet, workspaceId, "task_run", taskIds[task.task_id], taskIndex + 1,
+        appendEvent_(sheet, workspaceId, sample.workflow_run_id, "task_run", taskIds[task.task_id], taskIndex + 1,
           "task." + task.status, created);
       }
     });
-    if (workflow.finished_at) appendEvent_(sheet, workspaceId, "workflow_run", sample.workflow_run_id, workflow.version,
+    if (workflow.finished_at) appendEvent_(sheet, workspaceId, sample.workflow_run_id, "workflow_run", sample.workflow_run_id, workflow.version,
       "workflow." + workflow.status, workflow.finished_at);
   });
 
@@ -250,7 +250,7 @@ function routeApi_(sheet, method, path, body, workspaceId) {
     var limit = boundedInt_(query.limit, 25, 1, 100);
     var page = items.slice(offset, offset + limit);
     var next = offset + limit < items.length ? String(offset + limit) : null;
-    return { items: page.map(workflowListItem_), next_cursor: next };
+    return { items: page.map(function (item) { return workflowListItem_(sheet, workspaceId, item); }), next_cursor: next };
   }
 
   var match = route.match(/^\/api\/v1\/workflow-runs\/([A-Za-z0-9_-]{1,128})\/events$/);
@@ -304,9 +304,9 @@ function routeApi_(sheet, method, path, body, workspaceId) {
       };
       writeRecord_(sheet, "task_runs", workspaceId, row);
     });
-    appendEvent_(sheet, workspaceId, "workflow_run", submission.workflow_run_id, 1, "workflow.submitted", stamp);
+    appendEvent_(sheet, workspaceId, submission.workflow_run_id, "workflow_run", submission.workflow_run_id, 1, "workflow.submitted", stamp);
     submission.tasks.forEach(function (task) {
-      appendEvent_(sheet, workspaceId, "task_run", taskIds[task.task_id], 1,
+      appendEvent_(sheet, workspaceId, submission.workflow_run_id, "task_run", taskIds[task.task_id], 1,
         task.depends_on.length ? "task.pending" : "task.ready", stamp);
     });
     var taskReceipts = submission.tasks.map(function (task) {
@@ -354,8 +354,8 @@ function routeApi_(sheet, method, path, body, workspaceId) {
     run.updated_at = now_();
     if (AetherFlowCore.terminalStates.indexOf(nextStatus) >= 0) run.finished_at = run.updated_at;
     writeRecord_(sheet, "workflow_runs", workspaceId, run);
-    appendEvent_(sheet, workspaceId, "task_run", current.task_run_id, updated.version, "task.cancelled", updated.updated_at);
-    appendEvent_(sheet, workspaceId, "workflow_run", run.workflow_run_id, run.version, "workflow." + run.status, run.updated_at);
+    appendEvent_(sheet, workspaceId, current.workflow_run_id, "task_run", current.task_run_id, updated.version, "task.cancelled", updated.updated_at);
+    appendEvent_(sheet, workspaceId, run.workflow_run_id, "workflow_run", run.workflow_run_id, run.version, "workflow." + run.status, run.updated_at);
     return { task_run: taskSnapshot_(updated), workflow_status: run.status };
   }
 
@@ -366,8 +366,8 @@ function routeApi_(sheet, method, path, body, workspaceId) {
   throw safeError_(404, "route_not_found", "The requested demo API route was not found.");
 }
 
-function workflowListItem_(run) {
-  var tasks = readRecords_(getSheet_(), "task_runs", run.workspace_id || "");
+function workflowListItem_(sheet, workspaceId, run) {
+  var tasks = readRecords_(sheet, "task_runs", workspaceId);
   var count = tasks.filter(function (task) { return task.workflow_run_id === run.workflow_run_id; }).length;
   return {
     workflow_id: run.workflow_id, workflow_run_id: run.workflow_run_id,
@@ -399,14 +399,14 @@ function taskSnapshot_(task) {
   };
 }
 
-function appendEvent_(sheet, workspaceId, aggregateType, aggregateId, version, type, stamp) {
+function appendEvent_(sheet, workspaceId, workflowRunId, aggregateType, aggregateId, version, type, stamp) {
   var sequenceKey = "AETHERFLOW_DEMO_EVENT_SEQ";
   var props = PropertiesService.getScriptProperties();
   var next = Number(props.getProperty(sequenceKey) || 0) + 1;
   props.setProperty(sequenceKey, String(next));
   var event = {
     event_id: next, workspace_id: workspaceId,
-    workflow_run_id: aggregateType === "workflow_run" ? aggregateId : null,
+    workflow_run_id: workflowRunId,
     aggregate_type: aggregateType, aggregate_id: aggregateId,
     aggregate_version: version, event_type: type, status: "recorded",
     created_at: stamp, published_at: null
