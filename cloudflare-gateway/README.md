@@ -40,8 +40,8 @@ The Worker never selects an origin from request headers, query parameters, or ca
 
 - The client identity is taken from Cloudflare's `CF-Connecting-IP` edge header. `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`, and other client-supplied identity headers are removed before proxying.
 - Raw client addresses are keyed with HMAC-SHA-256 before use as Durable Object names, so an observer of DO names cannot cheaply enumerate likely client IPs.
-- Each address maps to its own SQLite-backed Durable Object. This avoids one global hot object while keeping a client's token bucket strongly consistent across Worker replicas and locations.
-- Token-bucket reads and writes are synchronous SQLite operations in one Durable Object turn. A rejected request does not accumulate negative token debt.
+- Each address maps to its own SQLite-backed Durable Object. This avoids one global hot object while keeping a client's token bucket strongly consistent across Worker replicas and locations. A 24-hour idle alarm re-checks the last-seen timestamp and clears all SQL/alarm storage with `deleteAll()` after a client has been inactive; active buckets extend the deadline when the alarm fires. The alarm is installed on first use, not rewritten on every request.
+- Token-bucket reads and writes are synchronous SQLite operations in one Durable Object turn. The alarm handler uses a short `blockConcurrencyWhile` section only while checking expiry and deleting idle state, preventing a new request from racing with cleanup. A rejected request does not accumulate negative token debt.
 - If the origin or ingress secret is missing, if the Durable Object cannot be reached, or if the client address is unavailable, the Worker fails closed.
 - The upstream ingress token is added by the Worker after the untrusted inbound header is removed. The Rust API stores only its SHA-256 digest and uses constant-time comparison.
 - The existing operator and tenant Bearer credentials are preserved unchanged. The ingress token is an additional edge-to-origin control, not a replacement for API authentication.
@@ -97,11 +97,12 @@ The `cf` CLI is currently in beta. Review its [current deployment documentation]
 
 ## Build and deploy (only after prerequisites)
 
-The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.18 or later, install the Cloudflare CLI (`npm install --global cf`), and authenticate with `cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
+The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.18 or later and run `npm install` to install the pinned project-local CLI. Authenticate with `npx cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
 
 From this directory:
 
 ```sh
+npm install
 npm run check
 npm test
 npx cf deploy --dry-run --secrets-file .env.production
@@ -126,6 +127,6 @@ Do not commit this file. The repository's root `.gitignore` excludes `.env.*` fi
 
 ## Usage and free-tier note
 
-A rate-limited API request makes one Worker request, one Durable Object request, one SQLite row read, and one SQLite row write. Cloudflare's current Free plan includes 100,000 Worker requests/day, 100,000 Durable Object requests/day, 100,000 Durable Object SQL row writes/day, and 5 million SQL row reads/day. Because every rate-limited request writes the bucket row, the practical free-tier ceiling is approximately 100,000 such requests per day, before other account usage. Free-tier operations fail once a daily limit is exhausted; this is an availability ceiling, not an automatic paid overage. Review [current Durable Objects pricing and limits](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before production use. For higher usage, evaluate the plan and cost against measured traffic rather than assuming this edge layer is unlimited.
+A rate-limited API request makes one Worker request, one Durable Object request, one SQLite row read, and one SQLite row write. The first request for a client bucket also installs a 24-hour idle alarm; each alarm firing is billed as a Durable Object request, and rescheduling an active bucket writes alarm metadata. Cloudflare's current Free plan includes 100,000 Worker requests/day, 100,000 Durable Object requests/day, 100,000 Durable Object SQL row writes/day, and 5 million SQL row reads/day. Because each API request writes the bucket row, the practical free-tier ceiling is approximately 100,000 such requests per day, before other account usage and alarm activity. Free-tier operations fail once a daily limit is exhausted; this is an availability ceiling, not an automatic paid overage. Review [current Durable Objects pricing and limits](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before production use. For higher usage, evaluate the plan and cost against measured traffic rather than assuming this edge layer is unlimited.
 
 This Gateway is an ingress component only. It does not provision PostgreSQL, NATS server accounts, NATS ACLs, backups, or a production API host.
