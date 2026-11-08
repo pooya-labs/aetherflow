@@ -739,7 +739,7 @@ aetherflow_tenant_task_expired_running_leases 0
         page.route(API_BASE + "/**", mock_api)
         page.goto(self.base_url + "/dashboard/", wait_until="networkidle")
 
-        page.get_by_text("Connected · live data").wait_for()
+        page.get_by_text("Connected · Cloudflare Workflows + D1").wait_for()
         page.locator("#runSample").wait_for(state="visible")
         self.assertFalse(page.locator("#runSample").is_disabled())
 
