@@ -737,6 +737,75 @@ mod tests {
     }
 
     #[test]
+    fn retry_policy_boundary_grid_preserves_attempt_and_backoff_invariants() {
+        let attempt_budgets = [1, 2, 3, 8, 31];
+        let initial_delays = [0, 1, 3, 100, u64::MAX / 4, u64::MAX - 1, u64::MAX];
+        let maximum_delays = [0, 1, 100, u64::MAX / 2, u64::MAX];
+
+        for max_attempts in attempt_budgets {
+            let non_zero_attempts =
+                NonZeroU32::new(max_attempts).expect("test attempt budgets are non-zero");
+            let policy = RetryPolicy::new(non_zero_attempts, 1, 100)
+                .expect("valid retry policy");
+
+            for attempts_started in 0..=max_attempts + 1 {
+                assert_eq!(
+                    policy.permits_retry(attempts_started),
+                    attempts_started < max_attempts,
+                    "retry permission mismatch for budget {max_attempts} after {attempts_started} attempts"
+                );
+            }
+        }
+
+        for initial in initial_delays {
+            for maximum in maximum_delays {
+                let attempts = NonZeroU32::new(3).expect("non-zero attempt budget");
+                if initial > maximum {
+                    assert_eq!(
+                        RetryPolicy::new(attempts, initial, maximum),
+                        Err(RetryPolicyError::InitialBackoffExceedsMaximum),
+                        "inverted delay bounds must be rejected: {initial} > {maximum}"
+                    );
+                    continue;
+                }
+
+                let policy =
+                    RetryPolicy::new(attempts, initial, maximum).expect("valid delay bounds");
+                let mut previous = 0;
+
+                for retry_number in 1..=66 {
+                    let retry =
+                        NonZeroU32::new(retry_number).expect("retry numbers are non-zero");
+                    let delay = policy.backoff_ms(retry);
+
+                    assert!(delay >= initial);
+                    assert!(delay >= previous, "backoff must never decrease");
+                    assert!(delay <= maximum, "backoff must not exceed its cap");
+                    if initial > 0 {
+                        assert_eq!(
+                            delay,
+                            if retry_number == 1 {
+                                initial
+                            } else {
+                                previous.saturating_mul(2).min(maximum)
+                            },
+                            "unexpected capped exponential backoff at retry {retry_number}"
+                        );
+                    } else {
+                        assert_eq!(delay, 0, "zero initial backoff remains zero");
+                    }
+
+                    previous = delay;
+                }
+
+                if initial > 0 {
+                    assert_eq!(previous, maximum, "positive backoff must reach its cap");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn version_overflow_rejects_transition_without_mutation() {
         let mut state = Versioned::new(WorkflowStatus::Pending);
         state.version = u64::MAX;
