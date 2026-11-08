@@ -18,6 +18,7 @@
     selectionRevision: 0,
     taskRevision: 0,
     eventRequestRevision: 0,
+    metricsRevision: 0,
     loadingOlderEvents: false,
     requestController: null
   };
@@ -118,6 +119,132 @@
       throw new Error(message || ("API request failed with HTTP " + response.status + "."));
     }
     return payload;
+  }
+
+  async function apiText(path) {
+    const response = await fetch(state.base + path, {
+      method: "GET",
+      headers: {
+        "Accept": "text/plain",
+        "Authorization": "Bearer " + state.token
+      },
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      signal: state.requestController ? state.requestController.signal : undefined
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      let message = "";
+      try {
+        const payload = raw ? JSON.parse(raw) : null;
+        message = payload && payload.error && payload.error.message;
+      } catch (_) {}
+      throw new Error(message || ("API request failed with HTTP " + response.status + "."));
+    }
+    return raw;
+  }
+
+  function readGauge(exposition, metricName, labels) {
+    let selector = metricName;
+    if (labels && Object.keys(labels).length) {
+      const encoded = Object.entries(labels).map(([key, value]) => key + "=\"" + value + "\"").join(",");
+      selector += "{" + encoded + "}";
+    }
+    const prefix = selector + " ";
+    const line = exposition.split(/\r?\n/).find((item) => item.startsWith(prefix));
+    if (!line) return null;
+    const value = Number(line.slice(prefix.length).trim());
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function formatCount(value) {
+    return value === null ? "—" : new Intl.NumberFormat().format(value);
+  }
+
+  function formatDuration(value) {
+    if (value === null) return "—";
+    if (value < 60) return value.toFixed(1) + " s";
+    if (value < 3600) {
+      const minutes = Math.floor(value / 60);
+      const seconds = Math.round(value % 60);
+      return minutes + "m " + seconds + "s";
+    }
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    return hours + "h " + minutes + "m";
+  }
+
+  function setOperationalValue(id, value) {
+    $(id).textContent = value;
+  }
+
+  function resetOperationalSnapshot(hide) {
+    state.metricsRevision += 1;
+    const panel = $("opsSnapshot");
+    if (hide) panel.classList.add("hidden");
+    else panel.classList.remove("hidden");
+    $("opsSnapshotStatus").textContent = hide ? "Available only with a tenant credential." : "Loading tenant operational data…";
+    for (const id of [
+      "opsSuccess", "opsFailed", "opsCancelled", "opsTimedOut",
+      "opsCompletionSamples", "opsP50", "opsP95", "opsP99",
+      "opsOutboxPending", "opsOutboxReady", "opsOutboxLag", "opsOutboxExpired",
+      "opsInboxPending", "opsInboxProcessing", "opsInboxAge", "opsInboxExpired",
+      "opsTaskExpired"
+    ]) setOperationalValue(id, "—");
+  }
+
+  function renderOperationalSnapshot(exposition) {
+    const value = (name, labels) => readGauge(exposition, name, labels);
+    const count = (name, labels) => formatCount(value(name, labels));
+    const sampleCount = value("aetherflow_tenant_workflow_success_completion_samples_last_30m");
+    const duration = (name) => sampleCount > 0
+      ? formatDuration(value(name))
+      : "No samples";
+
+    setOperationalValue("opsSuccess", count("aetherflow_tenant_workflow_completions_last_30m", { status: "succeeded" }));
+    setOperationalValue("opsFailed", count("aetherflow_tenant_workflow_completions_last_30m", { status: "failed" }));
+    setOperationalValue("opsCancelled", count("aetherflow_tenant_workflow_completions_last_30m", { status: "cancelled" }));
+    setOperationalValue("opsTimedOut", count("aetherflow_tenant_workflow_completions_last_30m", { status: "timed_out" }));
+    setOperationalValue("opsCompletionSamples", formatCount(sampleCount));
+    setOperationalValue("opsP50", duration("aetherflow_tenant_workflow_success_completion_p50_seconds_last_30m"));
+    setOperationalValue("opsP95", duration("aetherflow_tenant_workflow_success_completion_p95_seconds_last_30m"));
+    setOperationalValue("opsP99", duration("aetherflow_tenant_workflow_success_completion_p99_seconds_last_30m"));
+    setOperationalValue("opsOutboxPending", count("aetherflow_tenant_outbox_events", { state: "pending" }));
+    setOperationalValue("opsOutboxReady", count("aetherflow_tenant_outbox_events", { state: "ready" }));
+    setOperationalValue("opsOutboxLag", formatDuration(value("aetherflow_tenant_outbox_oldest_ready_lag_seconds")));
+    setOperationalValue("opsOutboxExpired", count("aetherflow_tenant_outbox_expired_claims"));
+    setOperationalValue("opsInboxPending", count("aetherflow_tenant_inbox_events", { state: "pending" }));
+    setOperationalValue("opsInboxProcessing", count("aetherflow_tenant_inbox_events", { state: "processing" }));
+    setOperationalValue("opsInboxAge", formatDuration(value("aetherflow_tenant_inbox_oldest_unprocessed_age_seconds")));
+    setOperationalValue("opsInboxExpired", count("aetherflow_tenant_inbox_expired_processing_leases"));
+    setOperationalValue("opsTaskExpired", count("aetherflow_tenant_task_expired_running_leases"));
+  }
+
+  async function loadOperationalSnapshot(connectionRevision) {
+    if (!state.token || state.scope !== "tenant") {
+      resetOperationalSnapshot(true);
+      return;
+    }
+    const metricsRevision = ++state.metricsRevision;
+    $("opsSnapshot").classList.remove("hidden");
+    $("opsSnapshotStatus").textContent = "Loading tenant operational data…";
+    try {
+      const exposition = await apiText("/api/v1/tenant/metrics");
+      if (!isCurrentConnection(connectionRevision) || metricsRevision !== state.metricsRevision) return;
+      renderOperationalSnapshot(exposition);
+      $("opsSnapshotStatus").textContent = "Tenant-scoped snapshot · refreshed " + new Date().toLocaleTimeString();
+    } catch (error) {
+      if (!isCurrentConnection(connectionRevision) || metricsRevision !== state.metricsRevision) return;
+      $("opsSnapshotStatus").textContent = "Snapshot unavailable · " + error.message;
+      for (const id of [
+        "opsSuccess", "opsFailed", "opsCancelled", "opsTimedOut",
+        "opsCompletionSamples", "opsP50", "opsP95", "opsP99",
+        "opsOutboxPending", "opsOutboxReady", "opsOutboxLag", "opsOutboxExpired",
+        "opsInboxPending", "opsInboxProcessing", "opsInboxAge", "opsInboxExpired",
+        "opsTaskExpired"
+      ]) setOperationalValue(id, "—");
+    }
   }
 
   function formatDate(value) {
@@ -262,6 +389,7 @@
     if (!state.token) return;
     const connectionRevision = state.connectionRevision;
     if (!append) {
+      resetOperationalSnapshot(state.scope !== "tenant");
       state.selectionRevision += 1;
       state.taskRevision += 1;
       state.eventRequestRevision += 1;
@@ -296,7 +424,13 @@
       $("welcomeText").textContent = "Connected to " + state.base + " · " + (state.scope === "tenant" ? "Tenant view" : "Operator view");
       $("scopePill").textContent = state.scope === "tenant" ? "Tenant" : "Operator";
       setConnection("Connected · live data", "good");
-      if (!append && state.runs.length) await selectRun(state.runs[0].workflow_run_id);
+      if (!append) {
+        const metricsRequest = loadOperationalSnapshot(connectionRevision);
+        const detailRequest = state.runs.length
+          ? selectRun(state.runs[0].workflow_run_id)
+          : Promise.resolve();
+        await Promise.all([metricsRequest, detailRequest]);
+      }
     } catch (error) {
       if (!isCurrentConnection(connectionRevision)) return;
       setConnection(error.message, "bad");
@@ -469,6 +603,7 @@
     state.taskRevision += 1;
     state.eventRequestRevision += 1;
     state.loadingOlderEvents = false;
+    resetOperationalSnapshot(true);
     state.requestController?.abort();
     state.requestController = null;
     state.token = "";
