@@ -36,6 +36,7 @@ bridge = read("dashboard/apps-script-bridge.js")
 require(shared == gas_core, "Apps Script Core.gs must match the shared workflow core byte-for-byte")
 for symbol in (
     "function initializeAetherFlowDemo(",
+    "function _setupAetherFlowDemo_(",
     "function aetherflowBootstrap(",
     "function aetherflowApi(",
     "function routeApi_(",
@@ -46,6 +47,8 @@ webapp = gas_manifest.get("webapp", {})
 require(webapp.get("executeAs") == "USER_DEPLOYING", "Apps Script must run as its owner")
 require(webapp.get("access") == "ANYONE_ANONYMOUS", "Apps Script manifest must declare public demo access")
 require("google.script.run" in gas_html, "Apps Script wrapper must call google.script.run")
+require("function _setupAetherFlowDemo_()" in gas, "owner-only setup must exist")
+require("function setupAetherFlowDemo(" not in gas, "no public setup alias may be exposed")
 require("event.origin !== PAGES_ORIGIN" in gas_html, "Apps Script wrapper must validate the dashboard origin")
 require("event.source !== frame.contentWindow" in gas_html, "Apps Script wrapper must validate iframe source")
 require("payload: payload" not in gas_html, "Apps Script session bootstrap must not relay the full token-bearing payload")
