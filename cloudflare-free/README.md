@@ -9,18 +9,19 @@ The runtime accepts only a small set of built-in task operations (`echo`, `colle
 | Guard | Project default |
 | --- | ---: |
 | Daily workflow launches | 25 |
+| Reserved Workflow steps/day | 2,000 (conservative admission estimate) |
 | Retained workflows per workspace | 50 (oldest terminal run and related records are pruned before accepting another) |
 | Tasks per workflow | 20 (maximum 3 attempts per task) |
+| Daily API read requests | 12,000 |
+| Daily API mutation requests | 2,500 |
 | Tasks per session | governed by the 60 mutation / 250 read cap |
 | Session lifetime | 6 hours |
 | Request body | 16 KiB |
 | Task input | 8 KiB |
-| Daily D1 reads (internal) | 12,000 |
-| Daily D1 mutations (internal) | 2,500 |
 | Browser workspaces | 500 |
 | New browser sessions/day | 60 |
 
-Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 million rows read/day, 100,000 rows written/day and 5 GB total storage. Cloudflare Workflows Free includes 3,000 steps/day and 1 GB-month storage. AetherFlow sets lower internal budgets; monitor account usage before increasing them. See the official [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
+The API read/mutation ceilings count incoming requests, not D1 rows. Before admitting a workflow, the Worker reserves a conservative step estimate: up to six attempts for each orchestration step plus the configured maximum attempts for every task. At the largest accepted definition this is 72 reserved steps per workflow, so 25 maximum-size submissions reserve at most 1,800 steps/day. The internal 2,000-step ceiling stays below Cloudflare Workflows Free's 3,000 steps/day. Cloudflare D1 Free separately allows 5 million rows read/day and 100,000 rows written/day; those provider-wide quotas are shared with other account workloads, so review account usage before raising project caps. Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 million rows read/day, 100,000 rows written/day and 5 GB total storage. Cloudflare Workflows Free includes 3,000 steps/day and 1 GB-month storage. AetherFlow sets lower internal budgets; monitor account usage before increasing them. See the official [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
 
 ## Task input contract
 

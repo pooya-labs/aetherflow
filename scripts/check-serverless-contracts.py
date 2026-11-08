@@ -78,6 +78,12 @@ require(
     "daily durable Workflow launches must stay within the project free-tier budget",
 )
 require(
+    "maxDailyWorkflowSteps: 2000" in cloudflare
+    and 'consumeDailyUnits(db, "workflow_steps"' in cloudflare
+    and "12 + submission.tasks.length * submission.retry_policy.max_attempts" in cloudflare,
+    "workflow submissions must reserve a bounded daily step budget",
+)
+require(
     "retry.max_attempts > 3" in shared,
     "shared workflow validation must cap task attempts at three",
 )

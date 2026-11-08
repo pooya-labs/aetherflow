@@ -8,6 +8,7 @@ const DEFAULTS = Object.freeze({
   maxDailyMutations: 2500,
   maxDailyBootstraps: 60,
   maxDailyWorkflowRuns: 25,
+  maxDailyWorkflowSteps: 2000,
   maxSessionReads: 250,
   maxSessionMutations: 60,
   maxBodyBytes: 16384,
@@ -130,6 +131,16 @@ async function consumeDaily(db, kind, cap) {
     "ON CONFLICT(usage_day, kind) DO UPDATE SET count = count + 1 " +
     "WHERE count < ? RETURNING count"
   ).bind(dailyKey(), kind, cap).first();
+  return Boolean(result);
+}
+
+async function consumeDailyUnits(db, kind, units, cap) {
+  if (!Number.isSafeInteger(units) || units < 1 || units > cap) return false;
+  const result = await db.prepare(
+    "INSERT INTO demo_daily_usage (usage_day, kind, count) VALUES (?, ?, ?) " +
+    "ON CONFLICT(usage_day, kind) DO UPDATE SET count = count + ? " +
+    "WHERE count + ? <= ? RETURNING count"
+  ).bind(dailyKey(), kind, units, units, units, cap).first();
   return Boolean(result);
 }
 
@@ -396,6 +407,14 @@ async function submitWorkflow(db, env, workspaceId, body, limits) {
     "SELECT workflow_run_id FROM demo_workflows WHERE workspace_id = ? AND workflow_run_id = ?"
   ).bind(workspaceId, submission.workflow_run_id).first();
   if (existing) throw new HttpError(409, "workflow_conflict", "That workflow-run identifier already exists in this workspace.");
+
+  // Reserve the worst-case attempt count before admission. Workflow start and
+  // completion each use the platform default of up to six attempts; task steps
+  // reserve their explicit retry-policy ceiling.
+  const stepReservation = 12 + submission.tasks.length * submission.retry_policy.max_attempts;
+  if (!await consumeDailyUnits(db, "workflow_steps", stepReservation, limits.maxDailyWorkflowSteps)) {
+    throw new HttpError(429, "workflow_step_budget_exhausted", "The daily Workflow step budget has been reserved. Try again after the UTC daily reset.");
+  }
 
   const retained = await db.prepare(
     "SELECT workflow_run_id FROM demo_workflows WHERE workspace_id = ? ORDER BY created_at ASC, workflow_run_id ASC"

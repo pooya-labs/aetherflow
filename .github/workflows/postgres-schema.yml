@@ -500,7 +500,7 @@ jobs:
           AETHERFLOW_NATS_CA_FILE: ${{ runner.temp }}/aetherflow-nats-tls/ca.crt
           AETHERFLOW_SECURE_NATS_URL: tls://127.0.0.1:4225
           AETHERFLOW_SECURE_NATS_WRONG_HOST_URL: tls://aetherflow-wrong-host.test:4225
-        run: cargo +1.99.1 test -p aetherflow-transport-nats --test secure_connection --locked -- --test-threads=1
+        run: cargo +1.99.1 test -p aetherflow-transport-nats --test secure_connection --locked -- --ignored --test-threads=1
 
       - name: Stop the disposable TLS-enabled NATS server
         if: always()

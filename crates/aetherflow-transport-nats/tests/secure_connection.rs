@@ -20,6 +20,7 @@ fn secure_server_address() -> Result<ServerAddr, Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+#[ignore = "requires the disposable TLS-enabled NATS fixture from postgres-schema CI"]
 async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = NatsConnectionConfig::from_env()?;
