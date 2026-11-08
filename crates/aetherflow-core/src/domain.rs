@@ -371,6 +371,100 @@ mod tests {
     };
     use std::num::NonZeroU32;
 
+    /// Exhaustively explores every target-state sequence up to the supplied depth.
+    ///
+    /// The edge list is an independent reference model: it checks accepted and
+    /// rejected transitions without relying on Lifecycle::allows for the oracle.
+    fn explore_transition_sequences<S: Lifecycle + std::fmt::Debug>(
+        state: Versioned<S>,
+        states: &[S],
+        allowed_edges: &[(usize, usize)],
+        remaining_steps: usize,
+    ) {
+        if remaining_steps == 0 {
+            return;
+        }
+
+        let current = state.status();
+        let from_index = states
+            .iter()
+            .position(|candidate| *candidate == current)
+            .expect("every lifecycle state belongs to the reference model");
+        let current_version = state.version();
+        let was_terminal = state.is_terminal();
+
+        for (to_index, target) in states.iter().copied().enumerate() {
+            let expected_allowed = allowed_edges.contains(&(from_index, to_index));
+            let mut next = state;
+            let result = next.transition(target);
+
+            match result {
+                Ok(transition) => {
+                    assert!(
+                        expected_allowed,
+                        "unexpected accepted transition: {} -> {}",
+                        current.name(),
+                        target.name()
+                    );
+                    assert!(
+                        !was_terminal,
+                        "terminal state {} must not transition",
+                        current.name()
+                    );
+                    assert_eq!(transition.from, current);
+                    assert_eq!(transition.to, target);
+                    assert_eq!(transition.version, current_version + 1);
+                    assert_eq!(next.status(), target);
+                    assert_eq!(next.version(), current_version + 1);
+                }
+                Err(error) => {
+                    assert!(
+                        !expected_allowed,
+                        "reference model expected {} -> {} to be accepted",
+                        current.name(),
+                        target.name()
+                    );
+                    assert_eq!(
+                        error,
+                        TransitionError::InvalidTransition {
+                            from: current.name(),
+                            to: target.name(),
+                        }
+                    );
+                    assert_eq!(next.status(), current);
+                    assert_eq!(next.version(), current_version);
+                }
+            }
+
+            if was_terminal {
+                assert_eq!(next.status(), current);
+                assert_eq!(next.version(), current_version);
+            }
+
+            explore_transition_sequences(
+                next,
+                states,
+                allowed_edges,
+                remaining_steps - 1,
+            );
+        }
+    }
+
+    fn assert_bounded_transition_sequence_invariants<S: Lifecycle + std::fmt::Debug>(
+        states: &[S],
+        allowed_edges: &[(usize, usize)],
+        depth: usize,
+    ) {
+        for initial in states.iter().copied() {
+            explore_transition_sequences(
+                Versioned::new(initial),
+                states,
+                allowed_edges,
+                depth,
+            );
+        }
+    }
+
     #[test]
     fn domain_identifiers_are_type_distinct_and_share_validation() {
         let workflow = WorkflowId::parse("workflow_01").expect("valid workflow ID");
@@ -603,6 +697,61 @@ mod tests {
                 assert_eq!(state.version(), 1);
             }
         }
+    }
+
+    #[test]
+    fn workflow_bounded_transition_sequences_preserve_state_and_version_invariants() {
+        let states = [
+            WorkflowStatus::Pending,
+            WorkflowStatus::Running,
+            WorkflowStatus::Succeeded,
+            WorkflowStatus::Failed,
+            WorkflowStatus::Cancelled,
+            WorkflowStatus::TimedOut,
+        ];
+        let allowed_edges = [
+            (0, 1),
+            (0, 4),
+            (0, 5),
+            (1, 2),
+            (1, 3),
+            (1, 4),
+            (1, 5),
+        ];
+
+        assert_bounded_transition_sequence_invariants(&states, &allowed_edges, 5);
+    }
+
+    #[test]
+    fn task_bounded_transition_sequences_preserve_retry_and_terminal_invariants() {
+        let states = [
+            TaskStatus::Pending,
+            TaskStatus::Ready,
+            TaskStatus::Running,
+            TaskStatus::RetryWaiting,
+            TaskStatus::Succeeded,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+            TaskStatus::TimedOut,
+        ];
+        let allowed_edges = [
+            (0, 1),
+            (0, 6),
+            (0, 7),
+            (1, 2),
+            (1, 6),
+            (1, 7),
+            (2, 3),
+            (2, 4),
+            (2, 5),
+            (2, 6),
+            (2, 7),
+            (3, 1),
+            (3, 6),
+            (3, 7),
+        ];
+
+        assert_bounded_transition_sequence_invariants(&states, &allowed_edges, 5);
     }
 
     #[test]
