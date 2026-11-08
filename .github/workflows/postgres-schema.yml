@@ -471,7 +471,7 @@ jobs:
           # belongs only to this short-lived, disposable CI fixture.
           chmod 0644 "$server_certificate_dir/server.key" "$server_certificate_dir/server.crt"
 
-          printf '%s\\n' '127.0.0.1 aetherflow-wrong-host.test' \
+          printf '%s\n' '127.0.0.1 aetherflow-wrong-host.test' \
             | sudo tee -a /etc/hosts >/dev/null
 
           docker run --detach --name aetherflow-nats-tls-client-test \
