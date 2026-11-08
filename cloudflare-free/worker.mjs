@@ -728,6 +728,70 @@ async function routeApi(db, env, request, workspaceId, limits) {
     return workflowSnapshot(db, workspaceId, workflowMatch[1]);
   }
 
+  const cancelMatch = path.match(/^\/api\/v1\/task-runs\/([A-Za-z0-9_-]{1,128})\/cancel$/);
+  if (request.method === "POST" && cancelMatch) {
+    const body = await readJson(request, limits.maxBodyBytes);
+    const expected = Number(body && body.expected_version);
+    if (!Number.isSafeInteger(expected) || expected < 0) {
+      throw new HttpError(400, "invalid_request", "expected_version is required.");
+    }
+    const current = await db.prepare(
+      "SELECT task_run_id, workflow_run_id, status, version FROM demo_tasks WHERE workspace_id = ? AND task_run_id = ?"
+    ).bind(workspaceId, cancelMatch[1]).first();
+    if (!current) throw new HttpError(404, "not_found", "The task run was not found.");
+    if (Number(current.version) !== expected) {
+      throw new HttpError(409, "version_conflict", "The task run changed. Refresh and retry.");
+    }
+    if (TERMINAL.has(current.status)) {
+      throw new HttpError(409, "invalid_transition", "This task run is already terminal.");
+    }
+
+    const workflow = await db.prepare(
+      "SELECT workflow_id, workflow_instance_id, status, version FROM demo_workflows WHERE workspace_id = ? AND workflow_run_id = ?"
+    ).bind(workspaceId, current.workflow_run_id).first();
+    if (!workflow) throw new HttpError(404, "not_found", "The workflow run was not found.");
+
+    const pendingTasks = await db.prepare(
+      "SELECT task_run_id, version FROM demo_tasks WHERE workspace_id = ? AND workflow_run_id = ? AND status NOT IN ('succeeded','failed','cancelled','timed_out')"
+    ).bind(workspaceId, current.workflow_run_id).all();
+    const stamp = nowIso();
+    const statements = [];
+    const taskVersions = [];
+    for (const task of pendingTasks.results) {
+      const update = db.prepare(
+        "UPDATE demo_tasks SET status = 'cancelled', version = version + 1, updated_at = ?, finished_at = ?, claimed_by = NULL, lease_expires_at = NULL " +
+        "WHERE workspace_id = ? AND workflow_run_id = ? AND task_run_id = ? AND version = ? AND status NOT IN ('succeeded','failed','cancelled','timed_out') RETURNING version"
+      ).bind(stamp, stamp, workspaceId, current.workflow_run_id, task.task_run_id, task.version);
+      const result = await update.first();
+      if (result) {
+        taskVersions.push({ task_run_id: task.task_run_id, version: result.version });
+        statements.push(await insertEvent(db, workspaceId, current.workflow_run_id, "task_run",
+          task.task_run_id, result.version, "task.cancelled", stamp));
+      }
+    }
+    const workflowUpdate = await db.prepare(
+      "UPDATE demo_workflows SET status = 'cancelled', version = version + 1, updated_at = ?, finished_at = ? " +
+      "WHERE workspace_id = ? AND workflow_run_id = ? AND version = ? AND status IN ('pending','running') RETURNING version"
+    ).bind(stamp, stamp, workspaceId, current.workflow_run_id, workflow.version).first();
+    if (!workflowUpdate) throw new HttpError(409, "version_conflict", "The workflow run changed while cancellation was being applied.");
+    statements.push(await insertEvent(db, workspaceId, current.workflow_run_id, "workflow_run",
+      current.workflow_run_id, workflowUpdate.version, "workflow.cancelled", stamp));
+    if (statements.length) await db.batch(statements);
+
+    if (workflow.workflow_instance_id && env.AETHERFLOW_EXECUTIONS) {
+      try {
+        const instance = await env.AETHERFLOW_EXECUTIONS.get(workflow.workflow_instance_id);
+        await instance.terminate();
+      } catch (ignored) {
+        // The durable engine may already have settled between the D1 transition and termination.
+      }
+    }
+    return {
+      task_run: await taskSnapshot(db, workspaceId, current.task_run_id),
+      workflow_status: "cancelled"
+    };
+  }
+
   const taskMatch = path.match(/^\/api\/v1\/task-runs\/([A-Za-z0-9_-]{1,128})$/);
   if (request.method === "GET" && taskMatch) {
     return taskSnapshot(db, workspaceId, taskMatch[1]);
