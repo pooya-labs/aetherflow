@@ -117,7 +117,7 @@ test("clock rollback cannot create a second refill interval", () => {
   assert.equal(afterClockRecovers.updated_at_ms, 11_000);
 });
 
-test("client address is hashed before it becomes a Durable Object name", async () => {
+test("client address is HMAC-keyed before it becomes a Durable Object name", async () => {
   const secret = "server-side-high-entropy-ingress-token";
   const name = await clientBucketName("203.0.113.10", secret);
   const otherName = await clientBucketName("203.0.113.11", secret);
