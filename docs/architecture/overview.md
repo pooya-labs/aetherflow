@@ -34,6 +34,33 @@ The repository now includes the Rust core/runtime, durable PostgreSQL and NATS a
 
 The workflow persistence/worker/event path is implemented and covered by PostgreSQL/NATS integration tests. The HTTP control plane exposes platform/operator and tenant-authenticated routes with tenant-scoped persistence. Plain HTTP is loopback-only; non-loopback binds require a valid Rustls certificate/key pair. Live PostgreSQL TLS trust/hostname integration passed the PostgreSQL/NATS hosted CI run [41609705469](https://github.com/pooya-labs/aetherflow/actions/runs/41609705469); production deployment hardening remains incomplete.
 
+## Free serverless deployment profiles (separate from the Rust engine)
+
+The project now has a second, intentionally smaller deployment track for environments that cannot reach or operate a separately hosted API Origin. Do not route either free profile through the Axum API, a VPS, a tunnel, PostgreSQL, or NATS.
+
+### Cloudflare Free execution runtime
+
+`cloudflare-free/` is the direct serverless runtime:
+
+- Cloudflare Worker: `aetherflow-free-runtime`, served on the account-owned `workers.dev` hostname.
+- D1: `aetherflow-free`, with workspace-scoped workflow, task, session, and event records.
+- Cloudflare Workflows: `aetherflow-execution`, which runs accepted workflow tasks as durable steps with platform-managed retries.
+- Dashboard: `dashboard/runtime-config.js` selects the Worker endpoint; a public Pages visit obtains a short-lived capability through `POST /api/v1/demo/bootstrap`, then uses the same versioned read/submit routes from the dashboard.
+
+This runtime supports a constrained set of built-in task operations only: `echo`, `collect`, `uppercase`, `sha256`, `add`, and `fail_once`. It validates a bounded DAG before admission, records versioned task/workflow transitions, stores redacted event metadata, and keeps task payload/output values out of dashboard inspection responses. It does not load arbitrary user code, WASM modules, or the Rust plugin ABI. The built-in handler is a deliberate free-tier execution adapter, not feature parity with the Rust runtime.
+
+Current project ceilings are 100 workflow launches/day, 20 tasks/workflow, 12,000 D1 reads/day, 2,500 D1 mutations/day, 60 new sessions/day, 250 reads/session, 60 mutations/session, 16 KiB request bodies, and 8 KiB task inputs. These are project-level safeguards below Cloudflare's published free allowances; they are not guarantees against account-wide usage from other Workers or projects. Check the current provider limits before raising them.
+
+### Google Apps Script profile
+
+`apps-script/` follows the ORBIT portfolio-demo pattern: an owner-deployed V8 Web App wrapper, a `google.script.run` bridge to the Pages dashboard, a private owner-owned Google Spreadsheet, pseudonymous browser workspaces, six-hour session capabilities, and per-session/per-day limits. The GAS adapter exposes bounded workflow submission and inspection, task cancellation and redacted history, but it does not execute the Cloudflare built-in tasks or arbitrary code. It is intended as a low-volume demo/control-plane profile.
+
+The Apps Script source and deployment manifest are ready in the repository; the owner must still create/authorize/deploy the Google Web App from their own Google account. Anonymous Web App availability depends on Google's account/region policies. Do not enable billing or add a server Origin to bypass a Google restriction.
+
+### Architecture boundary
+
+The Rust/PostgreSQL/NATS/WASM engine remains the full distributed runtime and is still experimental pending M08 production acceptance. The Cloudflare profile is the deployed serverless execution target; the Apps Script profile is a small demo/control-plane alternative. Neither changes the Rust API's contracts or claims to provide the same guarantees, queue semantics, plugin isolation, tenant identity, RPO/RTO, or production SLOs.
+
 ## Initial crate boundaries
 Candidate crates: `aetherflow-domain`, `aetherflow-application`, `aetherflow-runtime`, `aetherflow-storage-postgres`, `aetherflow-api`, `aetherflow-wasm`, and `aetherflow-cli`. Create crates only when boundaries are useful and testable; avoid empty scaffolding.
 
