@@ -75,8 +75,8 @@ paths:
         status counts, oldest active workflow age, outbox backlog/ready lag,
         expired outbox claims, inbox pending/processing counts and age, and
         expired inbox/task leases. It also includes terminal workflow outcome
-        counts and successful execution p50/p95/p99 for a rolling 30-minute
-        window, measured from persisted started_at to finished_at. It does not
+        counts and successful completion-latency p50/p95/p99 for a rolling 30-minute
+        window, measured from workflow acceptance (started_at) to terminal state (finished_at). It does not
         export tenant, workflow, task, event, credential, or payload values as
         labels or metric samples. This is a tenant-scoped snapshot, not a
         platform-wide aggregate, eligible-workflow success ratio, or approved
