@@ -37,6 +37,17 @@ cargo run -p aetherflow-server
 
 The server remains on `127.0.0.1:8080`. Compose secrets and sample passwords are for local development only; do not use them outside a disposable workstation. For a clean stop while preserving data, run `docker compose down`. To erase the local database and NATS streams and re-run first-boot role provisioning, use `docker compose down --volumes`; that command is destructive.
 
+## NATS client security configuration
+
+The transport crate exports `NatsConnectionConfig` for building JetStream clients consistently across workers, publishers, consumers and operational tools. It reads these settings from the process environment:
+
+- `AETHERFLOW_NATS_CREDENTIALS_FILE`: path to a secret-mounted NATS `.creds` file (user JWT and private NKey seed).
+- `AETHERFLOW_NATS_TLS_REQUIRED`: optional `true`/`false`; TLS is inferred as required whenever credentials, a custom CA, or an mTLS identity is configured.
+- `AETHERFLOW_NATS_CA_FILE`: optional PEM CA bundle for a private server certificate authority.
+- `AETHERFLOW_NATS_CLIENT_CERT_FILE` and `AETHERFLOW_NATS_CLIENT_KEY_FILE`: optional mTLS identity; the pair must be supplied together.
+
+The default is plaintext to keep the loopback-only Compose cluster usable. That default is not suitable for an externally reachable deployment. Credentials or TLS files combined with an explicit plaintext setting fail validation. The `.creds` file is read when a connection is created; rotate it through a controlled new-client rollout rather than expecting automatic file watching. The helper secures client-side transport only—server-side NATS accounts, subject ACLs, stream retention, and cluster TLS policy still need deployment configuration.
+
 ## Standard Rust checks
 
 Run from the repository root:
@@ -162,7 +173,7 @@ The HTTP process does not launch a worker. Run durable workers separately throug
 - crates/aetherflow-core: infrastructure-independent identities, states, and retry primitives.
 - crates/aetherflow-runtime: scheduler, workflow DAG validation, handlers, and worker execution contracts.
 - crates/aetherflow-storage-postgres: migrations, durable task/workflow repositories, membership, outbox, and inbox.
-- crates/aetherflow-transport-nats: JetStream publisher and inbox-backed pull consumer.
+- crates/aetherflow-transport-nats: JetStream publisher, inbox-backed pull consumer, and validated NATS client credentials/TLS configuration.
 - crates/aetherflow-wasm: WIT ABI and bounded Wasmtime execution.
 - crates/aetherflow-sdk: typed async HTTP client for anonymous health, operator, and tenant control-plane scopes.
 - examples/minimal-plugin: reproducible guest/host example using the scheduler-backed WASM handler.
