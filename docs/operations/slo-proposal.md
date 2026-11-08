@@ -4,7 +4,9 @@
 
 ## Why targets are not active yet
 
-The current request telemetry provides aggregate request counters, a 5xx counter, an in-flight gauge with drop-safe accounting and an abandoned-handler-future counter, plus bounded operation-class request/5xx counters, 2xx/3xx/4xx/5xx/other response-class counters, and latency histograms. The operation label is selected from a fixed enum (health, metrics, operator/tenant read, submit, mutation, or other); raw paths and tenant, workflow, and task identifiers are deliberately excluded. It does not yet provide a durable-workflow success SLI, workflow completion latency distribution, oldest-outbox age, inbox processing lag, or end-to-end availability across PostgreSQL and JetStream. The CI performance baseline is a synthetic one-worker profile, not production traffic.
+The API now exposes two complementary Prometheus surfaces. The operator-only `GET /api/v1/metrics` reports process-local HTTP counters, bounded operation/status classes, concurrency, and latency histograms. The tenant-only `GET /api/v1/tenant/metrics` returns a read-only repeatable-read snapshot of workflow status counts, oldest active workflow age, outbox pending/ready counts and oldest ready lag, expired outbox claims, inbox pending/processing counts and oldest unprocessed age, and expired inbox/task leases. The tenant endpoint derives scope from the validated credential and relies on the existing FORCE-RLS boundary; it exports fixed status/state labels only and no tenant, workflow, task, event, credential, or payload identifiers.
+
+These are point-in-time gauges, not a complete workflow SLO. There is still no durable workflow-success denominator, completion-latency distribution, platform-vs-handler failure attribution, cumulative publish/consume error series, or cross-replica/platform-wide aggregation. The endpoint must be scraped with tenant-scoped credentials and an access-controlled collector; tenant metric samples should not be mixed into an unrestricted central view. The CI performance baseline is a synthetic one-worker profile, not production traffic.
 
 The proposal below defines the measurements and candidate objectives to review. Do not enforce alert thresholds or advertise an SLA until the missing instrumentation, deployment topology, exclusions, and owner-approved targets exist.
 
@@ -14,8 +16,8 @@ The proposal below defines the measurements and candidate objectives to review. 
 |---|---|---|
 | API availability | Successful eligible API responses divided by eligible API requests; report 5xx and server-side timeouts separately | Aggregate and fixed operation-class request/response counters and 5xx counters exist; eligible traffic and timeout attribution need a documented collector |
 | API latency | p50/p95/p99 for read and submit classes, excluding client-side validation errors | Bounded histograms exist per fixed operation class; query the read/submit classes separately, but confirm bucket precision and collector quantile rules before adopting targets |
-| Workflow completion | Workflows reaching a successful terminal state before their configured deadline divided by eligible accepted workflows | Requires a durable outcome metric or an external PostgreSQL-derived exporter |
-| Queue/transport health | Oldest unpublished outbox age, oldest unprocessed inbox age, and publish/consume error rate | Durable rows are queryable; production-safe metrics and alert rules are not yet implemented |
+| Workflow completion | Workflows reaching a successful terminal state before their configured deadline divided by eligible accepted workflows | Still requires a durable outcome denominator, completion-latency distribution, and platform-vs-handler attribution |
+| Queue/transport health | Oldest ready outbox lag, unpublished/ready count, expired claims, inbox pending/processing count and age, expired inbox/task leases | Tenant-scoped snapshot gauges now exist; cumulative publish/consume errors, cross-replica aggregation, retention, and production alert rules remain open |
 | Recovery | Successful restore drills and measured time from recovery start to service acceptance | Isolated CI logical restore rehearsal exists; production RPO/RTO and WAL/PITR procedure are not established |
 
 ## Candidate objectives for discussion
@@ -41,7 +43,7 @@ Workflow completion and API availability must have separate budgets. A user-prov
 
 1. Define the eligible-request denominator and collector rules for each bounded operation class; response classes and abandoned-handler-future counts are available, but server timeouts, client disconnects, and deployment restarts are not separately attributable. Decide whether 4xx/429 responses count as unavailable for each SLI. Do not add raw path, tenant, workflow, or task labels.
 2. Add durable workflow terminal outcome and completion-latency observations, with explicit labels for platform error, handler error, cancellation, and deadline expiry.
-3. Add oldest pending outbox age, oldest unprocessed inbox age, retry/lease-expiry counters, and JetStream reconnect/error signals.
+3. Extend the tenant snapshot with cumulative publish/consume/retry outcomes where a stable ownership boundary exists; add JetStream reconnect/error signals and decide whether an access-controlled central collector is required. The current snapshot already exposes per-tenant outbox/inbox counts, age gauges, and expired lease counts.
 4. Define black-box probes from the same network boundary as users; `GET /health` is process liveness only and must not be treated as API/database readiness.
 5. Add alert ownership, paging hours, maintenance exclusions, and a runbook link to every production alert.
 
@@ -49,7 +51,7 @@ Workflow completion and API availability must have separate budgets. A user-prov
 
 ## Operational snapshots for review (not an SLO)
 
-The following read-only snapshots help an operator validate the current database state while designing a collector/exporter. They deliberately aggregate across rows and do not expose tenant, workflow, task or event identifiers. Execute them only through an approved reporting connection with the intended row-visibility policy. Do not grant BYPASSRLS to the application runtime role or weaken tenant policies for monitoring.
+The following read-only SQL snapshots remain useful for an approved diagnostic/reporting connection. The tenant API endpoint is the preferred application-level view for one authenticated tenant; these direct SQL examples are not a substitute for that endpoint and must be executed with an explicitly reviewed row-visibility policy. They aggregate without exposing tenant, workflow, task or event identifiers. Do not grant BYPASSRLS to the application runtime role or weaken tenant policies for monitoring.
 
 ~~~sql
 BEGIN READ ONLY;
