@@ -290,6 +290,7 @@ test("Durable Object uses SQLite storage and expires idle rate-limit buckets", a
     row: null,
     alarmAt: null,
     deleteAllCalls: 0,
+    blockConcurrencyWhile: async (callback) => callback(),
     storage: {
       sql: {
         exec(sql, ...params) {
