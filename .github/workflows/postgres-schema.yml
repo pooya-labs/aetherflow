@@ -656,19 +656,17 @@ jobs:
           ROLLBACK;
           SQL
 
-      - name: Install pinned NATS CLI v0.4.0 for the NATS 2.12 restore drill
+      - name: Install pinned NATS CLI v0.4.0 from the Go module proxy
         shell: bash
         run: |
           set -euo pipefail
-          package="$RUNNER_TEMP/nats-0.4.0-amd64.deb"
-          curl --fail --location --retry 3 \
-            --output "$package" \
-            https://github.com/nats-io/natscli/releases/download/v0.4.0/nats-0.4.0-amd64.deb
-          printf '%s  %s\n' \
-            'fdc0897c08b41f1587838fbcbe3bb84cc7da5dce0aa9afe34fd8da7a8197b202' \
-            "$package" | sha256sum --check -
-          sudo apt-get install --yes "$package"
-          nats --version | grep --fixed-strings --quiet '0.4.0'
+          go version
+          install_dir="$RUNNER_TEMP/nats-bin"
+          mkdir --parents "$install_dir"
+          GOBIN="$install_dir" GOPROXY="https://proxy.golang.org,direct" \
+            go install github.com/nats-io/natscli/nats@v0.4.0
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/nats" --version | grep --fixed-strings --quiet '0.4.0'
 
       - name: Build restored server and execution verifier
         run: |
