@@ -7,7 +7,7 @@ const DEFAULTS = Object.freeze({
   maxDailyReads: 12000,
   maxDailyMutations: 2500,
   maxDailyBootstraps: 60,
-  maxDailyWorkflowRuns: 100,
+  maxDailyWorkflowRuns: 25,
   maxSessionReads: 250,
   maxSessionMutations: 60,
   maxBodyBytes: 16384,
