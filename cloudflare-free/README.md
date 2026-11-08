@@ -23,19 +23,6 @@ The runtime accepts only a small set of built-in task operations (`echo`, `colle
 
 The API read/mutation ceilings count incoming requests, not D1 rows. Before admitting a workflow, the Worker reserves a conservative step estimate: up to six attempts for each orchestration step plus the configured maximum attempts for every task. At the largest accepted definition this is 72 reserved steps per workflow, so 25 maximum-size submissions reserve at most 1,800 steps/day. The internal 2,000-step ceiling stays below Cloudflare Workflows Free's 3,000 steps/day. Cloudflare D1 Free separately allows 5 million rows read/day and 100,000 rows written/day; those provider-wide quotas are shared with other account workloads, so review account usage before raising project caps. Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 million rows read/day, 100,000 rows written/day and 5 GB total storage. Cloudflare Workflows Free includes 3,000 steps/day and 1 GB-month storage. AetherFlow sets lower internal budgets; monitor account usage before increasing them. See the official [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
 
-## Task input contract
-
-`input_base64` must contain standard base64-encoded UTF-8 JSON. Supported task payloads include:
-
-- `{\"type\":\"echo\",\"value\":\"hello\"}`
-- `{\"type\":\"uppercase\",\"input\":\"hello\"}`
-- `{\"type\":\"sha256\",\"input\":\"hello\"}`
-- `{\"type\":\"add\",\"values\":[2,3,5]}`
-- `{\"type\":\"collect\"}` to collect results from dependency tasks
-- `{\"type\":\"fail_once\"}` to verify the configured Workflow retry policy
-
-Task payloads and outputs are not returned by the dashboard API; only size metadata and redacted event history are exposed.
-
 ## Current Cloudflare deployment
 
 The account-owned runtime is configured at:
