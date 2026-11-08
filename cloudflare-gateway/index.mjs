@@ -12,6 +12,10 @@ export class ClientRateLimiter extends DurableObject {
   async fetch(request) {
     return this.logic.fetch(request);
   }
+
+  async alarm() {
+    return this.logic.alarm();
+  }
 }
 
 export default gateway;
