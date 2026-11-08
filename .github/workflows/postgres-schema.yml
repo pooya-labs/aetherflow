@@ -432,6 +432,75 @@ jobs:
           createdb --host 127.0.0.1 --username aetherflow aetherflow_nats_test
           cargo +1.99.1 test -p aetherflow-transport-nats --test jetstream_outbox --locked -- --test-threads=1
 
+      - name: Start a disposable TLS-enabled NATS server
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate_dir="$RUNNER_TEMP/aetherflow-nats-tls"
+          mkdir -p "$certificate_dir"
+
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
+            -subj "/CN=AetherFlow CI Test CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -keyout "$certificate_dir/ca.key" \
+            -out "$certificate_dir/ca.crt"
+
+          openssl req -newkey rsa:2048 -nodes \
+            -subj "/CN=127.0.0.1" \
+            -keyout "$certificate_dir/server.key" \
+            -out "$certificate_dir/server.csr"
+
+          cat > "$certificate_dir/server.ext" <<'EOF'
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=IP:127.0.0.1
+          EOF
+
+          openssl x509 -req -sha256 -days 2 \
+            -in "$certificate_dir/server.csr" \
+            -CA "$certificate_dir/ca.crt" \
+            -CAkey "$certificate_dir/ca.key" \
+            -CAcreateserial \
+            -extfile "$certificate_dir/server.ext" \
+            -out "$certificate_dir/server.crt"
+
+          printf '%s\n' '127.0.0.1 aetherflow-wrong-host.test' \
+            | sudo tee -a /etc/hosts >/dev/null
+
+          docker run --detach --name aetherflow-nats-tls-client-test \
+            --publish 127.0.0.1:4225:4222 \
+            --volume "$certificate_dir:/certs:ro" \
+            nats:2.12-alpine \
+            -js -sd /data -m 8222 --tls \
+            --tlscert=/certs/server.crt --tlskey=/certs/server.key
+
+          ready=false
+          for attempt in $(seq 1 60); do
+            if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4225' 2>/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != "true" ]]; then
+            docker logs aetherflow-nats-tls-client-test
+            exit 1
+          fi
+
+      - name: Verify TLS trust and hostname validation in the NATS client
+        env:
+          AETHERFLOW_NATS_TLS_REQUIRED: "true"
+          AETHERFLOW_NATS_CA_FILE: ${{ runner.temp }}/aetherflow-nats-tls/ca.crt
+          AETHERFLOW_SECURE_NATS_URL: tls://127.0.0.1:4225
+          AETHERFLOW_SECURE_NATS_WRONG_HOST_URL: tls://aetherflow-wrong-host.test:4225
+        run: cargo +1.99.1 test -p aetherflow-transport-nats --test secure_connection --locked -- --test-threads=1
+
+      - name: Stop the disposable TLS-enabled NATS server
+        if: always()
+        run: docker rm --force aetherflow-nats-tls-client-test 2>/dev/null || true
+
       - name: Test fingerprint-aware end-to-end regression comparator
         run: python3 -m unittest discover -s scripts/tests -p 'test_end_to_end_regression.py' -v
 
