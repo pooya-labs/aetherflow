@@ -1,0 +1,11 @@
+{
+  "name": "aetherflow-cloudflare-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare edge gateway for the AetherFlow Rust control plane",
+  "scripts": {
+    "check": "node --check policy.mjs && node --check worker.mjs && node --check index.mjs",
+    "test": "node --test policy.test.mjs"
+  }
+}
