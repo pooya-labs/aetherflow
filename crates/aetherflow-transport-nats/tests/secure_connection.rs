@@ -20,8 +20,8 @@ fn secure_server_address() -> Result<ServerAddr, Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
+-> Result<(), Box<dyn std::error::Error>> {
     let config = NatsConnectionConfig::from_env()?;
     assert!(
         config.tls_required(),
