@@ -1153,6 +1153,82 @@ fn render_tenant_operational_metrics(metrics: &TenantOperationalMetrics) -> Stri
         .expect("write tenant metrics");
     }
 
+    const TERMINAL_WORKFLOW_STATUSES: [&str; 4] = [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+    ];
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_workflow_completions_last_30m Workflow runs that reached a terminal state in the rolling 30-minute window."
+    )
+    .expect("write tenant metrics");
+    writeln!(
+        output,
+        "# TYPE aetherflow_tenant_workflow_completions_last_30m gauge"
+    )
+    .expect("write tenant metrics");
+    for status in TERMINAL_WORKFLOW_STATUSES {
+        let count = metrics
+            .workflow_completions_last_30m_by_status
+            .iter()
+            .find_map(|(stored_status, count)| (stored_status == status).then_some(*count))
+            .unwrap_or(0);
+        writeln!(
+            output,
+            "aetherflow_tenant_workflow_completions_last_30m{{status=\"{status}\"}} {count}"
+        )
+        .expect("write tenant metrics");
+    }
+
+    writeln!(
+        output,
+        "# HELP aetherflow_tenant_workflow_success_execution_samples_last_30m Successful workflow executions with valid start and finish timestamps in the rolling 30-minute window."
+    )
+    .expect("write tenant metrics");
+    writeln!(
+        output,
+        "# TYPE aetherflow_tenant_workflow_success_execution_samples_last_30m gauge"
+    )
+    .expect("write tenant metrics");
+    writeln!(
+        output,
+        "aetherflow_tenant_workflow_success_execution_samples_last_30m {}",
+        metrics.workflow_success_execution_samples_last_30m
+    )
+    .expect("write tenant metrics");
+
+    for (quantile, name) in [
+        (
+            "p50",
+            "aetherflow_tenant_workflow_success_execution_p50_seconds_last_30m",
+        ),
+        (
+            "p95",
+            "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m",
+        ),
+        (
+            "p99",
+            "aetherflow_tenant_workflow_success_execution_p99_seconds_last_30m",
+        ),
+    ] {
+        let value = match quantile {
+            "p50" => metrics.workflow_success_execution_p50_seconds_last_30m,
+            "p95" => metrics.workflow_success_execution_p95_seconds_last_30m,
+            _ => metrics.workflow_success_execution_p99_seconds_last_30m,
+        }
+        .unwrap_or(0.0)
+        .max(0.0);
+        writeln!(
+            output,
+            "# HELP {name} Successful workflow execution duration {quantile} over the rolling 30-minute window, in seconds."
+        )
+        .expect("write tenant metrics");
+        writeln!(output, "# TYPE {name} gauge").expect("write tenant metrics");
+        writeln!(output, "{name} {value:.6}").expect("write tenant metrics");
+    }
+
     writeln!(
         output,
         "# HELP aetherflow_tenant_oldest_active_workflow_age_seconds Age of the oldest pending or running workflow."
@@ -2956,6 +3032,14 @@ mod tests {
         let metrics = TenantOperationalMetrics {
             workflow_runs_by_status: vec![("running".to_owned(), 2), ("succeeded".to_owned(), 5)],
             oldest_active_workflow_age_seconds: 12.5,
+            workflow_completions_last_30m_by_status: vec![
+                ("succeeded".to_owned(), 3),
+                ("failed".to_owned(), 1),
+            ],
+            workflow_success_execution_samples_last_30m: 3,
+            workflow_success_execution_p50_seconds_last_30m: Some(2.5),
+            workflow_success_execution_p95_seconds_last_30m: Some(6.0),
+            workflow_success_execution_p99_seconds_last_30m: Some(8.0),
             outbox_pending_events: 4,
             outbox_ready_events: 3,
             outbox_oldest_ready_lag_seconds: 7.25,
@@ -2970,6 +3054,18 @@ mod tests {
 
         assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"running\"} 2"));
         assert!(rendered.contains("aetherflow_tenant_workflow_runs{status=\"failed\"} 0"));
+        assert!(rendered.contains(
+            "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 3"
+        ));
+        assert!(rendered.contains(
+            "aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1"
+        ));
+        assert!(rendered.contains(
+            "aetherflow_tenant_workflow_success_execution_samples_last_30m 3"
+        ));
+        assert!(rendered.contains(
+            "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m 6.000000"
+        ));
         assert!(rendered.contains("aetherflow_tenant_outbox_events{state=\"pending\"} 4"));
         assert!(rendered.contains("aetherflow_tenant_inbox_events{state=\"processing\"} 1"));
         assert!(rendered.contains("aetherflow_tenant_task_expired_running_leases 2"));
@@ -4077,6 +4173,41 @@ mod tests {
             .await
             .expect("seed an active workflow for tenant metrics");
 
+        let tenant_succeeded_workflow_run_id = format!("metrics-tenant-succeeded-{suffix}");
+        let tenant_failed_workflow_run_id = format!("metrics-tenant-failed-{suffix}");
+        let foreign_succeeded_workflow_run_id = format!("metrics-foreign-succeeded-{suffix}");
+        database_client
+            .execute(
+                "INSERT INTO workflow_runs
+                   (workflow_run_id, workflow_id, tenant_id, status,
+                    created_at, started_at, finished_at)
+                 VALUES
+                   ($1, $2, $3, 'succeeded',
+                    clock_timestamp() - INTERVAL '15 seconds',
+                    clock_timestamp() - INTERVAL '12 seconds',
+                    clock_timestamp() - INTERVAL '2 seconds'),
+                   ($4, $5, $3, 'failed',
+                    clock_timestamp() - INTERVAL '8 seconds',
+                    clock_timestamp() - INTERVAL '6 seconds',
+                    clock_timestamp() - INTERVAL '2 seconds'),
+                   ($6, $7, $8, 'succeeded',
+                    clock_timestamp() - INTERVAL '15 seconds',
+                    clock_timestamp() - INTERVAL '12 seconds',
+                    clock_timestamp() - INTERVAL '2 seconds')",
+                &[
+                    &tenant_succeeded_workflow_run_id,
+                    &format!("metrics-succeeded-definition-{suffix}"),
+                    &tenant_id,
+                    &tenant_failed_workflow_run_id,
+                    &format!("metrics-failed-definition-{suffix}"),
+                    &foreign_succeeded_workflow_run_id,
+                    &format!("metrics-foreign-succeeded-definition-{suffix}"),
+                    &foreign_tenant_id,
+                ],
+            )
+            .await
+            .expect("seed tenant terminal outcomes and foreign success");
+
         let tenant_pending_event_id = format!("metrics-tenant-pending-{suffix}");
         let tenant_processing_event_id = format!("metrics-tenant-processing-{suffix}");
         let foreign_pending_event_id = format!("metrics-foreign-pending-{suffix}");
@@ -4144,6 +4275,31 @@ mod tests {
         );
         assert!(
             tenant_metrics_text.contains("aetherflow_tenant_workflow_runs{status=\"cancelled\"} 1")
+        );
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_workflow_completions_last_30m{status=\"succeeded\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_workflow_completions_last_30m{status=\"failed\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_workflow_completions_last_30m{status=\"cancelled\"} 1"
+        ));
+        assert!(tenant_metrics_text.contains(
+            "aetherflow_tenant_workflow_success_execution_samples_last_30m 1"
+        ));
+        let success_execution_p95 = tenant_metrics_text
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix(
+                    "aetherflow_tenant_workflow_success_execution_p95_seconds_last_30m "
+                )
+                .and_then(|value| value.parse::<f64>().ok())
+            })
+            .expect("successful workflow p95 execution gauge");
+        assert!(
+            (9.0..11.0).contains(&success_execution_p95),
+            "expected one tenant success near ten seconds, got {success_execution_p95}"
         );
         let active_workflow_age = tenant_metrics_text
             .lines()
