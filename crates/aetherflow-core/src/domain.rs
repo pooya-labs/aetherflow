@@ -492,7 +492,7 @@ mod tests {
                     .filter(|(from, _)| *from == from_index)
                     .count();
 
-                let target_index = if value % 4 != 0 && legal_target_count > 0 {
+                let target_index = if !value.is_multiple_of(4) && legal_target_count > 0 {
                     let selected = (value >> 8) as usize % legal_target_count;
                     allowed_edges
                         .iter()
