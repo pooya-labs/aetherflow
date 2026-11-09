@@ -455,6 +455,111 @@ mod tests {
         }
     }
 
+    /// Advances a tiny deterministic PRNG so generated failures are reproducible.
+    fn next_seeded_value(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// Exercises repeatable generated walks, favoring legal edges so retry cycles
+    /// are reached while still proposing arbitrary invalid transitions regularly.
+    /// The reference edge list remains independent from Lifecycle::allows.
+    fn assert_seeded_transition_sequence_invariants<S: Lifecycle + std::fmt::Debug>(
+        states: &[S],
+        allowed_edges: &[(usize, usize)],
+    ) {
+        let mut seen_edges = vec![false; allowed_edges.len()];
+        let mut accepted = 0;
+        let mut rejected = 0;
+
+        for seed in 1..=1_024_u64 {
+            let mut random = seed;
+            let mut state = Versioned::new(states[0]);
+
+            for _ in 0..64 {
+                let value = next_seeded_value(&mut random);
+                let current = state.status();
+                let from_index = states
+                    .iter()
+                    .position(|candidate| *candidate == current)
+                    .expect("every lifecycle state belongs to the reference model");
+                let current_version = state.version();
+                let was_terminal = state.is_terminal();
+                let legal_target_count = allowed_edges
+                    .iter()
+                    .filter(|(from, _)| *from == from_index)
+                    .count();
+
+                let target_index = if value % 4 != 0 && legal_target_count > 0 {
+                    let selected = (value >> 8) as usize % legal_target_count;
+                    allowed_edges
+                        .iter()
+                        .filter(|(from, _)| *from == from_index)
+                        .nth(selected)
+                        .expect("selected legal edge exists")
+                        .1
+                } else {
+                    ((value >> 32) as usize) % states.len()
+                };
+                let target = states[target_index];
+                let expected_edge = allowed_edges
+                    .iter()
+                    .position(|edge| *edge == (from_index, target_index));
+                let result = state.transition(target);
+
+                match result {
+                    Ok(transition) => {
+                        let edge_index = expected_edge
+                            .expect("generated transition must be present in the reference model");
+                        assert!(
+                            !was_terminal,
+                            "terminal state {} must not transition",
+                            current.name()
+                        );
+                        assert_eq!(transition.from, current);
+                        assert_eq!(transition.to, target);
+                        assert_eq!(transition.version, current_version + 1);
+                        assert_eq!(state.status(), target);
+                        assert_eq!(state.version(), current_version + 1);
+                        seen_edges[edge_index] = true;
+                        accepted += 1;
+                    }
+                    Err(error) => {
+                        assert!(
+                            expected_edge.is_none(),
+                            "reference model expected {} -> {} to be accepted",
+                            current.name(),
+                            target.name()
+                        );
+                        assert_eq!(
+                            error,
+                            TransitionError::InvalidTransition {
+                                from: current.name(),
+                                to: target.name(),
+                            }
+                        );
+                        assert_eq!(state.status(), current);
+                        assert_eq!(state.version(), current_version);
+                        rejected += 1;
+                    }
+                }
+
+                if was_terminal {
+                    assert_eq!(state.status(), current);
+                    assert_eq!(state.version(), current_version);
+                }
+            }
+        }
+
+        assert!(accepted > 0, "generated sequences must accept transitions");
+        assert!(rejected > 0, "generated sequences must reject invalid transitions");
+        for (edge, seen) in allowed_edges.iter().zip(seen_edges) {
+            assert!(seen, "generated sequences did not cover edge {edge:?}");
+        }
+    }
+
     #[test]
     fn domain_identifiers_are_type_distinct_and_share_validation() {
         let workflow = WorkflowId::parse("workflow_01").expect("valid workflow ID");
@@ -705,6 +810,21 @@ mod tests {
     }
 
     #[test]
+    fn workflow_seeded_sequences_cover_every_transition_edge() {
+        let states = [
+            WorkflowStatus::Pending,
+            WorkflowStatus::Running,
+            WorkflowStatus::Succeeded,
+            WorkflowStatus::Failed,
+            WorkflowStatus::Cancelled,
+            WorkflowStatus::TimedOut,
+        ];
+        let allowed_edges = [(0, 1), (0, 4), (0, 5), (1, 2), (1, 3), (1, 4), (1, 5)];
+
+        assert_seeded_transition_sequence_invariants(&states, &allowed_edges);
+    }
+
+    #[test]
     fn task_bounded_transition_sequences_preserve_retry_and_terminal_invariants() {
         let states = [
             TaskStatus::Pending,
@@ -734,6 +854,38 @@ mod tests {
         ];
 
         assert_bounded_transition_sequence_invariants(&states, &allowed_edges, 5);
+    }
+
+    #[test]
+    fn task_seeded_sequences_cover_every_transition_edge_and_retry_cycle() {
+        let states = [
+            TaskStatus::Pending,
+            TaskStatus::Ready,
+            TaskStatus::Running,
+            TaskStatus::RetryWaiting,
+            TaskStatus::Succeeded,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+            TaskStatus::TimedOut,
+        ];
+        let allowed_edges = [
+            (0, 1),
+            (0, 6),
+            (0, 7),
+            (1, 2),
+            (1, 6),
+            (1, 7),
+            (2, 3),
+            (2, 4),
+            (2, 5),
+            (2, 6),
+            (2, 7),
+            (3, 1),
+            (3, 6),
+            (3, 7),
+        ];
+
+        assert_seeded_transition_sequence_invariants(&states, &allowed_edges);
     }
 
     #[test]
