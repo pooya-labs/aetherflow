@@ -37,6 +37,21 @@ PR #9 (owner branding, footer links, documentation refresh and browser assertion
 
 The PR validation is against the pull-request source, not a production deployment or the external Google Apps Script Web App. After merge, GitHub Pages will deploy the site update; the owner must still publish the pending-only Apps Script source correction through the existing Web App deployment.
 
+
+
+## Post-merge main verification — 2026-11-09
+
+Owner-attribution PR #9 was merged into main as c2a385677208845c3aaa81387857adb19a150167. The exact merge commit passed all post-merge checks:
+
+- Rust CI [42537034757](https://github.com/pooya-labs/aetherflow/actions/runs/42537034757) — formatting, Clippy, JavaScript contracts, workspace tests, release build, scheduler benchmark smoke, WebAssembly lint/build and ABI v1 example execution, docs and Compose validation.
+- Supply-chain and full-history secret checks [42537034748](https://github.com/pooya-labs/aetherflow/actions/runs/42537034748) — passed.
+- Chromium desktop/mobile product browser QA [42537034958](https://github.com/pooya-labs/aetherflow/actions/runs/42537034958) — passed.
+- GitHub Pages build/deployment [42537033827](https://github.com/pooya-labs/aetherflow/actions/runs/42537033827) — passed.
+
+The PostgreSQL/NATS integration run [42512751327](https://github.com/pooya-labs/aetherflow/actions/runs/42512751327) remains the verified baseline for the unchanged Rust/PostgreSQL/NATS runtime paths; it is not a run on the merge commit. The live Apps Script persistence test is accepted, but the pending-only correction remains source-only until the owner publishes a new Web App version using the existing project and Spreadsheet.
+
+This exact-main CI matrix closes the immediate post-merge verification task. It does **not** close the production deployment, recovery, server-side NATS, SLO approval, matched-runner performance, independent security review, API/SDK compatibility review, or release-provenance gates listed below. The stable v1.0.0 release remains unpublished.
+
 ## Additional verified engineering slices
 
 - The schema v10 operational-metrics extension passed PostgreSQL/JetStream CI [42494177393](https://github.com/pooya-labs/aetherflow/actions/runs/42494177393) with 28/28 steps. It validates tenant-isolated HTTP/TLS metrics, migration/index assertions, JetStream, benchmark profiles and restore-to-runtime.
