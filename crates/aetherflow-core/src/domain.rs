@@ -554,7 +554,10 @@ mod tests {
         }
 
         assert!(accepted > 0, "generated sequences must accept transitions");
-        assert!(rejected > 0, "generated sequences must reject invalid transitions");
+        assert!(
+            rejected > 0,
+            "generated sequences must reject invalid transitions"
+        );
         for (edge, seen) in allowed_edges.iter().zip(seen_edges) {
             assert!(seen, "generated sequences did not cover edge {edge:?}");
         }
