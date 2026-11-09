@@ -494,6 +494,7 @@ fn bounded_error(message: &str) -> String {
 mod tests {
     use super::{ConsumerMetrics, JetStreamEvent, NatsConsumerError};
     use aetherflow_storage_postgres::StorageError;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn consumer_metrics_separate_broker_storage_and_protocol_failures() {
