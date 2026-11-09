@@ -15,6 +15,9 @@ pub use consumer::{
     JetStreamEventHandler, NatsConsumerError, NatsJetStreamConsumer,
 };
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use aetherflow_storage_postgres::{
     OutboxClaim, OutboxPublishError, OutboxPublishFuture, OutboxPublisher,
 };
@@ -34,16 +37,106 @@ struct OutboxEnvelope<'a> {
     payload: &'a serde_json::Value,
 }
 
+/// Point-in-time counters for one publisher instance.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PublisherMetricsSnapshot {
+    /// Publish futures that began executing.
+    pub attempts_started: usize,
+    /// Attempts confirmed as stored by JetStream.
+    pub confirmed: usize,
+    /// Attempts that returned an encoding, send, or acknowledgement error.
+    pub failed: usize,
+    /// Started futures dropped before a final result was observed; broker outcome may be unknown.
+    pub interrupted: usize,
+    /// Publish futures currently executing.
+    pub in_flight: usize,
+}
+
+#[derive(Default)]
+struct PublisherMetricsInner {
+    attempts_started: AtomicUsize,
+    confirmed: AtomicUsize,
+    failed: AtomicUsize,
+    interrupted: AtomicUsize,
+    in_flight: AtomicUsize,
+}
+
+/// Process-local counters shared by clones of one JetStream publisher.
+#[derive(Clone, Default)]
+pub struct PublisherMetrics {
+    inner: Arc<PublisherMetricsInner>,
+}
+
+impl PublisherMetrics {
+    /// Returns a point-in-time snapshot of this publisher instance's counters.
+    #[must_use]
+    pub fn snapshot(&self) -> PublisherMetricsSnapshot {
+        PublisherMetricsSnapshot {
+            attempts_started: self.inner.attempts_started.load(Ordering::Relaxed),
+            confirmed: self.inner.confirmed.load(Ordering::Relaxed),
+            failed: self.inner.failed.load(Ordering::Relaxed),
+            interrupted: self.inner.interrupted.load(Ordering::Relaxed),
+            in_flight: self.inner.in_flight.load(Ordering::Relaxed),
+        }
+    }
+}
+
+struct PublishAttempt {
+    metrics: PublisherMetrics,
+    finished: bool,
+}
+
+impl PublishAttempt {
+    fn start(metrics: PublisherMetrics) -> Self {
+        metrics
+            .inner
+            .attempts_started
+            .fetch_add(1, Ordering::Relaxed);
+        metrics.inner.in_flight.fetch_add(1, Ordering::Relaxed);
+        Self {
+            metrics,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self, succeeded: bool) {
+        self.metrics.inner.in_flight.fetch_sub(1, Ordering::Relaxed);
+        let counter = if succeeded {
+            &self.metrics.inner.confirmed
+        } else {
+            &self.metrics.inner.failed
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        self.finished = true;
+    }
+}
+
+impl Drop for PublishAttempt {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.metrics.inner.in_flight.fetch_sub(1, Ordering::Relaxed);
+            self.metrics
+                .inner
+                .interrupted
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Publishes AetherFlow outbox events to a configured JetStream subject.
 ///
 /// The subject must be captured by an existing JetStream stream. Stream
 /// provisioning, secret delivery, and server-side account/ACL policy remain
 /// deployment responsibilities. Use `NatsConnectionConfig` to establish the
 /// client connection with the configured credentials and TLS policy.
+///
+/// Metrics are process-local snapshots shared by publisher clones. They are
+/// not a cross-replica aggregate or an HTTP/Prometheus endpoint.
 #[derive(Clone)]
 pub struct NatsJetStreamPublisher {
     context: Context,
     subject: String,
+    metrics: PublisherMetrics,
 }
 
 impl NatsJetStreamPublisher {
@@ -53,6 +146,7 @@ impl NatsJetStreamPublisher {
         Self {
             context,
             subject: subject.into(),
+            metrics: PublisherMetrics::default(),
         }
     }
 
@@ -61,45 +155,58 @@ impl NatsJetStreamPublisher {
     pub fn subject(&self) -> &str {
         &self.subject
     }
+
+    /// Returns a handle for observing this publisher instance's counters.
+    #[must_use]
+    pub fn metrics(&self) -> PublisherMetrics {
+        self.metrics.clone()
+    }
 }
 
 impl OutboxPublisher for NatsJetStreamPublisher {
     fn publish<'a>(&'a self, event: &'a OutboxClaim) -> OutboxPublishFuture<'a> {
         let context = self.context.clone();
         let subject = self.subject.clone();
+        let metrics = self.metrics.clone();
         Box::pin(async move {
-            let envelope = OutboxEnvelope {
-                schema_version: 1,
-                tenant_id: event.tenant_id(),
-                event_id: event.event_id().to_string(),
-                aggregate_type: event.aggregate_type(),
-                aggregate_id: event.aggregate_id(),
-                aggregate_version: event.aggregate_version(),
-                event_type: event.event_type(),
-                payload: event.payload(),
-            };
-            let payload = serde_json::to_vec(&envelope).map_err(|error| {
-                OutboxPublishError::new(format!("encode outbox event: {error}"))
-            })?;
-
-            let mut headers = async_nats::HeaderMap::new();
-            headers.append("Nats-Msg-Id", event.event_id().to_string());
-            headers.append("Aetherflow-Tenant-Id", event.tenant_id());
-            headers.append("Aetherflow-Event-Type", event.event_type());
-
-            // JetStream has a two-stage API: the first await sends the request;
-            // the returned future resolves only once the server confirms storage.
-            let acknowledgement = context
-                .publish_with_headers(subject, headers, payload.into())
-                .await
-                .map_err(|error| {
-                    OutboxPublishError::new(format!("send JetStream publish: {error}"))
+            let attempt = PublishAttempt::start(metrics);
+            let result: Result<(), OutboxPublishError> = async {
+                let envelope = OutboxEnvelope {
+                    schema_version: 1,
+                    tenant_id: event.tenant_id(),
+                    event_id: event.event_id().to_string(),
+                    aggregate_type: event.aggregate_type(),
+                    aggregate_id: event.aggregate_id(),
+                    aggregate_version: event.aggregate_version(),
+                    event_type: event.event_type(),
+                    payload: event.payload(),
+                };
+                let payload = serde_json::to_vec(&envelope).map_err(|error| {
+                    OutboxPublishError::new(format!("encode outbox event: {error}"))
                 })?;
-            acknowledgement.await.map_err(|error| {
-                OutboxPublishError::new(format!("JetStream publish acknowledgement: {error}"))
-            })?;
 
-            Ok(())
+                let mut headers = async_nats::HeaderMap::new();
+                headers.append("Nats-Msg-Id", event.event_id().to_string());
+                headers.append("Aetherflow-Tenant-Id", event.tenant_id());
+                headers.append("Aetherflow-Event-Type", event.event_type());
+
+                // JetStream has a two-stage API: the first await sends the request;
+                // the returned future resolves only once the server confirms storage.
+                let acknowledgement = context
+                    .publish_with_headers(subject, headers, payload.into())
+                    .await
+                    .map_err(|error| {
+                        OutboxPublishError::new(format!("send JetStream publish: {error}"))
+                    })?;
+                acknowledgement.await.map_err(|error| {
+                    OutboxPublishError::new(format!("JetStream publish acknowledgement: {error}"))
+                })?;
+
+                Ok(())
+            }
+            .await;
+            attempt.finish(result.is_ok());
+            result
         })
     }
 }
@@ -108,6 +215,32 @@ impl OutboxPublisher for NatsJetStreamPublisher {
 mod tests {
     use super::OutboxEnvelope;
     use serde_json::json;
+
+    #[test]
+    fn publisher_metrics_track_confirmed_failed_and_interrupted_attempts() {
+        use super::{PublishAttempt, PublisherMetrics};
+
+        let metrics = PublisherMetrics::default();
+        let attempt = PublishAttempt::start(metrics.clone());
+        assert_eq!(metrics.snapshot().attempts_started, 1);
+        assert_eq!(metrics.snapshot().in_flight, 1);
+        attempt.finish(true);
+
+        let attempt = PublishAttempt::start(metrics.clone());
+        attempt.finish(false);
+
+        drop(PublishAttempt::start(metrics.clone()));
+        assert_eq!(
+            metrics.snapshot(),
+            super::PublisherMetricsSnapshot {
+                attempts_started: 3,
+                confirmed: 1,
+                failed: 1,
+                interrupted: 1,
+                in_flight: 0,
+            }
+        );
+    }
 
     #[test]
     fn outbox_envelope_carries_stable_identity_and_schema_version() {
