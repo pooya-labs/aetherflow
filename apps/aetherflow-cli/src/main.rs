@@ -169,10 +169,7 @@ impl ApiClient {
     }
 }
 
-fn append_bounded_response_chunk(
-    response_body: &mut Vec<u8>,
-    chunk: &[u8],
-) -> io::Result<()> {
+fn append_bounded_response_chunk(response_body: &mut Vec<u8>, chunk: &[u8]) -> io::Result<()> {
     if response_body.len().saturating_add(chunk.len()) > MAX_HTTP_BODY_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -369,7 +366,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_bounded_response_chunk, ApiClient, MAX_HTTP_BODY_BYTES, normalize_base_url,
+        ApiClient, MAX_HTTP_BODY_BYTES, append_bounded_response_chunk, normalize_base_url,
         read_bounded, validate_identifier,
     };
     use std::io::Cursor;
