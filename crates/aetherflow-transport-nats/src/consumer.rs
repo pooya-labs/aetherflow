@@ -106,6 +106,12 @@ pub struct ConsumerMetricsSnapshot {
     pub busy: usize,
     /// Handler failures released back to the durable inbox.
     pub handler_failures: usize,
+    /// JetStream operations that returned an error.
+    pub broker_failures: usize,
+    /// PostgreSQL inbox operations that returned an error.
+    pub storage_failures: usize,
+    /// Invalid envelopes, unsupported versions, or missing tenant grants.
+    pub protocol_failures: usize,
 }
 
 /// Shared counters for an active NATS consumer.
@@ -115,6 +121,9 @@ pub struct ConsumerMetrics {
     duplicates: Arc<AtomicUsize>,
     busy: Arc<AtomicUsize>,
     handler_failures: Arc<AtomicUsize>,
+    broker_failures: Arc<AtomicUsize>,
+    storage_failures: Arc<AtomicUsize>,
+    protocol_failures: Arc<AtomicUsize>,
 }
 
 impl ConsumerMetrics {
@@ -126,7 +135,22 @@ impl ConsumerMetrics {
             duplicates: self.duplicates.load(Ordering::Relaxed),
             busy: self.busy.load(Ordering::Relaxed),
             handler_failures: self.handler_failures.load(Ordering::Relaxed),
+            broker_failures: self.broker_failures.load(Ordering::Relaxed),
+            storage_failures: self.storage_failures.load(Ordering::Relaxed),
+            protocol_failures: self.protocol_failures.load(Ordering::Relaxed),
         }
+    }
+
+    fn record_error(&self, error: &NatsConsumerError) {
+        let counter = match error {
+            NatsConsumerError::Broker(_) => &self.broker_failures,
+            NatsConsumerError::Storage(_) => &self.storage_failures,
+            NatsConsumerError::InvalidEnvelope(_)
+            | NatsConsumerError::UnsupportedSchemaVersion(_)
+            | NatsConsumerError::InvalidLeaseDuration
+            | NatsConsumerError::TenantRegistrationRequired => &self.protocol_failures,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -288,11 +312,13 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
             return Ok(());
         }
 
-        let mut messages = self
-            .consumer
-            .messages()
-            .await
-            .map_err(|error| NatsConsumerError::Broker(error.to_string()))?;
+        let mut messages = match self.consumer.messages().await {
+            Ok(messages) => messages,
+            Err(error) => {
+                self.metrics.broker_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(NatsConsumerError::Broker(error.to_string()));
+            }
+        };
 
         loop {
             tokio::select! {
@@ -305,6 +331,7 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
                     match delivery {
                         Some(Ok(message)) => self.process_message(message).await?,
                         Some(Err(error)) => {
+                            self.metrics.broker_failures.fetch_add(1, Ordering::Relaxed);
                             return Err(NatsConsumerError::Broker(error.to_string()));
                         }
                         None => return Ok(()),
@@ -315,6 +342,17 @@ impl<H: JetStreamEventHandler> NatsJetStreamConsumer<H> {
     }
 
     async fn process_message(&self, message: JetStreamMessage) -> Result<(), NatsConsumerError> {
+        let result = self.process_message_inner(message).await;
+        if let Err(error) = &result {
+            self.metrics.record_error(error);
+        }
+        result
+    }
+
+    async fn process_message_inner(
+        &self,
+        message: JetStreamMessage,
+    ) -> Result<(), NatsConsumerError> {
         let event: JetStreamEvent = serde_json::from_slice(&message.payload)
             .map_err(|error| NatsConsumerError::InvalidEnvelope(error.to_string()))?;
         if event.schema_version != 1 {
@@ -454,7 +492,36 @@ fn bounded_error(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::JetStreamEvent;
+    use super::{ConsumerMetrics, JetStreamEvent, NatsConsumerError};
+    use crate::StorageError;
+
+    #[test]
+    fn consumer_metrics_separate_broker_storage_and_protocol_failures() {
+        let metrics = ConsumerMetrics::default();
+        metrics.record_error(&NatsConsumerError::Broker("connection lost".to_owned()));
+        metrics.record_error(&NatsConsumerError::Storage(StorageError::Database(
+            "database unavailable".to_owned(),
+        )));
+        metrics.record_error(&NatsConsumerError::InvalidEnvelope(
+            "malformed event".to_owned(),
+        ));
+        metrics.record_error(&NatsConsumerError::UnsupportedSchemaVersion(2));
+        metrics.processed.fetch_add(3, Ordering::Relaxed);
+        metrics.duplicates.fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(
+            metrics.snapshot(),
+            super::ConsumerMetricsSnapshot {
+                processed: 3,
+                duplicates: 1,
+                busy: 0,
+                handler_failures: 0,
+                broker_failures: 1,
+                storage_failures: 1,
+                protocol_failures: 2,
+            }
+        );
+    }
 
     #[test]
     fn legacy_event_envelopes_default_to_the_reserved_legacy_tenant() {
