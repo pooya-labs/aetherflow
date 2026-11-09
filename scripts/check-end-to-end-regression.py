@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,74 @@ def compare(
         for key, expected in expected_environment.items()
         if current_environment.get(key) != expected
     ]
+
+    reference_repeat_count = int(reference["repeat_count_per_shape"])
+    actual_repeat_count = int(metadata.get("repeat_count_per_shape", 0))
+    if reference_repeat_count < 1:
+        return "fail", ["FAIL: reference repeat_count_per_shape must be positive"]
+    if actual_repeat_count < 1:
+        return "fail", ["FAIL: metadata.repeat_count_per_shape must be positive"]
+    expected_samples = 2 * actual_repeat_count
+    if int(metadata.get("sample_count", 0)) != expected_samples:
+        return "fail", [
+            f"FAIL: expected {expected_samples} total samples, got {metadata.get('sample_count')}"
+        ]
+
+    expected_shapes = ("fan_out", "chain")
+    by_shape: dict[str, dict[str, Any]] = {}
+    for row in summary_rows:
+        shape = row.get("shape")
+        if shape not in expected_shapes:
+            return "fail", [f"FAIL: unsupported summary shape {shape!r}"]
+        if shape in by_shape:
+            return "fail", [f"FAIL: duplicate {shape} summary row"]
+        by_shape[shape] = row
+
+    missing_shapes = [shape for shape in expected_shapes if shape not in by_shape]
+    if missing_shapes:
+        return "fail", [
+            f"FAIL: missing summary for {', '.join(missing_shapes)}"
+        ]
+
+    validated_rows: dict[str, tuple[dict[str, Any], dict[str, Any], float, float]] = {}
+    for shape in expected_shapes:
+        row = by_shape[shape]
+        policy = reference["shapes"].get(shape)
+        if policy is None:
+            return "fail", [f"FAIL: missing {shape} reference policy"]
+        if int(row.get("repeat_count", 0)) != actual_repeat_count:
+            return "fail", [
+                f"FAIL: {shape} expected {actual_repeat_count} repeats, "
+                f"got {row.get('repeat_count')}"
+            ]
+        if int(row.get("duplicates_per_run", -1)) != 0 or int(row.get("errors_per_run", -1)) != 0:
+            return "fail", [f"FAIL: {shape} contains duplicate events or errors"]
+
+        outbox_events = int(row.get("outbox_events_per_run", 0))
+        inbox_events = int(row.get("inbox_events_per_run", -1))
+        if outbox_events <= 0 or outbox_events != inbox_events:
+            return "fail", [
+                f"FAIL: {shape} outbox/inbox counts are empty or do not reconcile"
+            ]
+
+        try:
+            throughput = float(row["median_workflows_per_second"])
+            p95 = float(row["median_p95_workflow_ms"])
+        except (KeyError, TypeError, ValueError) as error:
+            return "fail", [f"FAIL: {shape} has invalid performance metrics: {error}"]
+        if not math.isfinite(throughput) or throughput <= 0:
+            return "fail", [
+                f"FAIL: {shape} median throughput must be finite and positive"
+            ]
+        if not math.isfinite(p95) or p95 <= 0:
+            return "fail", [
+                f"FAIL: {shape} median p95 latency must be finite and positive"
+            ]
+        validated_rows[shape] = (row, policy, throughput, p95)
+
+    # Validate artifact integrity before deciding to skip numeric comparison.
+    # A different runner/workload cannot be compared to the reference, but it
+    # must not turn malformed or incomplete benchmark output into a green run.
     if mismatches:
         return "skip", [
             "SKIP: runner fingerprint does not match the stored reference; no threshold was applied.",
@@ -60,32 +129,16 @@ def compare(
             "SKIP: workload parameters differ from the stored reference; artifact retained without comparison."
         ]
 
-    expected_samples = 2 * int(reference["repeat_count_per_shape"])
-    if int(metadata.get("sample_count", 0)) != expected_samples:
+    if actual_repeat_count != reference_repeat_count:
         return "fail", [
-            f"FAIL: expected {expected_samples} total samples, got {metadata.get('sample_count')}"
+            f"FAIL: matching workload requires {reference_repeat_count} repeats per shape, "
+            f"got {actual_repeat_count}"
         ]
 
-    by_shape = {row.get("shape"): row for row in summary_rows}
     messages: list[str] = []
     failures: list[str] = []
-    for shape in ("fan_out", "chain"):
-        row = by_shape.get(shape)
-        policy = reference["shapes"].get(shape)
-        if row is None or policy is None:
-            return "fail", [f"FAIL: missing {shape} summary or reference policy"]
-        if int(row.get("repeat_count", 0)) != int(reference["repeat_count_per_shape"]):
-            return "fail", [
-                f"FAIL: {shape} expected {reference['repeat_count_per_shape']} repeats, "
-                f"got {row.get('repeat_count')}"
-            ]
-        if int(row.get("duplicates_per_run", -1)) != 0 or int(row.get("errors_per_run", -1)) != 0:
-            return "fail", [f"FAIL: {shape} contains duplicate events or errors"]
-        if int(row.get("outbox_events_per_run", 0)) != int(row.get("inbox_events_per_run", -1)):
-            return "fail", [f"FAIL: {shape} outbox/inbox counts do not reconcile"]
-
-        throughput = float(row["median_workflows_per_second"])
-        p95 = float(row["median_p95_workflow_ms"])
+    for shape in expected_shapes:
+        _, policy, throughput, p95 = validated_rows[shape]
         throughput_floor = float(policy["median_workflows_per_second"]) * (
             1.0 - float(policy["max_throughput_drop_percent"]) / 100.0
         )
