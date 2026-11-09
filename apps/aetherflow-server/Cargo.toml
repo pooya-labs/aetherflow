@@ -34,7 +34,7 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json", "r
 [dev-dependencies]
 rcgen = "=0.14.10"
 tokio-rustls = "=0.26.6"
-tower = { version = "=0.5.2", features = ["util"] }
+tower = { version = "=0.5.3", features = ["util"] }
 
 [lints]
 workspace = true
