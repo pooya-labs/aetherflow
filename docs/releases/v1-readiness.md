@@ -6,6 +6,21 @@
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
+## Latest coordinated maintenance and exact-merge verification — 2026-11-09
+
+The coordinated WIT tooling update [PR #13](https://github.com/pooya-labs/aetherflow/pull/13) merged to main as [71247b401c3ed9cf3436ed1ff7908c18dc9cce6e](https://github.com/pooya-labs/aetherflow/commit/71247b401c3ed9cf3436ed1ff7908c18dc9cce6e). It aligns the host-side `wit-component`, `wit-parser`, and `wasmprinter` test graph at 0.263.0, upgrades the minimal plugin host encoder and guest `wit-bindgen`, explicitly preserves non-canonical metadata naming, and refreshes Cargo.lock with the pinned toolchain. Overlapping Dependabot PRs [#5](https://github.com/pooya-labs/aetherflow/pull/5), [#6](https://github.com/pooya-labs/aetherflow/pull/6), and [#7](https://github.com/pooya-labs/aetherflow/pull/7) were closed as superseded.
+
+All four post-merge workflows passed on the exact merge SHA:
+
+- [Rust CI](https://github.com/pooya-labs/aetherflow/actions/runs/42630555243) — format, Clippy, workspace tests, release build, scheduler benchmark smoke, WASM guest lint/build and ABI example execution, documentation, Docker Compose, and deployed no-Origin Cloudflare smoke.
+- [PostgreSQL/JetStream](https://github.com/pooya-labs/aetherflow/actions/runs/42630555359) — **31/31 steps passed on retry attempt 2**, including storage and migration checks, restricted runtime role, TLS-backed API integration, three-node JetStream transport, NATS TLS trust/hostname verification, five-repeat baseline, schema invariants, restored-server build, and isolated PostgreSQL + JetStream backup/restore-to-runtime rehearsal. The first attempt stopped during temporary TLS-fixture startup; the retry passed the full job.
+- [Supply-chain and secret checks](https://github.com/pooya-labs/aetherflow/actions/runs/42630555283) — Gitleaks full-history scan and cargo-deny.
+- [Pages build and deployment](https://github.com/pooya-labs/aetherflow/actions/runs/42630554202) — passed.
+
+The five-repeat candidate baseline completed, but the comparator explicitly reported `SKIP` because the runner fingerprint did not match the stored AMD EPYC 9V45 reference. No numeric throughput/p95 threshold was applied. Matching-runner comparator verification remains an open release gate. The restore run is an isolated CI rehearsal, not production PITR and not an owner-approved RPO/RTO policy.
+
+The subsequent documentation-only main commit [5874f6b](https://github.com/pooya-labs/aetherflow/commit/5874f6b99f880296cb23c043e879114b9f114ff8) refreshed README and ROADMAP; its [Pages deployment](https://github.com/pooya-labs/aetherflow/actions/runs/42630967398) and [security checks](https://github.com/pooya-labs/aetherflow/actions/runs/42630969014) passed. Its Rust CI [42630968897](https://github.com/pooya-labs/aetherflow/actions/runs/42630968897) was still running when this section was prepared; track the exact documentation commit separately from the verified application merge SHA.
+
 ## Verified engineering baseline
 
 The following workflows passed on the same source commit, d208d568584a54c60e7917e809ebe4271c280cd1:
@@ -76,7 +91,8 @@ This track improves usability where an external Origin is unavailable, but it do
 
 ## Required before publishing 1.0.0
 
-- [x] Pre-release engineering baseline verified on one exact source commit: Rust, PostgreSQL/JetStream, security and Pages workflows all passed on d208d568584a54c60e7917e809ebe4271c280cd1. Re-run the full matrix after any subsequent release-candidate change.
+- [x] Coordinated WIT toolchain maintenance verified after merge on exact main application SHA `71247b401c3ed9cf3436ed1ff7908c18dc9cce6e`: Rust CI [42630555243](https://github.com/pooya-labs/aetherflow/actions/runs/42630555243), PostgreSQL/JetStream [42630555359](https://github.com/pooya-labs/aetherflow/actions/runs/42630555359) (31/31 on retry), security [42630555283](https://github.com/pooya-labs/aetherflow/actions/runs/42630555283), and Pages [42630554202](https://github.com/pooya-labs/aetherflow/actions/runs/42630554202) passed. The benchmark comparator skipped numeric thresholds due to runner-fingerprint mismatch; the matching-runner gate below remains open.
+- [x] Earlier pre-release engineering baseline verified on exact source commit `d208d568584a54c60e7917e809ebe4271c280cd1`; retain its historical workflow records above. Re-run the full matrix after any subsequent release-candidate source change.
 - [ ] Run the comparator-enabled workflow on the matching normalized EPYC 9V45 fingerprint so the numeric 10% throughput / 15% p95 branch is exercised. The reference sessions exist; the latest candidate run only validated the mismatch/skip path. Archive raw samples and the environment fingerprint.
 - [ ] Deploy and route the Cloudflare Worker gateway from `cloudflare-gateway/` only after a verified HTTPS API origin and matching `AETHERFLOW_INGRESS_TOKEN` are provisioned. Attach a production hostname through an active Zone (or an explicitly tested Tunnel route), verify shared Durable Object throttling across replicas/locations, request-size and concurrency controls, and prove direct-origin bypass is blocked. The code is present; the Cloudflare account currently has no active Zone/Tunnel and no AetherFlow API origin, so this gate is still open.
 - [ ] Define and test the deployment topology for API processes, workers, PostgreSQL, NATS, secrets, certificates, networking, and alert ownership. Prove aggregate rate limiting and direct-origin bypass protection across replicas.
