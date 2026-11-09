@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: rust-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep main verification runs intact; only superseded PR runs are cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
