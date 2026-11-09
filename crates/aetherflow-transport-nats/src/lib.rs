@@ -88,7 +88,10 @@ struct PublishAttempt {
 
 impl PublishAttempt {
     fn start(metrics: PublisherMetrics) -> Self {
-        metrics.inner.attempts_started.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .inner
+            .attempts_started
+            .fetch_add(1, Ordering::Relaxed);
         metrics.inner.in_flight.fetch_add(1, Ordering::Relaxed);
         Self {
             metrics,
@@ -112,7 +115,10 @@ impl Drop for PublishAttempt {
     fn drop(&mut self) {
         if !self.finished {
             self.metrics.inner.in_flight.fetch_sub(1, Ordering::Relaxed);
-            self.metrics.inner.interrupted.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .inner
+                .interrupted
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 }
