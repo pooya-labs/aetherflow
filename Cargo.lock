@@ -40,7 +40,7 @@ dependencies = [
  "aetherflow-runtime",
  "aetherflow-wasm",
  "tokio",
- "wit-component 0.254.2",
+ "wit-component 0.263.0",
 ]
 
 [[package]]
