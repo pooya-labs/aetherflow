@@ -51,10 +51,13 @@ def compare(
         if current_environment.get(key) != expected
     ]
 
-    repeat_count = int(reference["repeat_count_per_shape"])
-    expected_samples = 2 * repeat_count
-    if repeat_count < 1:
+    reference_repeat_count = int(reference["repeat_count_per_shape"])
+    actual_repeat_count = int(metadata.get("repeat_count_per_shape", 0))
+    if reference_repeat_count < 1:
         return "fail", ["FAIL: reference repeat_count_per_shape must be positive"]
+    if actual_repeat_count < 1:
+        return "fail", ["FAIL: metadata.repeat_count_per_shape must be positive"]
+    expected_samples = 2 * actual_repeat_count
     if int(metadata.get("sample_count", 0)) != expected_samples:
         return "fail", [
             f"FAIL: expected {expected_samples} total samples, got {metadata.get('sample_count')}"
@@ -82,9 +85,9 @@ def compare(
         policy = reference["shapes"].get(shape)
         if policy is None:
             return "fail", [f"FAIL: missing {shape} reference policy"]
-        if int(row.get("repeat_count", 0)) != repeat_count:
+        if int(row.get("repeat_count", 0)) != actual_repeat_count:
             return "fail", [
-                f"FAIL: {shape} expected {repeat_count} repeats, "
+                f"FAIL: {shape} expected {actual_repeat_count} repeats, "
                 f"got {row.get('repeat_count')}"
             ]
         if int(row.get("duplicates_per_run", -1)) != 0 or int(row.get("errors_per_run", -1)) != 0:
@@ -124,6 +127,12 @@ def compare(
     if metadata.get("workload") != reference.get("workload"):
         return "skip", [
             "SKIP: workload parameters differ from the stored reference; artifact retained without comparison."
+        ]
+
+    if actual_repeat_count != reference_repeat_count:
+        return "fail", [
+            f"FAIL: matching workload requires {reference_repeat_count} repeats per shape, "
+            f"got {actual_repeat_count}"
         ]
 
     messages: list[str] = []
