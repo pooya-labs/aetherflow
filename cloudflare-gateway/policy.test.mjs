@@ -352,3 +352,198 @@ test("Durable Object uses SQLite storage and expires idle rate-limit buckets", a
   assert.equal(state.deleteAllCalls, 1);
   assert.equal(state.blockConcurrencyCalls, 2, "both alarm paths serialize against incoming requests");
 });
+
+
+test("public health bypasses the client limiter but still uses the fixed origin and ingress token", async () => {
+  let limiterLookups = 0;
+  let upstreamRequest;
+  const env = {
+    AETHERFLOW_ORIGIN: "https://api.example.test",
+    AETHERFLOW_INGRESS_TOKEN: "server-side-high-entropy-ingress-token",
+    CLIENT_RATE_LIMITER: {
+      idFromName() {
+        limiterLookups += 1;
+        throw new Error("health must not create a rate-limit bucket");
+      },
+      get() {
+        throw new Error("health must not access the Durable Object");
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (request) => {
+    upstreamRequest = request;
+    return new Response("healthy", { status: 200 });
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/health"),
+      env,
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "healthy");
+    assert.equal(limiterLookups, 0);
+    assert.equal(upstreamRequest.url, "https://api.example.test/health");
+    assert.equal(
+      upstreamRequest.headers.get("x-aetherflow-ingress-token"),
+      env.AETHERFLOW_INGRESS_TOKEN,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unsupported methods are rejected before limiter or origin access", async () => {
+  let limiterLookups = 0;
+  let originCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    originCalls += 1;
+    return new Response("unexpected");
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/api/v1/workflow-runs", {
+        method: "DELETE",
+      }),
+      {
+        AETHERFLOW_ORIGIN: "https://api.example.test",
+        AETHERFLOW_INGRESS_TOKEN: "server-side-high-entropy-ingress-token",
+        CLIENT_RATE_LIMITER: {
+          idFromName() {
+            limiterLookups += 1;
+            return "unused";
+          },
+          get() {
+            throw new Error("unsupported method must not reach the limiter");
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET, HEAD, POST, OPTIONS");
+    assert.equal(limiterLookups, 0);
+    assert.equal(originCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("gateway fails closed when the shared Durable Object limiter throws", async () => {
+  let originCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    originCalls += 1;
+    return new Response("must not be called");
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/api/v1/workflow-runs", {
+        headers: { "CF-Connecting-IP": "203.0.113.5" },
+      }),
+      {
+        AETHERFLOW_ORIGIN: "https://api.example.test",
+        AETHERFLOW_INGRESS_TOKEN: "server-side-high-entropy-ingress-token",
+        CLIENT_RATE_LIMITER: {
+          idFromName(name) {
+            assert.match(name, /^[a-f0-9]{64}$/);
+            return name;
+          },
+          get() {
+            return {
+              async fetch() {
+                throw new Error("simulated Durable Object outage");
+              },
+            };
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "rate_limiter_unavailable");
+    assert.equal(originCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("origin redirects are rejected without exposing the origin Location header", async () => {
+  const env = {
+    AETHERFLOW_ORIGIN: "https://api.example.test",
+    AETHERFLOW_INGRESS_TOKEN: "server-side-high-entropy-ingress-token",
+    CLIENT_RATE_LIMITER: {
+      idFromName(name) { return name; },
+      get() {
+        return {
+          async fetch() {
+            return Response.json({ allowed: true, retry_after_seconds: 0 });
+          },
+        };
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, {
+    status: 302,
+    headers: { Location: "https://api.example.test/login" },
+  });
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/api/v1/workflow-runs", {
+        headers: { "CF-Connecting-IP": "203.0.113.5" },
+      }),
+      env,
+    );
+
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, "origin_redirect_rejected");
+    assert.equal(response.headers.has("location"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("origin transport failures return a generic no-store error", async () => {
+  const env = {
+    AETHERFLOW_ORIGIN: "https://api.example.test",
+    AETHERFLOW_INGRESS_TOKEN: "server-side-high-entropy-ingress-token",
+    CLIENT_RATE_LIMITER: {
+      idFromName(name) { return name; },
+      get() {
+        return {
+          async fetch() {
+            return Response.json({ allowed: true, retry_after_seconds: 0 });
+          },
+        };
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("internal origin hostname and connection detail");
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/api/v1/workflow-runs", {
+        headers: { "CF-Connecting-IP": "203.0.113.5" },
+      }),
+      env,
+    );
+
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const body = await response.text();
+    assert.match(body, /origin_unavailable/);
+    assert.doesNotMatch(body, /internal origin hostname|connection detail/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
