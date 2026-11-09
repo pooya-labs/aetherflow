@@ -60,6 +60,7 @@ fn component_from_checked_in_wit(execute_body: &str, data_segments: &str) -> Vec
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
+        false,
     )
     .expect("embed component type metadata");
 
@@ -159,6 +160,7 @@ fn ungranted_wasi_componentization_error() -> String {
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
+        false,
     )
     .expect("embed component type metadata");
 
