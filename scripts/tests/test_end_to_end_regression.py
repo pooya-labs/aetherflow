@@ -20,7 +20,7 @@ def fixture():
         "cpu_model": "AMD EPYC 9V45 96-Core Processor", "logical_cpus": 4,
         "memory_bytes": 16760340480, "rust_toolchain": "1.99.1",
         "postgres_server_version": "18.6 (Debian 18.6-1.pgdg13+2)", "nats_server_version": "2.12.15",
-        "workload": REFERENCE["workload"], "sample_count": 10,
+        "workload": REFERENCE["workload"], "repeat_count_per_shape": 5, "sample_count": 10,
     }
     rows = [
         {"shape": "fan_out", "repeat_count": 5, "outbox_events_per_run": 896,
@@ -63,6 +63,26 @@ class ComparatorTests(unittest.TestCase):
         metadata["workload"] = dict(metadata["workload"], payload_bytes=512)
         status, _ = module.compare(metadata, rows, REFERENCE)
         self.assertEqual(status, "skip")
+
+    def test_workload_mismatch_skips_after_validating_its_own_repeat_count(self):
+        metadata, rows = fixture()
+        metadata["workload"] = dict(metadata["workload"], payload_bytes=512)
+        metadata["repeat_count_per_shape"] = 4
+        metadata["sample_count"] = 8
+        for row in rows:
+            row["repeat_count"] = 4
+        status, _ = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "skip")
+
+    def test_matching_workload_requires_reference_repeat_count(self):
+        metadata, rows = fixture()
+        metadata["repeat_count_per_shape"] = 4
+        metadata["sample_count"] = 8
+        for row in rows:
+            row["repeat_count"] = 4
+        status, messages = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "fail")
+        self.assertIn("requires 5 repeats per shape", messages[0])
 
     def test_malformed_metrics_fail_even_when_runner_does_not_match(self):
         metadata, rows = fixture()
