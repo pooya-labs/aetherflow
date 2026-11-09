@@ -134,9 +134,23 @@ impl ApiClient {
             request = request.json(&body);
         }
 
-        let response = request.send().await?;
+        let mut response = request.send().await?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_HTTP_BODY_BYTES as u64)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control-plane response exceeds the 2 MiB HTTP body limit",
+            )
+            .into());
+        }
+
         let status = response.status();
-        let bytes = response.bytes().await?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            append_bounded_response_chunk(&mut bytes, &chunk)?;
+        }
         if !status.is_success() {
             let parsed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             let code = parsed.pointer("/error/code").and_then(Value::as_str);
@@ -153,6 +167,20 @@ impl ApiClient {
         }
         Ok(serde_json::from_slice(&bytes)?)
     }
+}
+
+fn append_bounded_response_chunk(
+    response_body: &mut Vec<u8>,
+    chunk: &[u8],
+) -> io::Result<()> {
+    if response_body.len().saturating_add(chunk.len()) > MAX_HTTP_BODY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "control-plane response exceeds the 2 MiB HTTP body limit",
+        ));
+    }
+    response_body.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn normalize_base_url(raw: &str) -> Result<Url, Box<dyn Error>> {
@@ -341,7 +369,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiClient, MAX_HTTP_BODY_BYTES, normalize_base_url, read_bounded, validate_identifier,
+        append_bounded_response_chunk, ApiClient, MAX_HTTP_BODY_BYTES, normalize_base_url,
+        read_bounded, validate_identifier,
     };
     use std::io::Cursor;
 
@@ -378,6 +407,16 @@ mod tests {
             read_bounded(Cursor::new(b"{\"ok\":true}".to_vec())).unwrap(),
             "{\"ok\":true}"
         );
+    }
+
+    #[test]
+    fn response_body_reader_accepts_the_limit_and_rejects_overflow() {
+        let mut response = vec![b'x'; MAX_HTTP_BODY_BYTES - 4];
+        append_bounded_response_chunk(&mut response, b"1234").expect("limit is inclusive");
+        assert_eq!(response.len(), MAX_HTTP_BODY_BYTES);
+
+        assert!(append_bounded_response_chunk(&mut response, b"5").is_err());
+        assert_eq!(response.len(), MAX_HTTP_BODY_BYTES);
     }
 
     #[test]
