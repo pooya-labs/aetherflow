@@ -50,16 +50,6 @@ def compare(
         for key, expected in expected_environment.items()
         if current_environment.get(key) != expected
     ]
-    if mismatches:
-        return "skip", [
-            "SKIP: runner fingerprint does not match the stored reference; no threshold was applied.",
-            *mismatches,
-        ]
-
-    if metadata.get("workload") != reference.get("workload"):
-        return "skip", [
-            "SKIP: workload parameters differ from the stored reference; artifact retained without comparison."
-        ]
 
     repeat_count = int(reference["repeat_count_per_shape"])
     expected_samples = 2 * repeat_count
@@ -86,8 +76,7 @@ def compare(
             f"FAIL: missing summary for {', '.join(missing_shapes)}"
         ]
 
-    messages: list[str] = []
-    failures: list[str] = []
+    validated_rows: dict[str, tuple[dict[str, Any], dict[str, Any], float, float]] = {}
     for shape in expected_shapes:
         row = by_shape[shape]
         policy = reference["shapes"].get(shape)
@@ -121,7 +110,26 @@ def compare(
             return "fail", [
                 f"FAIL: {shape} median p95 latency must be finite and positive"
             ]
+        validated_rows[shape] = (row, policy, throughput, p95)
 
+    # Validate artifact integrity before deciding to skip numeric comparison.
+    # A different runner/workload cannot be compared to the reference, but it
+    # must not turn malformed or incomplete benchmark output into a green run.
+    if mismatches:
+        return "skip", [
+            "SKIP: runner fingerprint does not match the stored reference; no threshold was applied.",
+            *mismatches,
+        ]
+
+    if metadata.get("workload") != reference.get("workload"):
+        return "skip", [
+            "SKIP: workload parameters differ from the stored reference; artifact retained without comparison."
+        ]
+
+    messages: list[str] = []
+    failures: list[str] = []
+    for shape in expected_shapes:
+        _, policy, throughput, p95 = validated_rows[shape]
         throughput_floor = float(policy["median_workflows_per_second"]) * (
             1.0 - float(policy["max_throughput_drop_percent"]) / 100.0
         )
@@ -148,7 +156,6 @@ def compare(
         "PASS: matched-fingerprint performance checks are within conservative limits.",
         *messages,
     ]
-
 
 def read_summary(path: Path) -> list[dict[str, Any]]:
     with path.open("r", newline="", encoding="utf-8") as handle:
