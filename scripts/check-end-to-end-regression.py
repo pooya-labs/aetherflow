@@ -157,6 +157,7 @@ def compare(
         *messages,
     ]
 
+
 def read_summary(path: Path) -> list[dict[str, Any]]:
     with path.open("r", newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
