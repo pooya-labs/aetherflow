@@ -37,12 +37,7 @@ struct OutboxEnvelope<'a> {
     payload: &'a serde_json::Value,
 }
 
-/// Publishes AetherFlow outbox events to a configured JetStream subject.
-///
-/// The subject must be captured by an existing JetStream stream. Stream
-/// provisioning, secret delivery, and server-side account/ACL policy remain
-/// deployment responsibilities. Use `NatsConnectionConfig` to establish the
-/// client connection with the configured credentials and TLS policy.
+/// Point-in-time counters for one publisher instance.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PublisherMetricsSnapshot {
     /// Publish futures that began executing.
@@ -129,7 +124,7 @@ impl Drop for PublishAttempt {
 /// deployment responsibilities. Use `NatsConnectionConfig` to establish the
 /// client connection with the configured credentials and TLS policy.
 ///
-//// Metrics are process-local snapshots shared by publisher clones. They are
+/// Metrics are process-local snapshots shared by publisher clones. They are
 /// not a cross-replica aggregate or an HTTP/Prometheus endpoint.
 #[derive(Clone)]
 pub struct NatsJetStreamPublisher {
