@@ -83,7 +83,7 @@ Remaining M08 work includes a fresh exact-source release-candidate CI matrix as 
 
 ## Current checkpoint
 
-**Latest merged main checkpoint:** commit [5cc44c1a7c91f0fd330a2055cc2e900b2d58a7c6](https://github.com/pooya-labs/aetherflow/commit/5cc44c1a7c91f0fd330a2055cc2e900b2d58a7c6), merging CLI response-body hardening PR #19.
+**Latest application-code checkpoint:** commit [5cc44c1a7c91f0fd330a2055cc2e900b2d58a7c6](https://github.com/pooya-labs/aetherflow/commit/5cc44c1a7c91f0fd330a2055cc2e900b2d58a7c6), merging CLI response-body hardening PR #19.
 
 - Documentation checkpoint [PR #17](https://github.com/pooya-labs/aetherflow/pull/17) merged as [99705b5](https://github.com/pooya-labs/aetherflow/commit/99705b56ddb79cd905bcb8c71c607a1c8adf58d4), keeping the PR #15/#16 verification record aligned.
 - Seeded lifecycle-model coverage [PR #18](https://github.com/pooya-labs/aetherflow/pull/18) merged as [7a5b75e](https://github.com/pooya-labs/aetherflow/commit/7a5b75ebe092fc59ed05bd0f2d2fa19333249d67). Its exact PR head `5e08a547c38349a2b469fed1b72a8f6de7885235` passed [Rust CI](https://github.com/pooya-labs/aetherflow/actions/runs/42652704967) and [security checks](https://github.com/pooya-labs/aetherflow/actions/runs/42652705049). The deterministic model walks 1,024 seeds × 64 transitions for both Workflow and Task lifecycles. Exact-merge-SHA main checks all passed: [Rust CI](https://github.com/pooya-labs/aetherflow/actions/runs/42656814488), [security](https://github.com/pooya-labs/aetherflow/actions/runs/42656814388), and [Pages](https://github.com/pooya-labs/aetherflow/actions/runs/42656812571).
