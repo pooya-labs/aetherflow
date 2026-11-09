@@ -64,6 +64,14 @@ class ComparatorTests(unittest.TestCase):
         status, _ = module.compare(metadata, rows, REFERENCE)
         self.assertEqual(status, "skip")
 
+    def test_malformed_metrics_fail_even_when_runner_does_not_match(self):
+        metadata, rows = fixture()
+        metadata["cpu_model"] = "AMD EPYC 7763 64-Core Processor"
+        rows[0]["median_workflows_per_second"] = float("nan")
+        status, messages = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "fail")
+        self.assertIn("throughput must be finite and positive", messages[0])
+
     def test_incomplete_sample_count_fails(self):
         metadata, rows = fixture()
         metadata["sample_count"] = 8
