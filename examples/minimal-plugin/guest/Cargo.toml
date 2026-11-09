@@ -9,7 +9,7 @@ description = "Minimal AetherFlow ABI v1 WebAssembly plugin guest."
 publish = false
 
 [dependencies]
-wit-bindgen = "=0.60.0"
+wit-bindgen = "=0.63.0"
 
 [lib]
 crate-type = ["cdylib"]
