@@ -16,7 +16,7 @@ AetherFlow is a public engineering project exploring reliable asynchronous execu
 >
 > The no-Origin Cloudflare Free profile is deployed and executes only its bounded built-in task set. The owner-deployed Apps Script profile persists synthetic control-plane records in a private Spreadsheet but does not execute tasks. Its checked-in source keeps new storage-only workflow and task rows pending; the live Apps Script deployment still needs the owner to copy the checked-in apps-script/Code.gs and publish a new Web App version. Retain the existing Spreadsheet and /exec URL; do not rerun setup.
 >
-> The docs-only main commit [5874f6b](https://github.com/pooya-labs/aetherflow/commit/5874f6b99f880296cb23c043e879114b9f114ff8) updates README and ROADMAP; its Pages deployment [42630967398](https://github.com/pooya-labs/aetherflow/actions/runs/42630967398) and supply-chain/security check [42630969014](https://github.com/pooya-labs/aetherflow/actions/runs/42630969014) passed. Its Rust CI [42630968897](https://github.com/pooya-labs/aetherflow/actions/runs/42630968897) passed workspace tests, with the Release workspace build and remaining WASM/docs checks in progress at the time of this checkpoint.
+> The documentation checkpoint [5874f6b](https://github.com/pooya-labs/aetherflow/commit/5874f6b99f880296cb23c043e879114b9f114ff8) is historical; the newer exact-main verification on `00dc8706871712209c0edc746fd540cdc6ad9c85` is fully green as detailed above.
 >
 > Owner-attribution PR #9 has been merged. The official Pooya Labs monogram and owner links are now on main, the product site and dashboard. All 12 Chromium desktop/mobile checks passed on the PR, and the post-merge exact-SHA browser run also passed.
 >
