@@ -39,6 +39,18 @@ class ComparatorTests(unittest.TestCase):
         status, _ = module.compare(metadata, rows, REFERENCE)
         self.assertEqual(status, "pass")
 
+    def test_exact_throughput_and_latency_thresholds_are_inclusive(self):
+        metadata, rows = fixture()
+        fan_out_policy = REFERENCE["shapes"]["fan_out"]
+        rows[0]["median_workflows_per_second"] = (
+            fan_out_policy["median_workflows_per_second"] * 0.90
+        )
+        rows[0]["median_p95_workflow_ms"] = (
+            fan_out_policy["median_p95_workflow_ms"] * 1.15
+        )
+        status, _ = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "pass")
+
     def test_different_cpu_skips_without_failing(self):
         metadata, rows = fixture()
         metadata["cpu_model"] = "AMD EPYC 7763 64-Core Processor"
@@ -69,6 +81,46 @@ class ComparatorTests(unittest.TestCase):
         rows[1]["median_p95_workflow_ms"] = 10000
         status, _ = module.compare(metadata, rows, REFERENCE)
         self.assertEqual(status, "fail")
+
+    def test_non_finite_throughput_fails_closed(self):
+        for value in (float("nan"), float("inf"), float("-inf"), 0.0, -1.0):
+            with self.subTest(value=value):
+                metadata, rows = fixture()
+                rows[0]["median_workflows_per_second"] = value
+                status, messages = module.compare(metadata, rows, REFERENCE)
+                self.assertEqual(status, "fail")
+                self.assertIn("throughput must be finite and positive", messages[0])
+
+    def test_non_finite_or_non_positive_latency_fails_closed(self):
+        for value in (float("nan"), float("inf"), float("-inf"), 0.0, -1.0):
+            with self.subTest(value=value):
+                metadata, rows = fixture()
+                rows[1]["median_p95_workflow_ms"] = value
+                status, messages = module.compare(metadata, rows, REFERENCE)
+                self.assertEqual(status, "fail")
+                self.assertIn("p95 latency must be finite and positive", messages[0])
+
+    def test_duplicate_summary_shape_fails(self):
+        metadata, rows = fixture()
+        rows.append(dict(rows[0]))
+        status, messages = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "fail")
+        self.assertIn("duplicate fan_out", messages[0])
+
+    def test_unexpected_summary_shape_fails(self):
+        metadata, rows = fixture()
+        rows.append(dict(rows[0], shape="unexpected"))
+        status, messages = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "fail")
+        self.assertIn("unsupported summary shape", messages[0])
+
+    def test_empty_or_unreconciled_events_fail(self):
+        metadata, rows = fixture()
+        rows[0]["outbox_events_per_run"] = 0
+        rows[0]["inbox_events_per_run"] = 0
+        status, messages = module.compare(metadata, rows, REFERENCE)
+        self.assertEqual(status, "fail")
+        self.assertIn("empty or do not reconcile", messages[0])
 
     def test_duplicate_or_unreconciled_events_fail(self):
         metadata, rows = fixture()
