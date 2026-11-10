@@ -77,7 +77,14 @@ export AETHERFLOW_LOAD_SHAPE=chain
 cargo +1.99.1 run --locked -p aetherflow-transport-nats --example end_to_end_load
 ```
 
-The PowerShell equivalent is the same two environment assignments using `$env:AETHERFLOW_LOAD_DATABASE_URL` and `$env:AETHERFLOW_LOAD_SHAPE`.
+PowerShell equivalent:
+
+```powershell
+$env:AETHERFLOW_LOAD_DATABASE_URL = "postgres://aetherflow_admin:local-only-admin-password-change-me@127.0.0.1:5432/aetherflow_demo_chain"
+$env:AETHERFLOW_LOAD_NATS_URL = "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224"
+$env:AETHERFLOW_LOAD_SHAPE = "chain"
+cargo +1.99.1 run --locked -p aetherflow-transport-nats --example end_to_end_load
+```
 
 ## What a successful run proves
 
