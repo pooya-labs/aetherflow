@@ -6,7 +6,6 @@
 //! key or a transaction that includes inbox completion.
 
 use super::append_prometheus_metric;
-use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
