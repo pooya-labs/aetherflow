@@ -13,12 +13,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -249,10 +249,7 @@ struct WorkerMetricsState {
     token_hash: [u8; 32],
 }
 
-fn worker_metrics_authorization_matches(
-    expected: &[u8; 32],
-    headers: &HeaderMap,
-) -> bool {
+fn worker_metrics_authorization_matches(expected: &[u8; 32], headers: &HeaderMap) -> bool {
     let Some(value) = headers
         .get(AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
@@ -282,14 +279,12 @@ async fn export_worker_metrics(
 ) -> Response {
     if !worker_metrics_authorization_matches(&state.token_hash, &headers) {
         let mut response = StatusCode::UNAUTHORIZED.into_response();
-        response.headers_mut().insert(
-            WWW_AUTHENTICATE,
-            HeaderValue::from_static("Bearer"),
-        );
-        response.headers_mut().insert(
-            CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        );
+        response
+            .headers_mut()
+            .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return response;
     }
 
@@ -329,7 +324,6 @@ async fn run_metrics_server(
         .await
         .map_err(|error| format!("Prometheus metrics listener: {error}"))
 }
-
 
 fn postgres_manager(database_url: &str, ssl_mode: SslMode) -> Result<Manager, Box<dyn Error>> {
     ensure_rustls_crypto_provider()?;
@@ -515,10 +509,7 @@ fn transport_join_failure(
 async fn run() -> Result<(), Box<dyn Error>> {
     let metrics_config = metrics_server_config_from_env()?;
     let metrics_listener = match metrics_config {
-        Some(config) => Some((
-            TcpListener::bind(config.bind).await?,
-            config.token_hash,
-        )),
+        Some(config) => Some((TcpListener::bind(config.bind).await?, config.token_hash)),
         None => None,
     };
     let database_url = required_env("DATABASE_URL")?;
@@ -689,9 +680,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 run_metrics_server(listener, metrics_state, metrics_shutdown).await,
             )
         });
-        println!(
-            "metrics_endpoint=http://{bind}/metrics (loopback-only; Bearer token required)"
-        );
+        println!("metrics_endpoint=http://{bind}/metrics (loopback-only; Bearer token required)");
     } else {
         println!(
             "metrics_endpoint=disabled (set AETHERFLOW_METRICS_BIND and AETHERFLOW_METRICS_TOKEN to enable)"
@@ -817,15 +806,15 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        fail_once_output, hash_metrics_token, json_add_payload, parse_database_ssl_mode,
-        parse_metrics_server_config, postgres_manager, worker_metrics_router, ConsumerMetrics,
-        PublisherMetrics, WorkerMetricsState, uppercase_payload,
+        ConsumerMetrics, PublisherMetrics, WorkerMetricsState, fail_once_output, hash_metrics_token,
+        json_add_payload, parse_database_ssl_mode, parse_metrics_server_config, postgres_manager,
+        uppercase_payload, worker_metrics_router,
     };
-    use axum::body::{to_bytes, Body};
+    use aetherflow_runtime::scheduler::TaskExecutionError;
+    use axum::body::{Body, to_bytes};
     use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
-    use aetherflow_runtime::scheduler::TaskExecutionError;
     use deadpool_postgres::Pool;
     use tokio_postgres::config::SslMode;
 
@@ -841,27 +830,17 @@ mod tests {
         assert!(parse_metrics_server_config(None, Some(TEST_METRICS_TOKEN)).is_err());
         assert!(parse_metrics_server_config(Some("127.0.0.1:9464"), None).is_err());
         assert!(
-            parse_metrics_server_config(
-                Some("0.0.0.0:9464"),
-                Some(TEST_METRICS_TOKEN)
-            )
-            .is_err()
+            parse_metrics_server_config(Some("0.0.0.0:9464"), Some(TEST_METRICS_TOKEN)).is_err()
         );
-        assert!(
-            parse_metrics_server_config(
-                Some("127.0.0.1:9464"),
-                Some("too-short")
-            )
-            .is_err()
-        );
+        assert!(parse_metrics_server_config(Some("127.0.0.1:9464"), Some("too-short")).is_err());
 
-        let config = parse_metrics_server_config(
-            Some("127.0.0.1:9464"),
-            Some(TEST_METRICS_TOKEN),
-        )
-        .expect("valid loopback metrics configuration")
-        .expect("metrics listener enabled");
-        assert_eq!(config.bind, "127.0.0.1:9464".parse().expect("socket address"));
+        let config = parse_metrics_server_config(Some("127.0.0.1:9464"), Some(TEST_METRICS_TOKEN))
+            .expect("valid loopback metrics configuration")
+            .expect("metrics listener enabled");
+        assert_eq!(
+            config.bind,
+            "127.0.0.1:9464".parse().expect("socket address")
+        );
         assert_eq!(
             config.token_hash,
             hash_metrics_token(TEST_METRICS_TOKEN).expect("hash valid token")
@@ -928,7 +907,10 @@ mod tests {
             .expect("authenticated metrics response");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()),
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
             Some("text/plain; version=0.0.4; charset=utf-8")
         );
         assert_eq!(
