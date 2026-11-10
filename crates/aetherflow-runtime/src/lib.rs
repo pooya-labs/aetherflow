@@ -8,4 +8,5 @@ pub mod scheduler;
 pub mod wasm;
 pub mod workflow;
 
+pub use aetherflow_wasm::{CapabilitySet, ExecutionLimits, WasmPluginRuntime};
 pub use wasm::{PluginLogSink, WasmTaskHandler};
