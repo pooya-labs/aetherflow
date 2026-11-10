@@ -895,6 +895,26 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer")
         );
+        assert_eq!(
+            unauthorized
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+
+        let invalid_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, "Bearer definitely-not-the-configured-token")
+                    .body(Body::empty())
+                    .expect("valid wrong-token metrics request"),
+            )
+            .await
+            .expect("wrong-token metrics response");
+        assert_eq!(invalid_token.status(), StatusCode::UNAUTHORIZED);
 
         let response = app
             .oneshot(
@@ -910,6 +930,20 @@ mod tests {
         assert_eq!(
             response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()),
             Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|value| value.to_str().ok()),
+            Some("nosniff")
         );
 
         let body = to_bytes(response.into_body(), 64 * 1024)
