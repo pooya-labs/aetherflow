@@ -2,7 +2,7 @@
 
 This directory contains the edge ingress for the AetherFlow HTTP API. It is designed to sit in front of one HTTPS API origin and to enforce a shared, per-client rate limit before forwarding traffic.
 
-**Deployment status: source and CI tests are present; no live route is enabled.** The Cloudflare account currently has no active Zone or Tunnel, and AetherFlow has no verified API origin configured. The Worker configuration deliberately sets `workersDev: false` and disables preview URLs so an incomplete proxy is not publicly reachable.
+**Deployment status: source and CI tests are present; no live Gateway route is enabled.** The Cloudflare account currently has no active Zone or Tunnel, and AetherFlow has no verified API origin configured. The Worker configuration deliberately sets `workersDev: false` and disables preview URLs so an incomplete proxy is not publicly reachable. No custom domain needs to be purchased for a free hobby/test route: after a real HTTPS API origin and matching ingress secret exist, the Worker can be exposed on the account's `workers.dev` subdomain. Cloudflare describes `workers.dev` as suitable for personal/hobby projects, not business-critical production. This route does not make the Rust API origin optional.
 
 ## Hosted CI evidence
 
@@ -124,8 +124,8 @@ Do not commit this file. The repository's root `.gitignore` excludes `.env.*` fi
 1. Deploy the AetherFlow API on an HTTPS origin and configure `AETHERFLOW_INGRESS_TOKEN` in its secret manager. A non-loopback Rust bind now refuses to start without the token.
 2. Restrict origin network access to Cloudflare egress or connect the origin through a Cloudflare Tunnel. The API-side token is an additional bypass control, not a reason to leave an origin unnecessarily exposed.
 3. Replace the placeholder `AETHERFLOW_ORIGIN` with the verified API origin and set the matching Worker Secret.
-4. Install and authenticate the Cloudflare CLI (`cf`) and deploy this directory's `cloudflare.config.ts`. The config keeps workers.dev and preview routes disabled.
-5. After validation, attach a production hostname through an active Cloudflare Zone. The account currently has no active Zone, so no production route can be attached yet.
+4. Install and authenticate the Cloudflare CLI (`cf`) and deploy this directory's `cloudflare.config.ts`. Keep `workersDev: false` until the verified API origin and matching secret are provisioned. For a free hobby/test exposure, a reviewed follow-up can enable the account's `workers.dev` subdomain without buying a custom domain; this is not a business-critical production hostname.
+5. A custom hostname requires an active Cloudflare Zone; it is optional for the free `workers.dev` hobby/test route. Do not buy or onboard a domain solely to test this Gateway.
 6. Verify 401/403/429 behavior, direct-origin rejection without the ingress token, cross-replica rate limits, TLS validation, request-size limits, and controlled workflow submission before opening traffic.
 
 ## Usage and free-tier note
