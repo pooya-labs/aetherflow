@@ -31,8 +31,8 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tokio_postgres::config::SslMode;
 use tokio_postgres::Config as PostgresConfig;
+use tokio_postgres::config::SslMode;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 const DEFAULT_NATS_URLS: &str = "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224";
@@ -127,7 +127,6 @@ fn parse_nats_seeds(urls: &str) -> Result<Vec<ServerAddr>, Box<dyn Error>> {
     Ok(seeds)
 }
 
-
 fn ensure_rustls_crypto_provider() -> Result<(), io::Error> {
     static INITIALIZATION: OnceLock<()> = OnceLock::new();
 
@@ -162,10 +161,7 @@ fn database_ssl_mode() -> Result<SslMode, io::Error> {
     parse_database_ssl_mode(std::env::var("DATABASE_SSL_MODE").ok().as_deref())
 }
 
-fn postgres_manager(
-    database_url: &str,
-    ssl_mode: SslMode,
-) -> Result<Manager, Box<dyn Error>> {
+fn postgres_manager(database_url: &str, ssl_mode: SslMode) -> Result<Manager, Box<dyn Error>> {
     ensure_rustls_crypto_provider()?;
 
     let tls = if ssl_mode == SslMode::Disable {
@@ -626,7 +622,6 @@ mod tests {
     use aetherflow_runtime::scheduler::TaskExecutionError;
     use deadpool_postgres::Pool;
     use tokio_postgres::config::SslMode;
-
 
     #[test]
     fn database_tls_defaults_to_required_and_accepts_only_supported_modes() {
