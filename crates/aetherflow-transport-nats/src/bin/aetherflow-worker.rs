@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aetherflow_core::domain::{NodeId, NodeIncarnationId, TaskId, WorkerId};
@@ -31,7 +31,9 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tokio_postgres::{Config as PostgresConfig, NoTls};
+use tokio_postgres::Config as PostgresConfig;
+use tokio_postgres::config::SslMode;
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 const DEFAULT_NATS_URLS: &str = "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224";
 const WORKER_LEASE: Duration = Duration::from_secs(30);
@@ -123,6 +125,80 @@ fn parse_nats_seeds(urls: &str) -> Result<Vec<ServerAddr>, Box<dyn Error>> {
         .into());
     }
     Ok(seeds)
+}
+
+fn ensure_rustls_crypto_provider() -> Result<(), io::Error> {
+    static INITIALIZATION: OnceLock<()> = OnceLock::new();
+
+    INITIALIZATION.get_or_init(|| {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+    });
+
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "unable to install the rustls ring crypto provider",
+        ))
+    }
+}
+
+fn parse_database_ssl_mode(value: Option<&str>) -> Result<SslMode, io::Error> {
+    match value.unwrap_or("require") {
+        "disable" => Ok(SslMode::Disable),
+        "prefer" => Ok(SslMode::Prefer),
+        "require" => Ok(SslMode::Require),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DATABASE_SSL_MODE must be disable, prefer or require",
+        )),
+    }
+}
+
+fn database_ssl_mode() -> Result<SslMode, io::Error> {
+    parse_database_ssl_mode(std::env::var("DATABASE_SSL_MODE").ok().as_deref())
+}
+
+fn postgres_manager(database_url: &str, ssl_mode: SslMode) -> Result<Manager, Box<dyn Error>> {
+    ensure_rustls_crypto_provider()?;
+
+    let tls = if ssl_mode == SslMode::Disable {
+        MakeRustlsConnect::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth(),
+        )
+    } else {
+        let (tls, certificate_warnings) =
+            MakeRustlsConnect::with_native_certs().map_err(|errors| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "unable to load a trusted PostgreSQL CA certificate store ({} errors)",
+                        errors.len()
+                    ),
+                )
+            })?;
+        if !certificate_warnings.is_empty() {
+            eprintln!(
+                "PostgreSQL native certificate loader reported {} warning(s); valid certificates were retained.",
+                certificate_warnings.len()
+            );
+        }
+        tls
+    };
+
+    let mut config: PostgresConfig = database_url.parse()?;
+    config.ssl_mode(ssl_mode);
+    Ok(Manager::from_config(
+        config,
+        tls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    ))
 }
 
 fn uppercase_payload(input: &[u8]) -> Result<Vec<u8>, TaskExecutionError> {
@@ -274,14 +350,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     // The worker deliberately does not run DDL. The control-plane server owns
     // migrations; the worker starts only after the schema has been provisioned.
-    let postgres_config: PostgresConfig = database_url.parse()?;
-    let manager = Manager::from_config(
-        postgres_config,
-        NoTls,
-        ManagerConfig {
-            recycling_method: RecyclingMethod::Fast,
-        },
-    );
+    let manager = postgres_manager(&database_url, database_ssl_mode()?)?;
     let pool = Pool::builder(manager).max_size(pool_size).build()?;
     PgStore::from_pool(pool.clone()).check_connection().await?;
     let client = pool.get().await?;
@@ -546,8 +615,86 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{fail_once_output, json_add_payload, uppercase_payload};
+    use super::{
+        fail_once_output, json_add_payload, parse_database_ssl_mode, postgres_manager,
+        uppercase_payload,
+    };
     use aetherflow_runtime::scheduler::TaskExecutionError;
+    use deadpool_postgres::Pool;
+    use tokio_postgres::config::SslMode;
+
+    #[test]
+    fn database_tls_defaults_to_required_and_accepts_only_supported_modes() {
+        assert_eq!(
+            parse_database_ssl_mode(None).expect("default TLS mode"),
+            SslMode::Require
+        );
+        assert_eq!(
+            parse_database_ssl_mode(Some("disable")).expect("disabled TLS mode"),
+            SslMode::Disable
+        );
+        assert_eq!(
+            parse_database_ssl_mode(Some("prefer")).expect("preferred TLS mode"),
+            SslMode::Prefer
+        );
+        assert_eq!(
+            parse_database_ssl_mode(Some("require")).expect("required TLS mode"),
+            SslMode::Require
+        );
+        assert!(parse_database_ssl_mode(Some("verify-full")).is_err());
+        assert!(parse_database_ssl_mode(Some("unknown")).is_err());
+    }
+
+    #[tokio::test]
+    async fn worker_postgres_rustls_accepts_trusted_ca_and_rejects_wrong_hostname() {
+        let Ok(database_url) = std::env::var("AETHERFLOW_TLS_TEST_DATABASE_URL") else {
+            eprintln!("AETHERFLOW_TLS_TEST_DATABASE_URL is not set; skipping PostgreSQL TLS test");
+            return;
+        };
+        let Ok(hostname_mismatch_url) =
+            std::env::var("AETHERFLOW_TLS_HOSTNAME_MISMATCH_DATABASE_URL")
+        else {
+            eprintln!(
+                "AETHERFLOW_TLS_HOSTNAME_MISMATCH_DATABASE_URL is not set; skipping PostgreSQL TLS test"
+            );
+            return;
+        };
+
+        let trusted_manager =
+            postgres_manager(&database_url, SslMode::Require).expect("build trusted TLS manager");
+        let trusted_pool = Pool::builder(trusted_manager)
+            .max_size(1)
+            .build()
+            .expect("build trusted TLS pool");
+        let trusted_client = trusted_pool
+            .get()
+            .await
+            .expect("connect through trusted PostgreSQL TLS");
+        let row = trusted_client
+            .query_one(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await
+            .expect("inspect PostgreSQL TLS session");
+        assert!(
+            row.get::<_, bool>(0),
+            "worker PostgreSQL connection must use TLS"
+        );
+        drop(trusted_client);
+        drop(trusted_pool);
+
+        let mismatch_manager = postgres_manager(&hostname_mismatch_url, SslMode::Require)
+            .expect("build hostname-mismatch TLS manager");
+        let mismatch_pool = Pool::builder(mismatch_manager)
+            .max_size(1)
+            .build()
+            .expect("build hostname-mismatch TLS pool");
+        assert!(
+            mismatch_pool.get().await.is_err(),
+            "worker PostgreSQL TLS must reject a trusted certificate with the wrong hostname"
+        );
+    }
 
     #[test]
     fn uppercase_handler_supports_utf8_and_rejects_invalid_bytes() {

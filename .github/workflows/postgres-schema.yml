@@ -271,6 +271,9 @@ jobs:
       - name: Run PostgreSQL-backed HTTP API and TLS integration tests
         run: cargo +1.99.1 test -p aetherflow-server --locked -- --test-threads=1
 
+      - name: Verify standalone worker PostgreSQL TLS trust and hostname validation
+        run: cargo +1.99.1 test -p aetherflow-transport-nats --bin aetherflow-worker --locked worker_postgres_rustls -- --test-threads=1
+
       - name: Start three-node NATS JetStream cluster
         run: |
           docker network create aetherflow-nats-cluster
