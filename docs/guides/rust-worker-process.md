@@ -62,6 +62,8 @@ Open a third PowerShell window in the repository root. Use the restricted runtim
 
 ```powershell
 $runtimePassword = "PASTE_THE_SAME_AETHERFLOW_RUNTIME_PASSWORD"
+# The local Compose PostgreSQL instance does not use TLS.
+$env:DATABASE_SSL_MODE = "disable"
 $env:DATABASE_URL = "postgres://aetherflow_runtime:$runtimePassword@127.0.0.1:5432/aetherflow_dev"
 $env:AETHERFLOW_NATS_URLS = "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224"
 
@@ -111,7 +113,7 @@ Optional settings:
 | `AETHERFLOW_NATS_DURABLE` | `aetherflow_worker_events` | Durable pull-consumer name |
 | `AETHERFLOW_WASM_PLUGIN_PATH` | unset | Optional compiled AetherFlow ABI v1 component artifact |
 
-The local worker config currently provisions a three-replica stream to match the repository's three-node Compose cluster. For a remote cluster, configure NATS credentials/TLS using the existing `AETHERFLOW_NATS_*` connection settings and review the stream topology before starting the worker. This first worker milestone uses PostgreSQL `NoTls` and is intended for local/private networks, not a public production database connection.
+The local worker config currently provisions a three-replica stream to match the repository's three-node Compose cluster. For a remote cluster, configure NATS credentials/TLS using the existing `AETHERFLOW_NATS_*` connection settings and review the stream topology before starting the worker. PostgreSQL connections use the same Rustls/native-CA validation path as the API: `DATABASE_SSL_MODE` accepts `require` (the default), `prefer`, or `disable`. Use `disable` only for the local Compose database shown above; keep TLS verification enabled for remote databases and trust their issuing CA through the host certificate store.
 
 ## Submit a workflow
 
