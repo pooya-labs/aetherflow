@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
@@ -20,7 +21,6 @@ use axum::routing::get;
 use axum::Router;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aetherflow_core::domain::{NodeId, NodeIncarnationId, TaskId, WorkerId};
 use aetherflow_runtime::repository::TaskOutput;
@@ -889,8 +889,11 @@ mod tests {
             .expect("unauthorized metrics response");
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
-            unauthorized.headers().get(WWW_AUTHENTICATE),
-            Some(&"Bearer".parse().expect("valid auth challenge"))
+            unauthorized
+                .headers()
+                .get(WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer")
         );
 
         let response = app
