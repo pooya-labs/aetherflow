@@ -217,7 +217,7 @@ jobs:
           database_ready=false
           for attempt in $(seq 1 60); do
             if docker exec --user postgres aetherflow-postgres-tls \
-              pg_isready --username aetherflow_tls --dbname aetherflow_tls_test; then
+              pg_isready --host 127.0.0.1 --username aetherflow_tls --dbname aetherflow_tls_test; then
               database_ready=true
               break
             fi
