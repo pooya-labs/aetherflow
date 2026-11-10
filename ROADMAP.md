@@ -87,7 +87,7 @@ Remaining M08 work includes a fresh exact-source release-candidate CI matrix as 
 
 ### Open PR #32 — authenticated loopback Prometheus endpoint for the Rust worker (validation pending)
 
-- [PR #32](https://github.com/pooya-labs/aetherflow/pull/31) proposes an opt-in `GET /metrics` listener in `aetherflow-worker`, combining the process-local NATS publisher and consumer counters owned by that worker process.
+- [PR #32](https://github.com/pooya-labs/aetherflow/pull/32) proposes an opt-in `GET /metrics` listener in `aetherflow-worker`, combining the process-local NATS publisher and consumer counters owned by that worker process.
 - The endpoint is disabled by default and requires both `AETHERFLOW_METRICS_BIND` and `AETHERFLOW_METRICS_TOKEN`. The configured numeric socket address must be loopback; the token must be 32–256 URL-safe characters. Only its SHA-256 digest is held in memory and comparisons use constant-time equality.
 - The handler returns fixed-name Prometheus exposition without tenant/workflow/task/event/subject/payload labels. Unauthorized requests return 401; successful responses are marked no-store and nosniff. The metrics listener is part of the worker's graceful shutdown and fails the worker if the listener exits unexpectedly.
 - Tests cover opt-in configuration, non-loopback rejection, weak/missing token rejection, unauthenticated 401, and the successful scrape body. The guide documents PowerShell setup. These checks are authored but **not yet CI-verified** on the current PR head.
