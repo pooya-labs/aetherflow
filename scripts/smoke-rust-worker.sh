@@ -114,16 +114,17 @@ fi
 psql "$AETHERFLOW_TEST_DATABASE_URL" \
   --no-psqlrc --set ON_ERROR_STOP=1 \
   --set "task_worker_id=$task_worker_id" \
-  --set "transport_worker_id=$transport_worker_id" \
-  --command "INSERT INTO worker_tenant_grants (tenant_id, worker_id, status)
-             VALUES
-               ('legacy-default', :'task_worker_id', 'active'),
-               ('legacy-default', :'transport_worker_id', 'active')
-             ON CONFLICT (tenant_id, worker_id) DO UPDATE
-             SET status = 'active',
-                 granted_at = clock_timestamp(),
-                 expires_at = NULL,
-                 revoked_at = NULL"
+  --set "transport_worker_id=$transport_worker_id" <<'SQL'
+INSERT INTO worker_tenant_grants (tenant_id, worker_id, status)
+VALUES
+  ('legacy-default', :'task_worker_id', 'active'),
+  ('legacy-default', :'transport_worker_id', 'active')
+ON CONFLICT (tenant_id, worker_id) DO UPDATE
+SET status = 'active',
+    granted_at = clock_timestamp(),
+    expires_at = NULL,
+    revoked_at = NULL;
+SQL
 echo "Granted legacy-default to the two registered demo workers."
 
 input_base64="$(printf '%s' '{"a":19,"b":23}' | base64 --wrap=0)"
@@ -185,8 +186,13 @@ fi
 
 output_hex="$(psql "$AETHERFLOW_TEST_DATABASE_URL" \
   --no-psqlrc --no-align --tuples-only --set ON_ERROR_STOP=1 \
-  --set "task_run_id=$task_run_id" \
-  --command "SELECT encode(output_payload, 'hex') FROM task_runs WHERE tenant_id = 'legacy-default' AND task_run_id = :'task_run_id'")"
+  --set "task_run_id=$task_run_id" <<'SQL'
+SELECT encode(output_payload, 'hex')
+FROM task_runs
+WHERE tenant_id = 'legacy-default'
+  AND task_run_id = :'task_run_id';
+SQL
+)"
 if [[ "$output_hex" != "3432" ]]; then
   echo "Expected task output bytes for 42 (3432); received: $output_hex" >&2
   exit 1
@@ -197,8 +203,21 @@ for attempt in $(seq 1 60); do
   processed_count="$(psql "$AETHERFLOW_TEST_DATABASE_URL" \
     --no-psqlrc --no-align --tuples-only --set ON_ERROR_STOP=1 \
     --set "task_run_id=$task_run_id" \
-    --set "consumer_name=$durable_name" \
-    --command "SELECT count(*) FROM outbox_events AS event JOIN consumer_inbox AS inbox ON inbox.tenant_id = event.tenant_id AND inbox.event_id = event.event_id::text WHERE event.tenant_id = 'legacy-default' AND event.aggregate_type = 'task_run' AND event.aggregate_id = :'task_run_id' AND event.event_type = 'task.succeeded' AND event.published_at IS NOT NULL AND inbox.consumer_name = :'consumer_name' AND inbox.status = 'processed'")"
+    --set "consumer_name=$durable_name" <<'SQL'
+SELECT count(*)
+FROM outbox_events AS event
+JOIN consumer_inbox AS inbox
+  ON inbox.tenant_id = event.tenant_id
+ AND inbox.event_id = event.event_id::text
+WHERE event.tenant_id = 'legacy-default'
+  AND event.aggregate_type = 'task_run'
+  AND event.aggregate_id = :'task_run_id'
+  AND event.event_type = 'task.succeeded'
+  AND event.published_at IS NOT NULL
+  AND inbox.consumer_name = :'consumer_name'
+  AND inbox.status = 'processed';
+SQL
+)"
   if [[ "$processed_count" -ge 1 ]]; then
     transport_processed=true
     break
