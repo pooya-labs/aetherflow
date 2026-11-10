@@ -15,6 +15,7 @@ pub use consumer::{
     JetStreamEventHandler, NatsConsumerError, NatsJetStreamConsumer,
 };
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -23,6 +24,19 @@ use aetherflow_storage_postgres::{
 };
 use async_nats::jetstream::Context;
 use serde::Serialize;
+
+/// Appends one fixed-name Prometheus sample without caller-controlled labels.
+pub(crate) fn append_prometheus_metric(
+    output: &mut String,
+    name: &str,
+    metric_type: &str,
+    help: &str,
+    value: usize,
+) {
+    writeln!(output, "# HELP {name} {help}").expect("write Prometheus help");
+    writeln!(output, "# TYPE {name} {metric_type}").expect("write Prometheus type");
+    writeln!(output, "{name} {value}").expect("write Prometheus sample");
+}
 
 /// JetStream envelope format published by AetherFlow.
 #[derive(Serialize)]
@@ -78,6 +92,53 @@ impl PublisherMetrics {
             interrupted: self.inner.interrupted.load(Ordering::Relaxed),
             in_flight: self.inner.in_flight.load(Ordering::Relaxed),
         }
+    }
+
+    /// Renders this publisher instance's snapshot in Prometheus text exposition format.
+    ///
+    /// The caller must expose this output through its own authenticated or
+    /// network-restricted metrics listener. This method does not start a server,
+    /// aggregate other publisher instances, or add tenant/event labels.
+    #[must_use]
+    pub fn render_prometheus(&self) -> String {
+        let snapshot = self.snapshot();
+        let mut output = String::new();
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_publisher_attempts_started_total",
+            "counter",
+            "Publish futures that began executing.",
+            snapshot.attempts_started,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_publisher_confirmed_total",
+            "counter",
+            "Publishes confirmed as stored by JetStream.",
+            snapshot.confirmed,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_publisher_failed_total",
+            "Publish attempts that returned an error.",
+            "counter",
+            snapshot.failed,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_publisher_interrupted_total",
+            "Started publish futures dropped before a final outcome was observed.",
+            "counter",
+            snapshot.interrupted,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_publisher_in_flight",
+            "Publish futures currently executing.",
+            "gauge",
+            snapshot.in_flight,
+        );
+        output
     }
 }
 
@@ -240,6 +301,14 @@ mod tests {
                 in_flight: 0,
             }
         );
+        let exposition = metrics.render_prometheus();
+        assert!(exposition.contains("# TYPE aetherflow_nats_publisher_confirmed_total counter"));
+        assert!(exposition.contains("aetherflow_nats_publisher_confirmed_total 1"));
+        assert!(exposition.contains("aetherflow_nats_publisher_failed_total 1"));
+        assert!(exposition.contains("aetherflow_nats_publisher_interrupted_total 1"));
+        assert!(exposition.contains("# TYPE aetherflow_nats_publisher_in_flight gauge"));
+        assert!(exposition.contains("aetherflow_nats_publisher_in_flight 0"));
+        assert!(!exposition.contains('{'));
     }
 
     #[test]
