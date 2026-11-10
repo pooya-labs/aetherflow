@@ -744,6 +744,12 @@ jobs:
           ROLLBACK;
           SQL
 
+      - name: Install Go 1.25 toolchain for NATS CLI
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.0"
+          cache: false
+
       - name: Install pinned NATS CLI v0.4.0 from the Go module proxy
         shell: bash
         run: |
