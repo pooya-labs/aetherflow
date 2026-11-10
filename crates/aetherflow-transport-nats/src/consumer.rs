@@ -5,6 +5,7 @@
 //! Handler side effects outside PostgreSQL still require their own idempotency
 //! key or a transaction that includes inbox completion.
 
+use super::append_prometheus_metric;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -139,6 +140,67 @@ impl ConsumerMetrics {
             storage_failures: self.storage_failures.load(Ordering::Relaxed),
             protocol_failures: self.protocol_failures.load(Ordering::Relaxed),
         }
+    }
+
+    /// Renders this consumer instance's snapshot in Prometheus text exposition format.
+    ///
+    /// The caller must expose this output through its own authenticated or
+    /// network-restricted metrics listener. This method does not start a server,
+    /// aggregate other consumer instances, or add tenant/event labels.
+    #[must_use]
+    pub fn render_prometheus(&self) -> String {
+        let snapshot = self.snapshot();
+        let mut output = String::new();
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_processed_total",
+            "counter",
+            "Deliveries whose inbox completion and broker acknowledgement succeeded.",
+            snapshot.processed,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_duplicates_total",
+            "counter",
+            "Redeliveries suppressed by the durable inbox.",
+            snapshot.duplicates,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_busy_total",
+            "counter",
+            "Deliveries deferred because another worker owns an active inbox claim.",
+            snapshot.busy,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_handler_failures_total",
+            "counter",
+            "Handler failures released for a later delivery attempt.",
+            snapshot.handler_failures,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_broker_failures_total",
+            "counter",
+            "JetStream operations that returned an error.",
+            snapshot.broker_failures,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_storage_failures_total",
+            "counter",
+            "PostgreSQL inbox operations that returned an error.",
+            snapshot.storage_failures,
+        );
+        append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_consumer_protocol_failures_total",
+            "counter",
+            "Invalid envelopes, unsupported versions, or missing tenant grants.",
+            snapshot.protocol_failures,
+        );
+        output
     }
 
     fn record_error(&self, error: &NatsConsumerError) {
@@ -509,19 +571,32 @@ mod tests {
         metrics.record_error(&NatsConsumerError::UnsupportedSchemaVersion(2));
         metrics.processed.fetch_add(3, Ordering::Relaxed);
         metrics.duplicates.fetch_add(1, Ordering::Relaxed);
+        metrics.busy.fetch_add(2, Ordering::Relaxed);
+        metrics.handler_failures.fetch_add(4, Ordering::Relaxed);
 
         assert_eq!(
             metrics.snapshot(),
             super::ConsumerMetricsSnapshot {
                 processed: 3,
                 duplicates: 1,
-                busy: 0,
-                handler_failures: 0,
+                busy: 2,
+                handler_failures: 4,
                 broker_failures: 1,
                 storage_failures: 1,
                 protocol_failures: 2,
             }
         );
+
+        let exposition = metrics.render_prometheus();
+        assert!(exposition.contains("# TYPE aetherflow_nats_consumer_processed_total counter"));
+        assert!(exposition.contains("aetherflow_nats_consumer_processed_total 3"));
+        assert!(exposition.contains("aetherflow_nats_consumer_duplicates_total 1"));
+        assert!(exposition.contains("aetherflow_nats_consumer_busy_total 2"));
+        assert!(exposition.contains("aetherflow_nats_consumer_handler_failures_total 4"));
+        assert!(exposition.contains("aetherflow_nats_consumer_broker_failures_total 1"));
+        assert!(exposition.contains("aetherflow_nats_consumer_storage_failures_total 1"));
+        assert!(exposition.contains("aetherflow_nats_consumer_protocol_failures_total 2"));
+        assert!(!exposition.contains('{'));
     }
 
     #[test]
