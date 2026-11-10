@@ -168,30 +168,35 @@ impl ConsumerMetrics {
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_consumer_busy_total",
+            "counter",
             "Deliveries deferred because another worker owns an active inbox claim.",
             snapshot.busy,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_consumer_handler_failures_total",
+            "counter",
             "Handler failures released for a later delivery attempt.",
             snapshot.handler_failures,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_consumer_broker_failures_total",
+            "counter",
             "JetStream operations that returned an error.",
             snapshot.broker_failures,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_consumer_storage_failures_total",
+            "counter",
             "PostgreSQL inbox operations that returned an error.",
             snapshot.storage_failures,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_consumer_protocol_failures_total",
+            "counter",
             "Invalid envelopes, unsupported versions, or missing tenant grants.",
             snapshot.protocol_failures,
         );
