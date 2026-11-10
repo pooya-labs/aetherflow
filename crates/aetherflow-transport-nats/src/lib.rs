@@ -120,22 +120,22 @@ impl PublisherMetrics {
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_publisher_failed_total",
-            "Publish attempts that returned an error.",
             "counter",
+            "Publish attempts that returned an error.",
             snapshot.failed,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_publisher_interrupted_total",
-            "Started publish futures dropped before a final outcome was observed.",
             "counter",
+            "Started publish futures dropped before a final outcome was observed.",
             snapshot.interrupted,
         );
         append_prometheus_metric(
             &mut output,
             "aetherflow_nats_publisher_in_flight",
-            "Publish futures currently executing.",
             "gauge",
+            "Publish futures currently executing.",
             snapshot.in_flight,
         );
         output
