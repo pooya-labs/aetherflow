@@ -33,7 +33,8 @@ use aetherflow_storage_postgres::{
 };
 use aetherflow_transport_nats::{
     ConsumerMetrics, EventHandlerFuture, JetStreamEvent, JetStreamEventHandler,
-    NatsConnectionConfig, NatsJetStreamConsumer, NatsJetStreamPublisher, PublisherMetrics,
+    NatsConnectionConfig, NatsConnectionMetrics, NatsJetStreamConsumer, NatsJetStreamPublisher,
+    PublisherMetrics,
 };
 use async_nats::ServerAddr;
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
@@ -246,6 +247,7 @@ fn metrics_server_config_from_env() -> Result<Option<MetricsServerConfig>, io::E
 struct WorkerMetricsState {
     publisher: PublisherMetrics,
     consumer: ConsumerMetrics,
+    connection: NatsConnectionMetrics,
     token_hash: [u8; 32],
 }
 
@@ -270,6 +272,7 @@ fn worker_metrics_authorization_matches(expected: &[u8; 32], headers: &HeaderMap
 fn render_worker_metrics(state: &WorkerMetricsState) -> String {
     let mut output = state.publisher.render_prometheus();
     output.push_str(&state.consumer.render_prometheus());
+    output.push_str(&state.connection.render_prometheus());
     output
 }
 
@@ -593,8 +596,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     );
 
     let nats_urls = env_or("AETHERFLOW_NATS_URLS", DEFAULT_NATS_URLS);
-    let nats_client = NatsConnectionConfig::from_env()?
-        .connect(parse_nats_seeds(&nats_urls)?)
+    let (nats_client, nats_connection_metrics) = NatsConnectionConfig::from_env()?
+        .connect_with_metrics(parse_nats_seeds(&nats_urls)?)
         .await?;
     let jetstream = jetstream::new(nats_client);
     let stream_name = env_or("AETHERFLOW_NATS_STREAM", "AETHERFLOW_EVENTS");
@@ -671,6 +674,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         let metrics_state = WorkerMetricsState {
             publisher: publisher_metrics.clone(),
             consumer: consumer_metrics.clone(),
+            connection: nats_connection_metrics.clone(),
             token_hash,
         };
         let metrics_shutdown = transport_shutdown_rx.clone();
@@ -760,9 +764,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
             _ = metrics_interval.tick() => {
                 println!(
-                    "metrics: publisher={:?} consumer={:?}",
+                    "metrics: publisher={:?} consumer={:?} connection={:?}",
                     publisher_metrics.snapshot(),
-                    consumer_metrics.snapshot()
+                    consumer_metrics.snapshot(),
+                    nats_connection_metrics.snapshot()
                 );
             }
         }
@@ -806,9 +811,9 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConsumerMetrics, PublisherMetrics, WorkerMetricsState, fail_once_output,
-        hash_metrics_token, json_add_payload, parse_database_ssl_mode, parse_metrics_server_config,
-        postgres_manager, uppercase_payload, worker_metrics_router,
+        ConsumerMetrics, NatsConnectionMetrics, PublisherMetrics, WorkerMetricsState,
+        fail_once_output, hash_metrics_token, json_add_payload, parse_database_ssl_mode,
+        parse_metrics_server_config, postgres_manager, uppercase_payload, worker_metrics_router,
     };
     use aetherflow_runtime::scheduler::TaskExecutionError;
     use axum::body::{Body, to_bytes};
@@ -852,6 +857,7 @@ mod tests {
         let state = WorkerMetricsState {
             publisher: PublisherMetrics::default(),
             consumer: ConsumerMetrics::default(),
+            connection: NatsConnectionMetrics::default(),
             token_hash: hash_metrics_token(TEST_METRICS_TOKEN).expect("hash valid token"),
         };
         let app = worker_metrics_router(state);
@@ -960,6 +966,9 @@ mod tests {
         let exposition = std::str::from_utf8(&body).expect("Prometheus exposition is UTF-8");
         assert!(exposition.contains("aetherflow_nats_publisher_confirmed_total 0"));
         assert!(exposition.contains("aetherflow_nats_consumer_processed_total 0"));
+        assert!(exposition.contains("aetherflow_nats_connection_connected 0"));
+        assert!(exposition.contains("aetherflow_nats_connection_disconnects_total 0"));
+        assert!(exposition.contains("aetherflow_nats_connection_reconnects_total 0"));
         assert!(!exposition.contains('{'), "metrics must not include labels");
     }
 

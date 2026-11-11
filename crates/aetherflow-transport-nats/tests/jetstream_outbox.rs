@@ -20,7 +20,7 @@ use aetherflow_storage_postgres::{
 };
 use aetherflow_transport_nats::{
     EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsConnectionConfig,
-    NatsJetStreamConsumer, NatsJetStreamPublisher,
+    NatsConnectionMetrics, NatsJetStreamConsumer, NatsJetStreamPublisher,
 };
 use async_nats::jetstream::{
     self, consumer::PullConsumer, consumer::pull::Config as PullConsumerConfig,
@@ -166,6 +166,17 @@ async fn connect_to_nats(
 ) -> Result<async_nats::Client, aetherflow_transport_nats::NatsConnectionError> {
     NatsConnectionConfig::from_env()?
         .connect(parse_nats_seed_urls(urls))
+        .await
+}
+
+async fn connect_to_nats_with_metrics(
+    urls: &str,
+) -> Result<
+    (async_nats::Client, NatsConnectionMetrics),
+    aetherflow_transport_nats::NatsConnectionError,
+> {
+    NatsConnectionConfig::from_env()?
+        .connect_with_metrics(parse_nats_seed_urls(urls))
         .await
 }
 
@@ -1876,7 +1887,7 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
         .expect("find the uncommitted-to-broker outbox event");
     let event_id: i64 = outbox_row.get(0);
 
-    let nats_client = connect_to_nats(&nats_url)
+    let (nats_client, connection_metrics) = connect_to_nats_with_metrics(&nats_url)
         .await
         .expect("connect to all-member NATS seed pool before outage");
     let jetstream = jetstream::new(nats_client);
@@ -1904,6 +1915,14 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     // Take down all three JetStream servers, not just one member. Confirm a
     // fresh client cannot connect before asking the outbox to publish.
     nats_cluster.stop_all();
+    timeout(Duration::from_secs(10), async {
+        while connection_metrics.snapshot().disconnects == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the existing NATS client should report the full-cluster disconnect");
+
     let down_probe = timeout(Duration::from_secs(3), connect_to_nats(&nats_url)).await;
     assert!(
         matches!(down_probe, Err(_) | Ok(Err(_))),
@@ -1984,6 +2003,18 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     .await
     .expect("three-member JetStream quorum and durable consumer should recover");
 
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot = connection_metrics.snapshot();
+            if snapshot.connected && snapshot.reconnects >= 1 {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the existing NATS client should report a successful reconnect");
+
     let handler_calls = Arc::new(AtomicUsize::new(0));
     let handler = Arc::new(CountingHandler {
         calls: Arc::clone(&handler_calls),
@@ -2061,6 +2092,10 @@ async fn jetstream_full_cluster_outage_retains_and_replays_outbox_event_once() {
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_eq!(consumer_metrics.snapshot().processed, 1);
     assert_eq!(consumer_metrics.snapshot().duplicates, 0);
+    let connection_snapshot = connection_metrics.snapshot();
+    assert!(connection_snapshot.disconnects >= 1);
+    assert!(connection_snapshot.reconnects >= 1);
+    assert!(connection_snapshot.connected);
     assert_eq!(
         recovered_publisher
             .attempted_event_ids

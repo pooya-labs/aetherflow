@@ -8,7 +8,9 @@
 mod connection;
 mod consumer;
 
-pub use connection::{NatsConnectionConfig, NatsConnectionError};
+pub use connection::{
+    NatsConnectionConfig, NatsConnectionError, NatsConnectionMetrics, NatsConnectionMetricsSnapshot,
+};
 
 pub use consumer::{
     ConsumerMetrics, ConsumerMetricsSnapshot, EventHandlerFuture, JetStreamEvent,
