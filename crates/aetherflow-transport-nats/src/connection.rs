@@ -292,7 +292,10 @@ impl NatsConnectionConfig {
     ) -> Result<(Client, NatsConnectionMetrics), NatsConnectionError> {
         let metrics = NatsConnectionMetrics::default();
         let (client, metrics) = self.connect_inner(servers, Some(metrics)).await?;
-        Ok((client, metrics.expect("metrics were enabled for this connection")))
+        Ok((
+            client,
+            metrics.expect("metrics were enabled for this connection"),
+        ))
     }
 
     async fn connect_inner(
@@ -528,7 +531,10 @@ mod connection_metrics_tests {
         assert!(exposition.contains("aetherflow_nats_connection_server_errors_total 1"));
         assert!(exposition.contains("aetherflow_nats_connection_client_errors_total 1"));
         assert!(exposition.contains("aetherflow_nats_connection_closed_total 1"));
-        assert!(!exposition.contains('{'), "connection metrics must not include labels");
+        assert!(
+            !exposition.contains('{'),
+            "connection metrics must not include labels"
+        );
         assert!(!exposition.contains("AuthorizationViolation"));
         assert!(!exposition.contains("MaxReconnects"));
     }
