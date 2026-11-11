@@ -2,11 +2,13 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-11
+**Last reviewed:** 2026-11-11 (PR #40 Workers runtime checkpoint)
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
 ## Latest engineering checkpoint — 2026-11-11
+
+[PR #40](https://github.com/pooya-labs/aetherflow/pull/40) merged as [da5cdb8](https://github.com/pooya-labs/aetherflow/commit/da5cdb84a1bfa463f0f12e50b1a7a7dc2179b758), adding Cloudflare Workers Vitest integration coverage for the SQLite-backed rate-limit Durable Object. The suite verifies state persistence across eviction, client-bucket isolation, concurrent requests, alarm rescheduling, expiry cleanup, and schema recreation after `deleteAll()`. Exact PR-head Gateway, Rust, and security workflows passed. Exact merge-SHA Gateway CI [43113088444](https://github.com/pooya-labs/aetherflow/actions/runs/43113088444), supply-chain/secret checks [43113088421](https://github.com/pooya-labs/aetherflow/actions/runs/43113088421), and Pages [43113087644](https://github.com/pooya-labs/aetherflow/actions/runs/43113087644) passed; exact merge-SHA Rust CI [43113088333](https://github.com/pooya-labs/aetherflow/actions/runs/43113088333) was still running when recorded. The production gateway remains unrouted, the API origin is not configured, and no deployment/bypass acceptance is claimed.
 
 The latest documentation-only checkpoint, [PR #38](https://github.com/pooya-labs/aetherflow/pull/38), merged as [612593e](https://github.com/pooya-labs/aetherflow/commit/612593e9efb2354541d04754750b2277c39cb2fc). Its exact PR-head Rust CI [43048625101](https://github.com/pooya-labs/aetherflow/actions/runs/43048625101) and security [43048625520](https://github.com/pooya-labs/aetherflow/actions/runs/43048625520) passed. The exact merge-SHA main checks also passed: Rust [43053833698](https://github.com/pooya-labs/aetherflow/actions/runs/43053833698) (**20/20 steps**), security [43053833861](https://github.com/pooya-labs/aetherflow/actions/runs/43053833861), and Pages [43053832910](https://github.com/pooya-labs/aetherflow/actions/runs/43053832910). The Rust workflow included Compose validation and the separate no-Origin demo smoke. No PostgreSQL/JetStream workflow was triggered because this PR changed documentation only; this does not replace the runtime-path evidence already recorded for PR #33.
 
