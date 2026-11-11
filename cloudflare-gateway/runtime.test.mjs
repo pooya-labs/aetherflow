@@ -35,6 +35,13 @@ async function consume(stub, capacity = 2, refillPerSecond = 1) {
 
 async function readBucket(stub) {
   return runInDurableObject(stub, (_instance, state) => {
+    const table = state.storage.sql
+      .exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'client_rate_limit'",
+      )
+      .toArray()[0];
+    if (!table) return null;
+
     return state.storage.sql
       .exec("SELECT tokens, updated_at_ms FROM client_rate_limit WHERE id = 1")
       .toArray()[0] ?? null;
@@ -102,7 +109,7 @@ describe("Cloudflare Workers Durable Object runtime", () => {
     expect((await readBucket(concurrent)).tokens).toBe(0);
   });
 
-  it("reschedules active cleanup alarms and removes expired SQLite state", async () => {
+  it("reschedules active cleanup alarms, deletes expired state, and recreates its schema", async () => {
     const stub = getLimiter("runtime-idle-cleanup");
     const clock = { now: 1_820_000_000_000 };
     await setClock(stub, clock);
@@ -121,13 +128,21 @@ describe("Cloudflare Workers Durable Object runtime", () => {
     expect(await readAlarm(stub)).toBe(refreshedExpiry);
 
     // Once the refreshed deadline has passed, the alarm must delete all
-    // SQLite data and alarm metadata. The next request starts a fresh bucket.
+    // SQLite data and alarm metadata.
     clock.now = refreshedExpiry + 1;
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
-    await setClock(stub, clock);
+    // The object remains alive after the alarm. The schema must be recreated
+    // on the next request even though its constructor does not run again.
     expect(await readBucket(stub)).toBeNull();
     expect(await readAlarm(stub)).toBeNull();
     expect(await consume(stub, 1, 1)).toMatchObject({ allowed: true });
+
+    // The first post-cleanup request gets a completely fresh bucket and alarm.
+    expect(await readBucket(stub)).toEqual({
+      tokens: 0,
+      updated_at_ms: clock.now,
+    });
+    expect(await readAlarm(stub)).toBe(clock.now + IDLE_BUCKET_TTL_MS);
   });
 });
