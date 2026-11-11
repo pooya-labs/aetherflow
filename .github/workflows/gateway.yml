@@ -39,17 +39,38 @@ jobs:
       - name: Record Node runtime
         run: node --version
 
+      - name: Generate pinned gateway dependency lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        working-directory: cloudflare-gateway
+
+      - name: Upload generated dependency lock for repository pinning
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gateway-runtime-package-lock
+          path: cloudflare-gateway/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Install locked gateway dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: cloudflare-gateway
+
       - name: Validate JavaScript modules
-        run: |
-          node --check cloudflare-gateway/policy.mjs
-          node --check cloudflare-gateway/worker.mjs
-          node --check cloudflare-gateway/index.mjs
+        run: npm run check
+        working-directory: cloudflare-gateway
 
       - name: Run gateway policy tests
-        run: node --test cloudflare-gateway/policy.test.mjs
+        run: npm test
+        working-directory: cloudflare-gateway
+
+      - name: Run Cloudflare Workers runtime and SQLite tests
+        run: npm run test:workers-runtime
+        working-directory: cloudflare-gateway
 
       - name: Verify production route remains disabled
         run: |
           grep -Fq 'workersDev: false' cloudflare-gateway/cloudflare.config.ts
           grep -Fq 'previewUrls: false' cloudflare-gateway/cloudflare.config.ts
           grep -Fq 'https://origin-not-configured.invalid' cloudflare-gateway/cloudflare.config.ts
+          grep -Fq '"workers_dev": false' cloudflare-gateway/wrangler.test.jsonc
+          grep -Fq '"preview_urls": false' cloudflare-gateway/wrangler.test.jsonc
