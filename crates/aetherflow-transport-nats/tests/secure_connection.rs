@@ -1,7 +1,8 @@
 //! Exercises the shared NATS client connector against a real TLS listener.
 //!
-//! The test requires a disposable NATS JetStream server with TLS enabled and
-//! a CA that signs a certificate valid for 127.0.0.1. CI creates that fixture.
+//! The test requires a disposable NATS JetStream server with TLS enabled,
+//! required client-certificate verification, and a CA that signs both server
+//! and client certificates. CI creates that fixture.
 
 use std::env;
 
@@ -21,7 +22,7 @@ fn secure_server_address() -> Result<ServerAddr, Box<dyn std::error::Error>> {
 
 #[tokio::test]
 #[ignore = "requires the disposable TLS-enabled NATS fixture from postgres-schema CI"]
-async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
+async fn secure_connector_verifies_server_ca_client_identity_and_name_before_jetstream_use()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = NatsConnectionConfig::from_env()?;
     assert!(
@@ -32,6 +33,21 @@ async fn secure_connector_verifies_ca_and_server_name_before_jetstream_use()
     let server = secure_server_address()?;
     assert!(server.tls_required(), "secure fixture URL must use tls://");
 
+    // The fixture requires a client certificate signed by the same CA. A
+    // client that trusts the server but presents no identity must fail its TLS
+    // handshake before it can reach NATS authentication or JetStream.
+    let ca_file = env::var("AETHERFLOW_NATS_CA_FILE")?;
+    let no_client_identity = async_nats::ConnectOptions::new()
+        .require_tls(true)
+        .add_root_certificates(std::path::PathBuf::from(ca_file))
+        .connect(vec![server.clone()])
+        .await;
+    assert!(
+        no_client_identity.is_err(),
+        "the mTLS listener must reject a client that does not present a certificate"
+    );
+
+    // The shared AetherFlow connector loads the configured client identity.
     let client = config.connect(vec![server]).await?;
     let jetstream = jetstream::new(client);
 

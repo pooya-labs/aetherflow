@@ -46,7 +46,7 @@ The transport crate exports `NatsConnectionConfig` for building JetStream client
 - `AETHERFLOW_NATS_CA_FILE`: optional PEM CA bundle for a private server certificate authority.
 - `AETHERFLOW_NATS_CLIENT_CERT_FILE` and `AETHERFLOW_NATS_CLIENT_KEY_FILE`: optional mTLS identity; the pair must be supplied together.
 
-The default is plaintext to keep the loopback-only Compose cluster usable. That default is not suitable for an externally reachable deployment. Credentials or TLS files combined with an explicit plaintext setting fail validation. The `.creds` file is read when a connection is created; rotate it through a controlled new-client rollout rather than expecting automatic file watching. The helper secures client-side transport only—server-side NATS accounts, subject ACLs, stream retention, and cluster TLS policy still need deployment configuration.
+The default is plaintext to keep the loopback-only Compose cluster usable. That default is not suitable for an externally reachable deployment. Credentials or TLS files combined with an explicit plaintext setting fail validation. The `.creds` file is read when a connection is created; rotate it through a controlled new-client rollout rather than expecting automatic file watching. The CI TLS fixture now requires a CA-signed client certificate and proves that a client without an identity is rejected, while the configured AetherFlow connector can publish to JetStream and still rejects a server-name mismatch. This verifies client-side mTLS behavior; production server-side accounts, subject ACLs, stream retention, and cluster TLS policy still need deployment configuration.
 
 ## Standard Rust checks
 
