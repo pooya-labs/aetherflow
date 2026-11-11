@@ -256,10 +256,10 @@ fn worker_metrics_authorization_matches(expected: &[u8; 32], headers: &HeaderMap
     else {
         return false;
     };
-    let Some(token) = value.strip_prefix("Bearer ") else {
+    let Some((scheme, token)) = value.split_once(' ') else {
         return false;
     };
-    if token.is_empty() {
+    if !scheme.eq_ignore_ascii_case("Bearer") || token.is_empty() {
         return false;
     }
 
@@ -894,6 +894,32 @@ mod tests {
             .await
             .expect("wrong-token metrics response");
         assert_eq!(invalid_token.status(), StatusCode::UNAUTHORIZED);
+
+        let case_insensitive_scheme = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, format!("bEaReR {TEST_METRICS_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("valid mixed-case Bearer request"),
+            )
+            .await
+            .expect("mixed-case Bearer response");
+        assert_eq!(case_insensitive_scheme.status(), StatusCode::OK);
+
+        let invalid_scheme = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, format!("Basic {TEST_METRICS_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("valid unsupported-scheme request"),
+            )
+            .await
+            .expect("unsupported-scheme response");
+        assert_eq!(invalid_scheme.status(), StatusCode::UNAUTHORIZED);
 
         let response = app
             .oneshot(
