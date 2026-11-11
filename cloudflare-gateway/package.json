@@ -5,13 +5,16 @@
   "type": "module",
   "description": "Cloudflare edge gateway for the AetherFlow Rust control plane",
   "scripts": {
-    "check": "node --check policy.mjs && node --check worker.mjs && node --check index.mjs",
-    "test": "node --test policy.test.mjs"
+    "check": "node --check policy.mjs && node --check worker.mjs && node --check index.mjs && node --check vitest.config.mjs",
+    "test": "node --test policy.test.mjs",
+    "test:workers-runtime": "vitest run --config vitest.config.mjs"
   },
   "engines": {
     "node": ">=22.18.0"
   },
   "devDependencies": {
-    "cf": "1.0.0-beta.23"
+    "@cloudflare/vitest-plugin": "1.7.0",
+    "cf": "1.0.0-beta.23",
+    "vitest": "4.1.0"
   }
 }
