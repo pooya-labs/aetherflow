@@ -6,7 +6,7 @@ This directory contains the edge ingress for the AetherFlow HTTP API. It is desi
 
 ## Hosted CI evidence
 
-The dedicated [Cloudflare Gateway CI run](https://github.com/pooya-labs/aetherflow/actions/runs/42504504348) passed on source commit [`afe9850b9b34d24555eda781ceec72774c810e8f`](https://github.com/pooya-labs/aetherflow/commit/afe9850b9b34d24555eda781ceec72774c810e8f), with **13/13 Node policy tests passing**. JavaScript syntax checks and the static guard that verifies `workersDev: false`, `previewUrls: false`, and the unconfigured-origin placeholder also passed. The suite has since been expanded: PR [#16](https://github.com/pooya-labs/aetherflow/pull/16) passed [Cloudflare Gateway CI run 42646781773](https://github.com/pooya-labs/aetherflow/actions/runs/42646781773) on exact test source [`ef23eb4`](https://github.com/pooya-labs/aetherflow/commit/ef23eb423e492779af250d79980328888f7727ce), with **18/18 Node tests passing**. The five additional regressions cover `/health` limiter bypass with ingress-token forwarding, early method rejection, fail-closed behavior on Durable Object errors, redirect/`Location` suppression, and generic no-store handling for origin transport failure. The suite still uses a deterministic mock for the Durable Object SQLite interface; it is not an acceptance test against a deployed Cloudflare Worker or real SQLite runtime.
+The dedicated [Cloudflare Gateway CI run](https://github.com/pooya-labs/aetherflow/actions/runs/42504504348) passed on source commit [`afe9850b9b34d24555eda781ceec72774c810e8f`](https://github.com/pooya-labs/aetherflow/commit/afe9850b9b34d24555eda781ceec72774c810e8f), with **13/13 Node policy tests passing**. JavaScript syntax checks and the static guard that verifies `workersDev: false`, `previewUrls: false`, and the unconfigured-origin placeholder also passed. The suite has since been expanded: PR [#16](https://github.com/pooya-labs/aetherflow/pull/16) passed [Cloudflare Gateway CI run 42646781773](https://github.com/pooya-labs/aetherflow/actions/runs/42646781773) on exact test source [`ef23eb4`](https://github.com/pooya-labs/aetherflow/commit/ef23eb423e492779af250d79980328888f7727ce), with **18/18 Node tests passing**. The five additional regressions cover `/health` limiter bypass with ingress-token forwarding, early method rejection, fail-closed behavior on Durable Object errors, redirect/`Location` suppression, and generic no-store handling for origin transport failure. The 18 Node policy tests still use deterministic fixtures for the proxy request contract. A separate Cloudflare Workers Vitest suite now executes the exported Durable Object in the actual Workers runtime with SQLite storage. It covers persisted bucket state across eviction, independent client buckets, concurrent token consumption, alarm rescheduling, full idle cleanup, and schema recreation after cleanup. This is local runtime integration coverage, not a live production route or origin acceptance test. The exact-source run [43063897214](https://github.com/pooya-labs/aetherflow/actions/runs/43063897214) passed both suites and verified that the production route remains disabled.
 
 ## Request path
 
@@ -71,20 +71,22 @@ The 60-request burst / 20-per-second refill is only a starting policy, not a pro
 
 ## Local tests
 
-The policy and Worker request flow use Node's built-in test runner; they require no third-party test dependencies. From this directory:
+Install the exact dependency graph from the committed lockfile, then run both the fast policy suite and the Cloudflare Workers runtime suite:
 
 ```sh
+npm ci
 npm run check
 npm test
+npm run test:workers-runtime
 ```
 
-The equivalent direct commands are `node --check policy.mjs`, `node --check worker.mjs`, `node --check index.mjs`, and `node --test policy.test.mjs`. The Durable Object SQL contract test uses a deterministic mock for the storage interface; it is not a deployed Workers-runtime/real SQLite integration test.
+The 18-test Node suite validates the proxy and request-policy contract. The Workers Vitest suite runs the Durable Object inside the Cloudflare runtime with SQLite and exercises eviction recovery, concurrent requests, alarm refresh, cleanup, and post-cleanup schema recreation. Both suites run locally through Miniflare; neither deploys a public Worker route or requires a Cloudflare account.
 
 The Rust API also has tests proving that a public bind without the ingress token is rejected, a direct API request without the edge token receives 403, a valid edge token reaches the normal API middleware, and `/health` remains public.
 
 ## Toolchain setup
 
-Use Node.js **22.18 or later**. The project pins the Cloudflare CLI beta (`cf` 1.0.0-beta.23) as a development dependency so the `cf/config` import resolves from this project rather than relying on a globally installed, unpinned copy.
+Use Node.js **22.23 or later**. The committed `package-lock.json` pins the 184-package test/tooling dependency graph; CI uses npm **11.19.1** for consistent lockfile resolution. The project pins the Cloudflare CLI beta (`cf` 1.0.0-beta.23) as a development dependency so the `cf/config` import resolves from this project rather than relying on a globally installed, unpinned copy.
 
 From this directory:
 
@@ -101,7 +103,7 @@ The `cf` CLI is currently in beta. Review its [current deployment documentation]
 
 ## Build and deploy (only after prerequisites)
 
-The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.18 or later and run `npm install` to install the pinned project-local CLI. Authenticate with `npx cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
+The project uses Cloudflare's `cf` CLI and `cloudflare.config.ts`, not a Wrangler configuration. Install Node.js 22.23 or later and run `npm ci` to install the pinned project-local CLI and exact dependency graph. Authenticate with `npx cf auth login`. The CLI is currently in beta; check its current [project commands](https://developers.cloudflare.com/cf/projects/) before an actual deployment.
 
 From this directory, after completing Toolchain setup:
 
