@@ -108,7 +108,7 @@ The repository's CI restore rehearsal proves only the tested logical PostgreSQL/
 
 ## 7. Monitoring and SLO acceptance
 
-- [ ] Scraping /api/v1/metrics and the standalone worker's optional /metrics endpoint uses protected credentials and an authenticated scrape path. The worker listener is loopback-only plain HTTP; remote scraping must pass through a same-host authenticated TLS-terminating proxy. Metric storage and traces have retention/access controls, and process-local worker samples are not mistaken for cross-replica totals.
+- [ ] Scrapes of /api/v1/metrics and the standalone worker's optional /metrics endpoint use protected credentials and an authenticated scrape path. The worker listener is loopback-only plain HTTP; remote scraping must pass through a same-host authenticated TLS-terminating proxy. Metric storage and traces have retention/access controls, and process-local worker samples are not mistaken for cross-replica totals.
 - [ ] Dashboard panels separate operation classes and status classes. Do not add raw paths, tenant IDs, workflow IDs, task IDs, credential values or request bodies as metric labels.
 - [ ] API 5xx ratio, p95 latency, in-flight requests, abandoned handler futures and 429 rate have alert ownership and runbooks.
 - [ ] Workflow outcome, oldest unpublished outbox age, oldest unprocessed inbox age, expired task leases and worker health are monitored through an approved database/exporter path.
