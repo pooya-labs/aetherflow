@@ -9,8 +9,7 @@ mod connection;
 mod consumer;
 
 pub use connection::{
-    NatsConnectionConfig, NatsConnectionError, NatsConnectionMetrics,
-    NatsConnectionMetricsSnapshot,
+    NatsConnectionConfig, NatsConnectionError, NatsConnectionMetrics, NatsConnectionMetricsSnapshot,
 };
 
 pub use consumer::{
