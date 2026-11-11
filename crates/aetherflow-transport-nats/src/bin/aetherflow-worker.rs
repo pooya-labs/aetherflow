@@ -7,10 +7,20 @@
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::extract::State;
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use aetherflow_core::domain::{NodeId, NodeIncarnationId, TaskId, WorkerId};
 use aetherflow_runtime::repository::TaskOutput;
@@ -22,13 +32,14 @@ use aetherflow_storage_postgres::{
     PostgresOutboxDispatcher, PostgresTaskWorker, PostgresWorkerConfig, WorkerRegistration,
 };
 use aetherflow_transport_nats::{
-    EventHandlerFuture, JetStreamEvent, JetStreamEventHandler, NatsConnectionConfig,
-    NatsJetStreamConsumer, NatsJetStreamPublisher,
+    ConsumerMetrics, EventHandlerFuture, JetStreamEvent, JetStreamEventHandler,
+    NatsConnectionConfig, NatsJetStreamConsumer, NatsJetStreamPublisher, PublisherMetrics,
 };
 use async_nats::ServerAddr;
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use serde::Deserialize;
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_postgres::Config as PostgresConfig;
@@ -159,6 +170,159 @@ fn parse_database_ssl_mode(value: Option<&str>) -> Result<SslMode, io::Error> {
 
 fn database_ssl_mode() -> Result<SslMode, io::Error> {
     parse_database_ssl_mode(std::env::var("DATABASE_SSL_MODE").ok().as_deref())
+}
+
+fn optional_env(name: &str) -> Result<Option<String>, io::Error> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unable to read {name}: {error}"),
+        )),
+    }
+}
+
+struct MetricsServerConfig {
+    bind: SocketAddr,
+    token_hash: [u8; 32],
+}
+
+fn hash_metrics_token(token: &str) -> Result<[u8; 32], io::Error> {
+    let valid_alphabet = token
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !(32..=256).contains(&token.len()) || !valid_alphabet {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "AETHERFLOW_METRICS_TOKEN must be 32-256 ASCII letters, digits, '-' or '_' characters",
+        ));
+    }
+    Ok(Sha256::digest(token.as_bytes()).into())
+}
+
+fn parse_metrics_server_config(
+    bind: Option<&str>,
+    token: Option<&str>,
+) -> Result<Option<MetricsServerConfig>, io::Error> {
+    match (bind, token) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "AETHERFLOW_METRICS_TOKEN requires AETHERFLOW_METRICS_BIND",
+        )),
+        (Some(_), None) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "AETHERFLOW_METRICS_TOKEN is required when the metrics listener is enabled",
+        )),
+        (Some(bind), Some(token)) => {
+            let bind = bind.parse::<SocketAddr>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("AETHERFLOW_METRICS_BIND must be a socket address: {error}"),
+                )
+            })?;
+            if !bind.ip().is_loopback() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "AETHERFLOW_METRICS_BIND must use a loopback address; expose it remotely only through a TLS-terminating, authenticated proxy",
+                ));
+            }
+            Ok(Some(MetricsServerConfig {
+                bind,
+                token_hash: hash_metrics_token(token)?,
+            }))
+        }
+    }
+}
+
+fn metrics_server_config_from_env() -> Result<Option<MetricsServerConfig>, io::Error> {
+    let bind = optional_env("AETHERFLOW_METRICS_BIND")?;
+    let token = optional_env("AETHERFLOW_METRICS_TOKEN")?;
+    parse_metrics_server_config(bind.as_deref(), token.as_deref())
+}
+
+#[derive(Clone)]
+struct WorkerMetricsState {
+    publisher: PublisherMetrics,
+    consumer: ConsumerMetrics,
+    token_hash: [u8; 32],
+}
+
+fn worker_metrics_authorization_matches(expected: &[u8; 32], headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+    else {
+        return false;
+    };
+    let Some((scheme, token)) = value.split_once(' ') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("Bearer") || token.is_empty() {
+        return false;
+    }
+
+    let supplied: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+    bool::from(expected.as_slice().ct_eq(supplied.as_slice()))
+}
+
+fn render_worker_metrics(state: &WorkerMetricsState) -> String {
+    let mut output = state.publisher.render_prometheus();
+    output.push_str(&state.consumer.render_prometheus());
+    output
+}
+
+async fn export_worker_metrics(
+    State(state): State<WorkerMetricsState>,
+    headers: HeaderMap,
+) -> Response {
+    if !worker_metrics_authorization_matches(&state.token_hash, &headers) {
+        let mut response = StatusCode::UNAUTHORIZED.into_response();
+        response
+            .headers_mut()
+            .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return response;
+    }
+
+    let mut response = (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8"),
+            (CACHE_CONTROL, "no-store"),
+        ],
+        render_worker_metrics(&state),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+fn worker_metrics_router(state: WorkerMetricsState) -> Router {
+    Router::new()
+        .route("/metrics", get(export_worker_metrics))
+        .with_state(state)
+}
+
+async fn run_metrics_server(
+    listener: TcpListener,
+    state: WorkerMetricsState,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), String> {
+    axum::serve(listener, worker_metrics_router(state))
+        .with_graceful_shutdown(async move {
+            if !*shutdown.borrow() {
+                let _ = shutdown.changed().await;
+            }
+        })
+        .await
+        .map_err(|error| format!("Prometheus metrics listener: {error}"))
 }
 
 fn postgres_manager(database_url: &str, ssl_mode: SslMode) -> Result<Manager, Box<dyn Error>> {
@@ -343,6 +507,11 @@ fn transport_join_failure(
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
+    let metrics_config = metrics_server_config_from_env()?;
+    let metrics_listener = match metrics_config {
+        Some(config) => Some((TcpListener::bind(config.bind).await?, config.token_hash)),
+        None => None,
+    };
     let database_url = required_env("DATABASE_URL")?;
     let worker_concurrency = positive_u32("AETHERFLOW_WORKER_CONCURRENCY", 4, 256)?;
     let worker_concurrency_usize = usize::try_from(worker_concurrency)?;
@@ -497,6 +666,27 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let (transport_shutdown_tx, transport_shutdown_rx) = watch::channel(false);
     let mut transport_tasks: JoinSet<NamedTransportResult> = JoinSet::new();
 
+    if let Some((listener, token_hash)) = metrics_listener {
+        let bind = listener.local_addr()?;
+        let metrics_state = WorkerMetricsState {
+            publisher: publisher_metrics.clone(),
+            consumer: consumer_metrics.clone(),
+            token_hash,
+        };
+        let metrics_shutdown = transport_shutdown_rx.clone();
+        transport_tasks.spawn(async move {
+            (
+                "Prometheus metrics listener",
+                run_metrics_server(listener, metrics_state, metrics_shutdown).await,
+            )
+        });
+        println!("metrics_endpoint=http://{bind}/metrics (loopback-only; Bearer token required)");
+    } else {
+        println!(
+            "metrics_endpoint=disabled (set AETHERFLOW_METRICS_BIND and AETHERFLOW_METRICS_TOKEN to enable)"
+        );
+    }
+
     let dispatcher_shutdown = transport_shutdown_rx.clone();
     transport_tasks.spawn(async move {
         (
@@ -616,12 +806,162 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        fail_once_output, json_add_payload, parse_database_ssl_mode, postgres_manager,
-        uppercase_payload,
+        ConsumerMetrics, PublisherMetrics, WorkerMetricsState, fail_once_output,
+        hash_metrics_token, json_add_payload, parse_database_ssl_mode, parse_metrics_server_config,
+        postgres_manager, uppercase_payload, worker_metrics_router,
     };
     use aetherflow_runtime::scheduler::TaskExecutionError;
+    use axum::body::{Body, to_bytes};
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
+    use axum::http::{Request, StatusCode};
     use deadpool_postgres::Pool;
     use tokio_postgres::config::SslMode;
+    use tower::ServiceExt;
+
+    const TEST_METRICS_TOKEN: &str = "test-worker-metrics-token-32-characters-min";
+
+    #[test]
+    fn worker_metrics_listener_is_opt_in_loopback_only_and_requires_a_strong_token() {
+        assert!(
+            parse_metrics_server_config(None, None)
+                .expect("disabled metrics listener")
+                .is_none()
+        );
+        assert!(parse_metrics_server_config(None, Some(TEST_METRICS_TOKEN)).is_err());
+        assert!(parse_metrics_server_config(Some("127.0.0.1:9464"), None).is_err());
+        assert!(
+            parse_metrics_server_config(Some("0.0.0.0:9464"), Some(TEST_METRICS_TOKEN)).is_err()
+        );
+        assert!(parse_metrics_server_config(Some("127.0.0.1:9464"), Some("too-short")).is_err());
+
+        let config = parse_metrics_server_config(Some("127.0.0.1:9464"), Some(TEST_METRICS_TOKEN))
+            .expect("valid loopback metrics configuration")
+            .expect("metrics listener enabled");
+        assert_eq!(
+            config.bind,
+            "127.0.0.1:9464".parse().expect("socket address")
+        );
+        assert_eq!(
+            config.token_hash,
+            hash_metrics_token(TEST_METRICS_TOKEN).expect("hash valid token")
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_metrics_endpoint_authenticates_and_exports_bounded_nats_metrics() {
+        let state = WorkerMetricsState {
+            publisher: PublisherMetrics::default(),
+            consumer: ConsumerMetrics::default(),
+            token_hash: hash_metrics_token(TEST_METRICS_TOKEN).expect("hash valid token"),
+        };
+        let app = worker_metrics_router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("valid unauthenticated metrics request"),
+            )
+            .await
+            .expect("unauthorized metrics response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            unauthorized
+                .headers()
+                .get(WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer")
+        );
+        assert_eq!(
+            unauthorized
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+
+        let invalid_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, "Bearer definitely-not-the-configured-token")
+                    .body(Body::empty())
+                    .expect("valid wrong-token metrics request"),
+            )
+            .await
+            .expect("wrong-token metrics response");
+        assert_eq!(invalid_token.status(), StatusCode::UNAUTHORIZED);
+
+        let case_insensitive_scheme = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, format!("bEaReR {TEST_METRICS_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("valid mixed-case Bearer request"),
+            )
+            .await
+            .expect("mixed-case Bearer response");
+        assert_eq!(case_insensitive_scheme.status(), StatusCode::OK);
+
+        let invalid_scheme = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, format!("Basic {TEST_METRICS_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("valid unsupported-scheme request"),
+            )
+            .await
+            .expect("unsupported-scheme response");
+        assert_eq!(invalid_scheme.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header(AUTHORIZATION, format!("Bearer {TEST_METRICS_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("valid authenticated metrics request"),
+            )
+            .await
+            .expect("authenticated metrics response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|value| value.to_str().ok()),
+            Some("nosniff")
+        );
+
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("read metrics response body");
+        let exposition = std::str::from_utf8(&body).expect("Prometheus exposition is UTF-8");
+        assert!(exposition.contains("aetherflow_nats_publisher_confirmed_total 0"));
+        assert!(exposition.contains("aetherflow_nats_consumer_processed_total 0"));
+        assert!(!exposition.contains('{'), "metrics must not include labels");
+    }
 
     #[test]
     fn database_tls_defaults_to_required_and_accepts_only_supported_modes() {

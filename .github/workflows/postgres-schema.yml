@@ -217,7 +217,7 @@ jobs:
           database_ready=false
           for attempt in $(seq 1 60); do
             if docker exec --user postgres aetherflow-postgres-tls \
-              pg_isready --username aetherflow_tls --dbname aetherflow_tls_test; then
+              pg_isready --host 127.0.0.1 --username aetherflow_tls --dbname aetherflow_tls_test; then
               database_ready=true
               break
             fi
@@ -772,6 +772,12 @@ jobs:
 
           ROLLBACK;
           SQL
+
+      - name: Install Go 1.25 toolchain for NATS CLI
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.0"
+          cache: false
 
       - name: Install pinned NATS CLI v0.4.0 from the Go module proxy
         shell: bash

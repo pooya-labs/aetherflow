@@ -12,14 +12,20 @@ aetherflow-core = { version = "0.1.0", path = "../aetherflow-core" }
 aetherflow-runtime = { version = "0.1.0", path = "../aetherflow-runtime" }
 aetherflow-storage-postgres = { version = "0.1.0", path = "../aetherflow-storage-postgres" }
 async-nats = { version = "=0.51.0", default-features = false, features = ["jetstream", "nkeys", "ring", "server_2_12"] }
+axum = "=0.8.9"
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1", "runtime"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std", "async-await"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
-tokio = { version = "=1.54.1", features = ["macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+sha2 = "=0.11.0"
+subtle = "=2.6.1"
+tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-postgres = { version = "=0.7.18" }
 tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["native-certs", "ring"] }
+
+[dev-dependencies]
+tower = { version = "=0.5.3", features = ["util"] }
 
 [lints]
 workspace = true
