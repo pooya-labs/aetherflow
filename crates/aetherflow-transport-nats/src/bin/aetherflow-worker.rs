@@ -33,8 +33,8 @@ use aetherflow_storage_postgres::{
 };
 use aetherflow_transport_nats::{
     ConsumerMetrics, EventHandlerFuture, JetStreamEvent, JetStreamEventHandler,
-    NatsConnectionConfig, NatsConnectionMetrics, NatsJetStreamConsumer,
-    NatsJetStreamPublisher, PublisherMetrics,
+    NatsConnectionConfig, NatsConnectionMetrics, NatsJetStreamConsumer, NatsJetStreamPublisher,
+    PublisherMetrics,
 };
 use async_nats::ServerAddr;
 use async_nats::jetstream::{self, consumer::pull::Config as PullConsumerConfig};
