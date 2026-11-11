@@ -10,7 +10,7 @@
     "test:workers-runtime": "vitest run --config vitest.config.mjs"
   },
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.23.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.7.0",
