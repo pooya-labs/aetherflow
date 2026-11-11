@@ -417,3 +417,47 @@ The uploaded artifact is `aetherflow-end-to-end-baseline-12ba81b94539443189478a3
 
 **Comparison boundary:** the CPU is AMD EPYC 9V74, not the stored AMD EPYC 9V45 reference. The comparator correctly skipped numeric throughput/p95 thresholds. Keep this as a separate fingerprinted observation; do not pool it with the 9V45 reference or the earlier 9V74 session, and do not describe it as a regression/improvement. These numbers are not production capacity, a service-level objective, or an endorsement of a particular runner.
 
+
+## Eighth five-repeat session — AMD EPYC 9V74 (2026-11-11)
+
+PostgreSQL/NATS CI [43027919394](https://github.com/pooya-labs/aetherflow/actions/runs/43027919394) completed five fan-out and five chain repetitions while validating PR #34. The workflow passed all **33/33** job steps, including the live NATS mutual-TLS test, standalone worker/API smoke, and isolated PostgreSQL + JetStream backup/restore rehearsal. Each repetition used a fresh PostgreSQL database and its own JetStream stream.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24 / 20261101.360.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 9V74 80-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,348,672 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.6 (Debian 18.6-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte payload |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Timeout | 240 seconds |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+### Results (eighth session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Median workflows/s | 5.977 | 5.291 |
+| Mean workflows/s | 6.122 | 5.511 |
+| Sample standard deviation, workflows/s | 0.563 | 0.452 |
+| Observed range, workflows/s | 5.492–7.008 | 5.057–6.170 |
+| Median tasks/s | 23.909 | 21.165 |
+| Median JetStream events/s | 83.681 | 74.078 |
+| Median workflow p50 | 4,336.796 ms | 4,688.937 ms |
+| Median workflow p95 | 8,541.624 ms | 9,083.930 ms |
+| Median whole-run elapsed | 10,707.384 ms | 12,095.330 ms |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The archived artifact is [aetherflow-end-to-end-baseline-1eaf1be2e795ca0d37ac1b35ddc9ad8df8c42688](https://github.com/pooya-labs/aetherflow/actions/runs/43027919394) (artifact ID `13858887665`). It contains ten per-run CSVs, combined samples, summary statistics, and `metadata.json`. The artifact metadata records source SHA `1eaf1be2e795ca0d37ac1b35ddc9ad8df8c42688`; the PR head was `2d033aa53e00acd70d21c6fb1a8f14ebc487c705`.
+
+**Comparison boundary:** this session ran on AMD EPYC 9V74, not the stored AMD EPYC 9V45 reference. The fingerprint-aware comparator therefore correctly skipped numeric throughput/p95 thresholds. Keep this as a separate fingerprinted observation; do not pool it with the 9V45 reference or treat its values as a regression or improvement. It is not production capacity, an SLO, or an endorsement of a particular runner.
