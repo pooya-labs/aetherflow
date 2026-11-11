@@ -188,7 +188,7 @@ export default {
 
     const contentLength = request.headers.get("content-length");
     if (contentLength !== null) {
-      if (!/^\\d+$/.test(contentLength)) return jsonError(400, "invalid_content_length");
+      if (!/^[0-9]+$/.test(contentLength)) return jsonError(400, "invalid_content_length");
       if (Number(contentLength) > 2 * 1024 * 1024) {
         return jsonError(413, "payload_too_large");
       }
