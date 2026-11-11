@@ -2,11 +2,15 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-10
+**Last reviewed:** 2026-11-11
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
 ## Latest engineering checkpoint — 2026-11-11
+
+The latest documentation-only checkpoint, [PR #38](https://github.com/pooya-labs/aetherflow/pull/38), merged as [612593e](https://github.com/pooya-labs/aetherflow/commit/612593e9efb2354541d04754750b2277c39cb2fc). Its exact PR-head Rust CI [43048625101](https://github.com/pooya-labs/aetherflow/actions/runs/43048625101) and security [43048625520](https://github.com/pooya-labs/aetherflow/actions/runs/43048625520) passed. The exact merge-SHA main checks also passed: Rust [43053833698](https://github.com/pooya-labs/aetherflow/actions/runs/43053833698) (**20/20 steps**), security [43053833861](https://github.com/pooya-labs/aetherflow/actions/runs/43053833861), and Pages [43053832910](https://github.com/pooya-labs/aetherflow/actions/runs/43053832910). The Rust workflow included Compose validation and the separate no-Origin demo smoke. No PostgreSQL/JetStream workflow was triggered because this PR changed documentation only; this does not replace the runtime-path evidence already recorded for PR #33.
+
+A bounded AI-assisted maintainer source review of the edge gateway, API ingress boundary, tenant credential authentication/RLS, and worker metrics listener is recorded in [the 2026-11-11 static-review note](../security/maintainer-static-review-2026-11-11.md). No confirmed critical/high-severity source defect was identified within that narrow review scope. This is not independent human review, a penetration test, live Cloudflare Workers runtime validation, or production approval; the independent security gate remains open.
 
 The latest merged application-code change is [PR #33](https://github.com/pooya-labs/aetherflow/pull/33), merged as [ff6aae9](https://github.com/pooya-labs/aetherflow/commit/ff6aae98b2d2a6fbef6ab41d6483c406126ee47f). It adds process-local NATS connection lifecycle counters and integrates them into the standalone worker's existing opt-in authenticated loopback `GET /metrics` endpoint alongside publisher and consumer metrics. PR #32 supplies the endpoint's security boundary: disabled by default, numeric loopback only, 32–256 character URL-safe Bearer token, SHA-256 digest storage, constant-time comparison, and fixed-name exposition without caller-controlled labels.
 
