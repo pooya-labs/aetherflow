@@ -70,7 +70,38 @@ $env:AETHERFLOW_NATS_URLS = "nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://
 cargo +1.99.1 run --locked -p aetherflow-transport-nats --bin aetherflow-worker
 ```
 
-The worker does not run database migrations. It checks that the migration ledger exists, registers separate task and transport workers under a fenced node membership, and provisions the three-replica JetStream stream and durable consumer. It prints its node/worker IDs and process-local publisher/consumer metrics every 30 seconds.
+The worker does not run database migrations. It checks that the migration ledger exists, registers separate task and transport workers under a fenced node membership, and provisions the three-replica JetStream stream and durable consumer. It prints its node/worker IDs and process-local publisher/consumer counters every 30 seconds. An authenticated Prometheus endpoint is optional and disabled unless both metrics environment variables are configured.
+
+### Optional authenticated Prometheus endpoint
+
+The worker can expose its NATS publisher and consumer counters at `GET /metrics`. This endpoint is **disabled by default**. It combines the one publisher and one consumer metrics handle owned by this worker process; it does not include the API process or other worker replicas.
+
+Enable it in the same PowerShell window used to start the worker:
+
+```powershell
+# Generate a 48-byte URL-safe bearer secret. Do not commit or share it.
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$secretBytes = New-Object byte[] 48
+$rng.GetBytes($secretBytes)
+$rng.Dispose()
+$metricsToken = [Convert]::ToBase64String($secretBytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+
+$env:AETHERFLOW_METRICS_BIND = "127.0.0.1:9464"
+$env:AETHERFLOW_METRICS_TOKEN = $metricsToken
+
+cargo +1.99.1 run --locked -p aetherflow-transport-nats --bin aetherflow-worker
+```
+
+The listener accepts only numeric loopback socket addresses and requires a 32–256 character URL-safe Bearer token. Only the SHA-256 token digest is retained in memory; comparisons use constant-time equality. The response is Prometheus text exposition with fixed metric names and no tenant, workflow, task, event, subject, credential, or payload labels. Unauthorized requests receive 401, and responses use `Cache-Control: no-store`.
+
+From the same machine, verify access:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:9464/metrics" `
+    -Headers @{ Authorization = "Bearer $metricsToken" }
+```
+
+The server deliberately rejects non-loopback binds because this endpoint is plain HTTP. For a remote Prometheus collector, keep the worker listener on loopback and place an authenticated TLS-terminating proxy on the same host. Do not expose this listener directly to the internet. If multiple worker processes run, scrape each separately and aggregate in the collector; the endpoint is not a cross-replica aggregate.
 
 ### Grant the local demo tenant explicitly
 
@@ -112,6 +143,8 @@ Optional settings:
 | `AETHERFLOW_NATS_SUBJECT` | `aetherflow.events` | Concrete subject used for AetherFlow events |
 | `AETHERFLOW_NATS_DURABLE` | `aetherflow_worker_events` | Durable pull-consumer name |
 | `AETHERFLOW_WASM_PLUGIN_PATH` | unset | Optional compiled AetherFlow ABI v1 component artifact |
+| `AETHERFLOW_METRICS_BIND` | unset | Optional numeric loopback socket address for the Prometheus listener; enabling it also requires a bearer token |
+| `AETHERFLOW_METRICS_TOKEN` | unset | 32–256 character URL-safe Bearer secret; required when the metrics listener is enabled |
 
 The local worker config currently provisions a three-replica stream to match the repository's three-node Compose cluster. For a remote cluster, configure NATS credentials/TLS using the existing `AETHERFLOW_NATS_*` connection settings and review the stream topology before starting the worker. PostgreSQL connections use the same Rustls/native-CA validation path as the API: `DATABASE_SSL_MODE` accepts `require` (the default), `prefer`, or `disable`. Use `disable` only for the local Compose database shown above; keep TLS verification enabled for remote databases and trust their issuing CA through the host certificate store.
 
