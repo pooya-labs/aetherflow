@@ -443,7 +443,8 @@ jobs:
           set -euo pipefail
           certificate_dir="$RUNNER_TEMP/aetherflow-nats-tls"
           server_certificate_dir="$certificate_dir/server"
-          mkdir -p "$server_certificate_dir"
+          client_certificate_dir="$certificate_dir/client"
+          mkdir -p "$server_certificate_dir" "$client_certificate_dir"
 
           openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
             -subj "/CN=AetherFlow CI Test CA" \
@@ -472,9 +473,32 @@ jobs:
             -extfile "$server_certificate_dir/server.ext" \
             -out "$server_certificate_dir/server.crt"
 
+          openssl req -newkey rsa:2048 -nodes \
+            -subj "/CN=AetherFlow CI Worker" \
+            -keyout "$client_certificate_dir/client.key" \
+            -out "$client_certificate_dir/client.csr"
+
+          cat > "$client_certificate_dir/client.ext" <<'EOF'
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=clientAuth
+          EOF
+
+          openssl x509 -req -sha256 -days 2 \
+            -in "$client_certificate_dir/client.csr" \
+            -CA "$certificate_dir/ca.crt" \
+            -CAkey "$certificate_dir/ca.key" \
+            -CAcreateserial \
+            -extfile "$client_certificate_dir/client.ext" \
+            -out "$client_certificate_dir/client.crt"
+
+          cp "$certificate_dir/ca.crt" "$server_certificate_dir/ca.crt"
+
           # The NATS container runs as an unprivileged user. This private key
           # belongs only to this short-lived, disposable CI fixture.
           chmod 0644 "$server_certificate_dir/server.key" "$server_certificate_dir/server.crt"
+          chmod 0600 "$client_certificate_dir/client.key"
+          chmod 0644 "$client_certificate_dir/client.crt"
 
           printf '%s\n' '127.0.0.1 aetherflow-wrong-host.test' \
             | sudo tee -a /etc/hosts >/dev/null
@@ -483,8 +507,9 @@ jobs:
             --publish 127.0.0.1:4225:4222 \
             --volume "$server_certificate_dir:/certs:ro" \
             nats:2.12-alpine \
-            -js -sd /data -m 8222 --tls \
-            --tlscert=/certs/server.crt --tlskey=/certs/server.key
+            -js -sd /data -m 8222 --tlsverify \
+            --tlscert=/certs/server.crt --tlskey=/certs/server.key \
+            --tlscacert=/certs/ca.crt
 
           ready=false
           for attempt in $(seq 1 60); do
@@ -499,15 +524,19 @@ jobs:
             exit 1
           fi
 
-      - name: Verify TLS trust and hostname validation in the NATS client
+      - name: Verify NATS TLS trust, mutual client authentication, and hostname validation
         env:
           AETHERFLOW_NATS_TLS_REQUIRED: "true"
           AETHERFLOW_NATS_CA_FILE: ${{ runner.temp }}/aetherflow-nats-tls/ca.crt
+          AETHERFLOW_NATS_CLIENT_CERT_FILE: ${{ runner.temp }}/aetherflow-nats-tls/client/client.crt
+          AETHERFLOW_NATS_CLIENT_KEY_FILE: ${{ runner.temp }}/aetherflow-nats-tls/client/client.key
           AETHERFLOW_SECURE_NATS_URL: tls://127.0.0.1:4225
           AETHERFLOW_SECURE_NATS_WRONG_HOST_URL: tls://aetherflow-wrong-host.test:4225
         run: |
           test "$AETHERFLOW_NATS_TLS_REQUIRED" = "true"
           test -r "$AETHERFLOW_NATS_CA_FILE"
+          test -r "$AETHERFLOW_NATS_CLIENT_CERT_FILE"
+          test -r "$AETHERFLOW_NATS_CLIENT_KEY_FILE"
           cargo +1.99.1 test -p aetherflow-transport-nats --test secure_connection --locked -- --ignored --test-threads=1
 
       - name: Stop the disposable TLS-enabled NATS server
