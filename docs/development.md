@@ -48,6 +48,12 @@ The transport crate exports `NatsConnectionConfig` for building JetStream client
 
 The default is plaintext to keep the loopback-only Compose cluster usable. That default is not suitable for an externally reachable deployment. Credentials or TLS files combined with an explicit plaintext setting fail validation. The `.creds` file is read when a connection is created; rotate it through a controlled new-client rollout rather than expecting automatic file watching. The helper secures client-side transport only—server-side NATS accounts, subject ACLs, stream retention, and cluster TLS policy still need deployment configuration.
 
+### Optional NATS connection lifecycle metrics
+
+For an explicit process-local connection metrics handle, use `NatsConnectionConfig::connect_with_metrics(servers)`. It returns the usual async-nats `Client` plus a cloneable `NatsConnectionMetrics` handle. The handle exposes a point-in-time `snapshot()` and fixed-name `render_prometheus()` output for the connected gauge, disconnects, successful reconnects, server errors, client errors, and terminal closed events. The initial connection is not counted as a reconnect; repeated Connected/Disconnected notifications do not double-count a transition.
+
+The existing `connect(servers)` method remains unchanged and does not enable the event callback or allocate lifecycle counters. Neither path changes reconnect policy, delay, server selection, credentials, or TLS behavior. These counters are local to the client process and include no server addresses, raw errors, credentials, tenant IDs, or workflow labels. Wiring the new handle into the standalone worker's authenticated HTTP scrape endpoint is a follow-up after that endpoint is merged; the method alone does not create or expose a listener.
+
 ## Standard Rust checks
 
 Run from the repository root:
