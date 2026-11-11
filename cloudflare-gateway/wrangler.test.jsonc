@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aetherflow-gateway-runtime-tests",
+  "main": "./index.mjs",
+  "compatibility_date": "2026-11-08",
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CLIENT_RATE_LIMITER",
+        "class_name": "ClientRateLimiter"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ClientRateLimiter"]
+    }
+  ],
+  "vars": {
+    "AETHERFLOW_ORIGIN": "https://origin-not-configured.invalid",
+    "AETHERFLOW_GATEWAY_BURST": "4",
+    "AETHERFLOW_GATEWAY_PER_SECOND": "1"
+  }
+}
