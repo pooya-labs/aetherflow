@@ -14,24 +14,38 @@ import {
  * consistent across all Worker replicas and Cloudflare locations.
  */
 const IDLE_BUCKET_TTL_MS = 24 * 60 * 60 * 1000;
+const CREATE_BUCKET_TABLE = `
+  CREATE TABLE IF NOT EXISTS client_rate_limit (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    tokens REAL NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+  )
+`;
 
 export class ClientRateLimiter {
   constructor(ctx, now = () => Date.now()) {
     this.ctx = ctx;
     this.now = now;
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS client_rate_limit (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        tokens REAL NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      )
-    `);
+    this.ensureSchema();
+  }
+
+  /**
+   * deleteAll() in an idle alarm also removes the SQLite schema. A Durable
+   * Object instance can remain alive after its alarm runs, so the next request
+   * must be able to recreate the table without waiting for a new constructor.
+   */
+  ensureSchema() {
+    this.ctx.storage.sql.exec(CREATE_BUCKET_TABLE);
   }
 
   async fetch(request) {
     if (request.method !== "POST") {
       return jsonError(405, "method_not_allowed", { Allow: "POST" });
     }
+
+    // The idle alarm may have deleted every SQLite table while this instance
+    // was still alive. Recreate the fixed schema before reading bucket state.
+    this.ensureSchema();
 
     let settings;
     try {
@@ -102,8 +116,9 @@ export class ClientRateLimiter {
         return;
       }
 
-      // Delete all metadata and alarm state as well as the SQL row so inactive
-      // Durable Objects can be fully cleaned up and stop accruing storage.
+      // deleteAll() clears the SQL schema and alarm metadata too. The next
+      // request calls ensureSchema() before reading, even if this instance was
+      // not evicted and its constructor therefore does not run again.
       await this.ctx.storage.deleteAll();
     });
   }
@@ -173,7 +188,7 @@ export default {
 
     const contentLength = request.headers.get("content-length");
     if (contentLength !== null) {
-      if (!/^\d+$/.test(contentLength)) return jsonError(400, "invalid_content_length");
+      if (!/^[0-9]+$/.test(contentLength)) return jsonError(400, "invalid_content_length");
       if (Number(contentLength) > 2 * 1024 * 1024) {
         return jsonError(413, "payload_too_large");
       }

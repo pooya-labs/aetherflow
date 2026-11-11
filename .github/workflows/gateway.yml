@@ -34,22 +34,93 @@ jobs:
       - name: Install the project's supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22.18.0
+          node-version: 22.23.0
 
-      - name: Record Node runtime
-        run: node --version
+      - name: Upgrade npm to the pinned Arborist-compatible release
+        run: |
+          npm install --global npm@11.19.1
+          test "$(npm --version)" = "11.19.1"
+
+      - name: Record Node and npm runtimes
+        run: |
+          node --version
+          npm --version
+
+      - name: Generate pinned gateway dependency lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        working-directory: cloudflare-gateway
+
+      - name: Upload generated dependency lock for repository pinning
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gateway-runtime-package-lock
+          path: cloudflare-gateway/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Install locked gateway dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: cloudflare-gateway
 
       - name: Validate JavaScript modules
-        run: |
-          node --check cloudflare-gateway/policy.mjs
-          node --check cloudflare-gateway/worker.mjs
-          node --check cloudflare-gateway/index.mjs
+        run: npm run check
+        working-directory: cloudflare-gateway
 
       - name: Run gateway policy tests
-        run: node --test cloudflare-gateway/policy.test.mjs
+        run: npm test
+        working-directory: cloudflare-gateway
+
+      - name: Run Cloudflare Workers runtime and SQLite tests
+        run: npm run test:workers-runtime
+        working-directory: cloudflare-gateway
 
       - name: Verify production route remains disabled
         run: |
           grep -Fq 'workersDev: false' cloudflare-gateway/cloudflare.config.ts
           grep -Fq 'previewUrls: false' cloudflare-gateway/cloudflare.config.ts
           grep -Fq 'https://origin-not-configured.invalid' cloudflare-gateway/cloudflare.config.ts
+          grep -Fq '"workers_dev": false' cloudflare-gateway/wrangler.test.jsonc
+          grep -Fq '"preview_urls": false' cloudflare-gateway/wrangler.test.jsonc
+
+  pin-dependency-lock:
+    name: Pin the verified gateway dependency lock
+    needs: gateway-policy
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.actor == 'pooya-labs' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the PR source branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+
+      - name: Install the project's supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.0
+
+      - name: Install the pinned npm resolver
+        run: |
+          npm install --global npm@11.19.1
+          test "$(npm --version)" = "11.19.1"
+
+      - name: Generate the verified lockfile
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        working-directory: cloudflare-gateway
+
+      - name: Commit the lockfile to the PR branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare-gateway/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Gateway dependency lock is already current."
+          else
+            git commit -m "chore(gateway): pin verified npm dependencies"
+            git push origin "HEAD:${GITHUB_HEAD_REF}"
+          fi
