@@ -9,7 +9,9 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 
-use async_nats::{Client, ConnectOptions, ServerAddr};
+use async_nats::{Client, ConnectOptions, Event, ServerAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Supported environment variables for NATS client connections.
 const TLS_REQUIRED: &str = "AETHERFLOW_NATS_TLS_REQUIRED";
@@ -84,6 +86,144 @@ impl Error for NatsConnectionError {
     }
 }
 
+/// Point-in-time connection lifecycle metrics for one NATS client.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NatsConnectionMetricsSnapshot {
+    /// Whether the client currently has an active NATS connection.
+    pub connected: bool,
+    /// Observed transitions from connected to disconnected.
+    pub disconnects: usize,
+    /// Successful connections after the initial connection.
+    pub reconnects: usize,
+    /// Server-originated errors observed by the client event callback.
+    pub server_errors: usize,
+    /// Client-originated errors observed by the client event callback.
+    pub client_errors: usize,
+    /// Terminal client-closed events observed by the callback.
+    pub closed_events: usize,
+}
+
+#[derive(Default)]
+struct NatsConnectionMetricsInner {
+    connected: AtomicBool,
+    ever_connected: AtomicBool,
+    closed: AtomicBool,
+    disconnects: AtomicUsize,
+    reconnects: AtomicUsize,
+    server_errors: AtomicUsize,
+    client_errors: AtomicUsize,
+    closed_events: AtomicUsize,
+}
+
+/// Process-local NATS connection lifecycle counters shared by cloned handles.
+///
+/// The metrics do not change reconnect policy, retry timing, TLS, or server
+/// selection. They contain no server addresses, credentials, or error text.
+#[derive(Clone, Default)]
+pub struct NatsConnectionMetrics {
+    inner: Arc<NatsConnectionMetricsInner>,
+}
+
+impl NatsConnectionMetrics {
+    /// Returns a point-in-time snapshot of the connection lifecycle counters.
+    #[must_use]
+    pub fn snapshot(&self) -> NatsConnectionMetricsSnapshot {
+        NatsConnectionMetricsSnapshot {
+            connected: self.inner.connected.load(Ordering::Relaxed),
+            disconnects: self.inner.disconnects.load(Ordering::Relaxed),
+            reconnects: self.inner.reconnects.load(Ordering::Relaxed),
+            server_errors: self.inner.server_errors.load(Ordering::Relaxed),
+            client_errors: self.inner.client_errors.load(Ordering::Relaxed),
+            closed_events: self.inner.closed_events.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Renders fixed-name Prometheus metrics without caller-controlled labels.
+    #[must_use]
+    pub fn render_prometheus(&self) -> String {
+        let snapshot = self.snapshot();
+        let mut output = String::new();
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_connected",
+            "gauge",
+            "Whether the NATS client currently has an active connection.",
+            usize::from(snapshot.connected),
+        );
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_disconnects_total",
+            "counter",
+            "Observed transitions from connected to disconnected.",
+            snapshot.disconnects,
+        );
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_reconnects_total",
+            "counter",
+            "Successful NATS connections after the initial connection.",
+            snapshot.reconnects,
+        );
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_server_errors_total",
+            "counter",
+            "Server-originated NATS errors observed by the client.",
+            snapshot.server_errors,
+        );
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_client_errors_total",
+            "counter",
+            "Client-originated NATS errors observed by the client.",
+            snapshot.client_errors,
+        );
+        crate::append_prometheus_metric(
+            &mut output,
+            "aetherflow_nats_connection_closed_total",
+            "counter",
+            "Terminal NATS client-closed events observed by the callback.",
+            snapshot.closed_events,
+        );
+        output
+    }
+
+    fn mark_initial_connection(&self) {
+        self.inner.ever_connected.store(true, Ordering::Release);
+        self.inner.connected.store(true, Ordering::Release);
+    }
+
+    fn record_event(&self, event: Event) {
+        match event {
+            Event::Connected => {
+                if !self.inner.connected.swap(true, Ordering::AcqRel)
+                    && self.inner.ever_connected.swap(true, Ordering::AcqRel)
+                {
+                    self.inner.reconnects.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Event::Disconnected => {
+                if self.inner.connected.swap(false, Ordering::AcqRel) {
+                    self.inner.disconnects.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Event::ServerError(_) => {
+                self.inner.server_errors.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::ClientError(_) => {
+                self.inner.client_errors.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::Closed => {
+                self.inner.connected.store(false, Ordering::Release);
+                if !self.inner.closed.swap(true, Ordering::AcqRel) {
+                    self.inner.closed_events.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Event::LameDuckMode | Event::Draining | Event::SlowConsumer(_) => {}
+        }
+    }
+}
+
 impl NatsConnectionConfig {
     /// Reads and validates NATS transport settings from the process environment.
     ///
@@ -136,9 +276,39 @@ impl NatsConnectionConfig {
     /// configuration and drain the old client; this helper does not watch files
     /// or silently reload secrets in the background.
     pub async fn connect(&self, servers: Vec<ServerAddr>) -> Result<Client, NatsConnectionError> {
+        self.connect_inner(servers, None)
+            .await
+            .map(|(client, _)| client)
+    }
+
+    /// Connects to NATS and returns a handle for process-local connection metrics.
+    ///
+    /// The initial successful connection sets the connected gauge but does not
+    /// increment the reconnect counter. Later Connected events increment it only
+    /// after an observed Disconnected transition.
+    pub async fn connect_with_metrics(
+        &self,
+        servers: Vec<ServerAddr>,
+    ) -> Result<(Client, NatsConnectionMetrics), NatsConnectionError> {
+        let metrics = NatsConnectionMetrics::default();
+        let (client, metrics) = self.connect_inner(servers, Some(metrics)).await?;
+        Ok((client, metrics.expect("metrics were enabled for this connection")))
+    }
+
+    async fn connect_inner(
+        &self,
+        servers: Vec<ServerAddr>,
+        metrics: Option<NatsConnectionMetrics>,
+    ) -> Result<(Client, Option<NatsConnectionMetrics>), NatsConnectionError> {
         self.validate()?;
 
         let mut options = ConnectOptions::new().require_tls(self.tls_required);
+        if let Some(callback_metrics) = metrics.clone() {
+            options = options.event_callback(move |event| {
+                let callback_metrics = callback_metrics.clone();
+                async move { callback_metrics.record_event(event) }
+            });
+        }
 
         if let Some(path) = &self.credentials_file {
             options = options
@@ -155,10 +325,14 @@ impl NatsConnectionConfig {
             options = options.add_client_certificate(certificate.clone(), key.clone());
         }
 
-        options
+        let client = options
             .connect(servers)
             .await
-            .map_err(NatsConnectionError::Connect)
+            .map_err(NatsConnectionError::Connect)?;
+        if let Some(metrics) = &metrics {
+            metrics.mark_initial_connection();
+        }
+        Ok((client, metrics))
     }
 
     fn validate(&self) -> Result<(), NatsConnectionError> {
