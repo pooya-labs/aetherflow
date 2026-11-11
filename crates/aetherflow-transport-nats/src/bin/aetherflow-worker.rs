@@ -811,7 +811,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConsumerMetrics, PublisherMetrics, WorkerMetricsState, fail_once_output,
+        ConsumerMetrics, NatsConnectionMetrics, PublisherMetrics, WorkerMetricsState,
+        fail_once_output,
         hash_metrics_token, json_add_payload, parse_database_ssl_mode, parse_metrics_server_config,
         postgres_manager, uppercase_payload, worker_metrics_router,
     };
