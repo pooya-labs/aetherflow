@@ -215,7 +215,7 @@ describe("Cloudflare Gateway request routing in the Workers runtime", () => {
     ]) {
       expect(upstream.headers.has(name)).toBe(false);
     }
-    expect(upstream.headers.get("Cache-Control")).toBe("no-store");
+    expect(responses[0].headers.get("Cache-Control")).toBe("no-store");
     expect(await responses[0].json()).toEqual({ forwarded: true });
   });
 });
