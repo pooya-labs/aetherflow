@@ -148,7 +148,7 @@ impl NatsConnectionMetrics {
             "aetherflow_nats_connection_connected",
             "gauge",
             "Whether the NATS client currently has an active connection.",
-            usize::from(snapshot.connected),
+            if snapshot.connected { 1 } else { 0 },
         );
         crate::append_prometheus_metric(
             &mut output,
@@ -470,5 +470,66 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod connection_metrics_tests {
+    use super::{NatsConnectionMetrics, NatsConnectionMetricsSnapshot};
+    use async_nats::{ClientError, Event, ServerError};
+
+    #[test]
+    fn initial_connection_is_not_counted_as_a_reconnect() {
+        let metrics = NatsConnectionMetrics::default();
+        metrics.record_event(Event::Connected);
+
+        assert_eq!(
+            metrics.snapshot(),
+            NatsConnectionMetricsSnapshot {
+                connected: true,
+                ..NatsConnectionMetricsSnapshot::default()
+            }
+        );
+    }
+
+    #[test]
+    fn reconnects_count_only_after_a_real_connected_to_disconnected_transition() {
+        let metrics = NatsConnectionMetrics::default();
+        metrics.mark_initial_connection();
+        metrics.record_event(Event::Connected);
+        metrics.record_event(Event::Disconnected);
+        metrics.record_event(Event::Disconnected);
+        metrics.record_event(Event::Connected);
+        metrics.record_event(Event::Connected);
+        metrics.record_event(Event::Disconnected);
+
+        let snapshot = metrics.snapshot();
+        assert!(!snapshot.connected);
+        assert_eq!(snapshot.disconnects, 2);
+        assert_eq!(snapshot.reconnects, 1);
+    }
+
+    #[test]
+    fn server_client_errors_and_terminal_close_are_counted_without_error_labels() {
+        let metrics = NatsConnectionMetrics::default();
+        metrics.mark_initial_connection();
+        metrics.record_event(Event::ServerError(ServerError::AuthorizationViolation));
+        metrics.record_event(Event::ClientError(ClientError::MaxReconnects));
+        metrics.record_event(Event::Closed);
+        metrics.record_event(Event::Closed);
+
+        let snapshot = metrics.snapshot();
+        assert!(!snapshot.connected);
+        assert_eq!(snapshot.server_errors, 1);
+        assert_eq!(snapshot.client_errors, 1);
+        assert_eq!(snapshot.closed_events, 1);
+
+        let exposition = metrics.render_prometheus();
+        assert!(exposition.contains("aetherflow_nats_connection_server_errors_total 1"));
+        assert!(exposition.contains("aetherflow_nats_connection_client_errors_total 1"));
+        assert!(exposition.contains("aetherflow_nats_connection_closed_total 1"));
+        assert!(!exposition.contains('{'), "connection metrics must not include labels");
+        assert!(!exposition.contains("AuthorizationViolation"));
+        assert!(!exposition.contains("MaxReconnects"));
     }
 }
