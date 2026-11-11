@@ -188,11 +188,6 @@ impl NatsConnectionMetrics {
         output
     }
 
-    fn mark_initial_connection(&self) {
-        self.inner.ever_connected.store(true, Ordering::Release);
-        self.inner.connected.store(true, Ordering::Release);
-    }
-
     fn record_event(&self, event: Event) {
         match event {
             Event::Connected => {
@@ -332,9 +327,6 @@ impl NatsConnectionConfig {
             .connect(servers)
             .await
             .map_err(NatsConnectionError::Connect)?;
-        if let Some(metrics) = &metrics {
-            metrics.mark_initial_connection();
-        }
         Ok((client, metrics))
     }
 
@@ -498,7 +490,6 @@ mod connection_metrics_tests {
     #[test]
     fn reconnects_count_only_after_a_real_connected_to_disconnected_transition() {
         let metrics = NatsConnectionMetrics::default();
-        metrics.mark_initial_connection();
         metrics.record_event(Event::Connected);
         metrics.record_event(Event::Disconnected);
         metrics.record_event(Event::Disconnected);
@@ -515,7 +506,7 @@ mod connection_metrics_tests {
     #[test]
     fn server_client_errors_and_terminal_close_are_counted_without_error_labels() {
         let metrics = NatsConnectionMetrics::default();
-        metrics.mark_initial_connection();
+        metrics.record_event(Event::Connected);
         metrics.record_event(Event::ServerError(ServerError::AuthorizationViolation));
         metrics.record_event(Event::ClientError(ClientError::MaxReconnects));
         metrics.record_event(Event::Closed);
