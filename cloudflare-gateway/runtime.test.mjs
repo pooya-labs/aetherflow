@@ -1,12 +1,16 @@
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import {
   evictDurableObject,
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const IDLE_BUCKET_TTL_MS = 24 * 60 * 60 * 1000;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function getLimiter(name) {
   const id = env.CLIENT_RATE_LIMITER.idFromName(name);
@@ -144,5 +148,74 @@ describe("Cloudflare Workers Durable Object runtime", () => {
       updated_at_ms: clock.now,
     });
     expect(await readAlarm(stub)).toBe(clock.now + IDLE_BUCKET_TTL_MS);
+  });
+});
+
+
+describe("Cloudflare Gateway request routing in the Workers runtime", () => {
+  it("enforces the real Durable Object bucket before forwarding sanitized requests to the fixed origin", async () => {
+    const outboundRequests = [];
+    const upstreamFetch = vi.fn(async (input) => {
+      const request = input instanceof Request ? input : new Request(input);
+      outboundRequests.push(request);
+      return Response.json(
+        { forwarded: true },
+        { headers: { "Cache-Control": "public, max-age=3600" } },
+      );
+    });
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const clientIp = "198.51.100.247";
+    const headers = {
+      "CF-Connecting-IP": clientIp,
+      "True-Client-IP": "203.0.113.10",
+      "Forwarded": "for=203.0.113.11",
+      "X-Forwarded-For": "203.0.113.12",
+      "X-Real-IP": "203.0.113.13",
+      "X-AetherFlow-Ingress-Token": "spoofed-client-token",
+      "Authorization": "Bearer tenant-test-credential",
+    };
+
+    const responses = [];
+    for (let index = 0; index < 5; index += 1) {
+      responses.push(
+        await exports.default.fetch(
+          new Request("https://gateway-runtime.test/api/v1/workflow-runs", {
+            method: "GET",
+            headers,
+          }),
+        ),
+      );
+    }
+
+    expect(responses.slice(0, 4).map((response) => response.status)).toEqual([
+      200,
+      200,
+      200,
+      200,
+    ]);
+    expect(responses[4].status).toBe(429);
+    expect(responses[4].headers.get("Retry-After")).toBe("1");
+    expect(upstreamFetch).toHaveBeenCalledTimes(4);
+    expect(outboundRequests).toHaveLength(4);
+
+    const upstream = outboundRequests[0];
+    expect(upstream.url).toBe("https://origin-not-configured.invalid/api/v1/workflow-runs");
+    expect(upstream.headers.get("Authorization")).toBe("Bearer tenant-test-credential");
+    expect(upstream.headers.get("x-aetherflow-ingress-token")).toBe(
+      env.AETHERFLOW_INGRESS_TOKEN,
+    );
+
+    for (const name of [
+      "cf-connecting-ip",
+      "true-client-ip",
+      "forwarded",
+      "x-forwarded-for",
+      "x-real-ip",
+    ]) {
+      expect(upstream.headers.has(name)).toBe(false);
+    }
+    expect(responses[0].headers.get("Cache-Control")).toBe("no-store");
+    expect(await responses[0].json()).toEqual({ forwarded: true });
   });
 });
