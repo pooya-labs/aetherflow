@@ -64,7 +64,7 @@ Required values:
 | Setting | Location | Notes |
 | --- | --- | --- |
 | `AETHERFLOW_ORIGIN` | Worker text binding | HTTPS origin only; no path, query, fragment, or URL credentials |
-| `AETHERFLOW_INGRESS_TOKEN` | Worker Secret | Same 32–256 character URL-safe random token configured in the Rust API |
+| `AETHERFLOW_INGRESS_TOKEN` | Worker Secret | Same 32–256 ASCII letters, digits, `-` or `_` token configured in the Rust API; the edge and API enforce the identical character/length contract |
 | `AETHERFLOW_INGRESS_TOKEN` | API secret manager / process environment | Required when `AETHERFLOW_BIND` is non-loopback |
 | `AETHERFLOW_GATEWAY_BURST` | Worker text binding | Initial default 60 requests |
 | `AETHERFLOW_GATEWAY_PER_SECOND` | Worker text binding | Initial refill 20 requests/second |
