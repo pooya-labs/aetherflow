@@ -72,7 +72,7 @@ function cors(response, request, allowedOrigin) {
 
 async function readJson(request, maxBytes) {
   const type = request.headers.get("Content-Type") || "";
-  if (!/^application\\/(?:json|[a-z0-9.+-]+\\+json)(?:\\s*;|$)/i.test(type)) {
+  if (!/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(type)) {
     throw new HttpError(415, "content_type_required", "Use application/json for API requests.");
   }
 
