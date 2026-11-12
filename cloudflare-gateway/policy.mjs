@@ -1,3 +1,16 @@
+/**
+ * Match the Rust API's ingress-token contract exactly so the edge and origin
+ * cannot disagree about whether a configured shared secret is acceptable.
+ */
+export function isValidIngressToken(value) {
+  return (
+    typeof value === "string" &&
+    value.length >= 32 &&
+    value.length <= 256 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
 const BLOCKED_REQUEST_HEADERS = [
   "connection",
   "content-length",
@@ -65,7 +78,7 @@ export async function clientBucketName(sourceIp, secret) {
   if (typeof sourceIp !== "string" || sourceIp.length < 2 || sourceIp.length > 64) {
     throw new TypeError("A trusted client address is required");
   }
-  if (typeof secret !== "string" || secret.length < 32) {
+  if (!isValidIngressToken(secret)) {
     throw new TypeError("A high-entropy bucket-name key is required");
   }
   const encoder = new TextEncoder();
