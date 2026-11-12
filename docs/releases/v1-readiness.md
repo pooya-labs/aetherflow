@@ -2,11 +2,25 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-12 (PR #40 Workers runtime and PR #41 CI lockfile checkpoints)
+**Last reviewed:** 2026-11-13 (PR #47 Rust API streamed-body test and PR #48 Cloudflare Free bounded body reader merged)
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
-## Latest engineering checkpoint — 2026-11-12
+## Latest engineering checkpoint — 2026-11-13
+
+[PR #47](https://github.com/pooya-labs/aetherflow/pull/47) merged as [fd16012](https://github.com/pooya-labs/aetherflow/commit/fd160124856cd4e2c272cf873122ad90ca675839). It names the Rust API's existing 2 MiB body ceiling and adds a regression test for a body one byte over the limit without `Content-Length`, asserting HTTP 413 and the stable `payload_too_large` error contract. Exact PR-head validation passed. Exact merge-SHA main Rust CI [43328521305](https://github.com/pooya-labs/aetherflow/actions/runs/43328521305), PostgreSQL/JetStream [43328521337](https://github.com/pooya-labs/aetherflow/actions/runs/43328521337), Gateway CI [43328521262](https://github.com/pooya-labs/aetherflow/actions/runs/43328521262), and security [43328521235](https://github.com/pooya-labs/aetherflow/actions/runs/43328521235) passed on `fd160124856cd4e2c272cf873122ad90ca675839`. The first Pages job was cancelled as a later lockfile-only commit superseded it; Pages then passed on that successor SHA.
+
+[PR #48](https://github.com/pooya-labs/aetherflow/pull/48) merged as [54c279c](https://github.com/pooya-labs/aetherflow/commit/54c279c653cc1c07590716101181ec0fb6d1cd20). It replaces the separate no-Origin Cloudflare Free Worker’s unbounded `request.text()` body read with a fixed-capacity streaming reader. The existing 16 KiB request limit is now enforced as chunks arrive and before JSON parsing; over-limit streams are cancelled immediately. Declared oversized/malformed lengths and invalid UTF-8 are rejected, while the established 413 `request_too_large` JSON response contract is retained.
+
+- The exact PR head `30935005854f27b23d56a128f0371f4fbd03f105` passed [Rust CI](https://github.com/pooya-labs/aetherflow/actions/runs/43329350077) and [supply-chain/secret checks](https://github.com/pooya-labs/aetherflow/actions/runs/43329350157). Rust CI completed formatting, JS/static contracts, runbook checks, Clippy, workspace tests, release build, benchmark smoke, WASM lint/build/ABI example, and docs. Compose, full-history Gitleaks, and cargo-deny passed. The five focused request-body tests passed **5/5**.
+- On exact merge SHA `54c279c653cc1c07590716101181ec0fb6d1cd20`, the ordinary-push Cloudflare Free health/CORS smoke passed. Exact-merge Rust [43332425956](https://github.com/pooya-labs/aetherflow/actions/runs/43332425956), security [43332425857](https://github.com/pooya-labs/aetherflow/actions/runs/43332425857), and Pages [43332424487](https://github.com/pooya-labs/aetherflow/actions/runs/43332424487) were still running when this checkpoint was drafted. Keep the merge-SHA main matrix open until final outcomes are confirmed; do not substitute PR-head evidence for exact-merge evidence.
+- This change modifies the checked-in Cloudflare Free Worker source. The ordinary-push smoke is health/CORS-only and does not deploy the changed Worker bundle or run the full workflow smoke. The running deployment must not be described as containing this fix until a deliberate deploy is verified.
+ 
+### Next application-level verification
+
+Add a Worker-route integration test that submits an over-limit streamed request without `Content-Length` and verifies the public HTTP 413 JSON envelope and no-store headers end-to-end. The current five tests exercise the dedicated bounded-reader module; the route-level response mapping is a separate coverage gap. Keep the no-Origin demo distinct from the Rust reverse-proxy Gateway. This additional local coverage still does not replace deployed Cloudflare acceptance or production ingress tests.
+
+## Previous engineering checkpoint — 2026-11-12
 
 [PR #40](https://github.com/pooya-labs/aetherflow/pull/40) merged as [da5cdb8](https://github.com/pooya-labs/aetherflow/commit/da5cdb84a1bfa463f0f12e50b1a7a7dc2179b758), adding Cloudflare Workers Vitest integration coverage for the SQLite-backed rate-limit Durable Object. The suite verifies state persistence across eviction, client-bucket isolation, concurrent requests, alarm rescheduling, expiry cleanup, and schema recreation after `deleteAll()`. Exact PR-head Gateway, Rust, and security workflows passed. Exact merge-SHA Gateway CI [43113088444](https://github.com/pooya-labs/aetherflow/actions/runs/43113088444), supply-chain/secret checks [43113088421](https://github.com/pooya-labs/aetherflow/actions/runs/43113088421), and Pages [43113087644](https://github.com/pooya-labs/aetherflow/actions/runs/43113087644) passed; exact merge-SHA Rust CI [43113088333](https://github.com/pooya-labs/aetherflow/actions/runs/43113088333) also passed on the exact merge SHA. The production gateway remains unrouted, the API origin is not configured, and no deployment/bypass acceptance is claimed.
 
