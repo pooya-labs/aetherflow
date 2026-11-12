@@ -2702,8 +2702,9 @@ fn format_timestamp(value: SystemTime) -> String {
 mod tests {
     use super::{
         AppState, AuthFailureRateLimiter, HttpMetrics, HttpOperation, HttpResponseClass,
-        InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter,
-        TenantOperationalMetrics, authorization_matches, hash_api_token, hash_secret_token,
+        InFlightRequestGuard, MAX_HTTP_REQUEST_BODY_BYTES, PrincipalRateLimitKey,
+        PrincipalRateLimiter, TenantOperationalMetrics, authorization_matches, hash_api_token,
+        hash_secret_token,
         render_tenant_operational_metrics, request_source_ip, router,
     };
     use axum::body::{Body, to_bytes};
