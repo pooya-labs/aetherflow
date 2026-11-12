@@ -35,7 +35,7 @@ export async function readBoundedRequestText(request, maxBytes) {
   if (!request.body) return "";
 
   const reader = request.body.getReader();
-  const chunks = [];
+  const bytes = new Uint8Array(maxBytes);
   let totalBytes = 0;
 
   try {
@@ -44,9 +44,7 @@ export async function readBoundedRequestText(request, maxBytes) {
       if (done) break;
 
       const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-      totalBytes += chunk.byteLength;
-
-      if (totalBytes > maxBytes) {
+      if (chunk.byteLength > maxBytes - totalBytes) {
         try {
           await reader.cancel();
         } catch {
@@ -59,7 +57,8 @@ export async function readBoundedRequestText(request, maxBytes) {
         );
       }
 
-      chunks.push(chunk);
+      bytes.set(chunk, totalBytes);
+      totalBytes += chunk.byteLength;
     }
   } catch (error) {
     if (error instanceof RequestBodyError) throw error;
@@ -76,15 +75,8 @@ export async function readBoundedRequestText(request, maxBytes) {
     }
   }
 
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, totalBytes));
   } catch {
     throw new RequestBodyError(
       400,
