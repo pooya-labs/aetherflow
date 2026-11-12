@@ -74,7 +74,7 @@ require("readBoundedRequestText(request, maxBytes)" in cloudflare, "Cloudflare F
 require("request.text()" not in cloudflare, "Cloudflare Free must not buffer an unbounded body with request.text()")
 require(
     "getReader()" in cloudflare_body_reader
-    and "totalBytes > maxBytes" in cloudflare_body_reader
+    and "chunk.byteLength > maxBytes - totalBytes" in cloudflare_body_reader
     and "reader.cancel()" in cloudflare_body_reader,
     "Cloudflare Free request bodies must be counted and cancelled while streaming",
 )
