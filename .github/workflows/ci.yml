@@ -139,7 +139,9 @@ jobs:
           node --check dashboard/apps-script-bridge.js
           node --check dashboard/runtime-config.js
           node --check cloudflare-free/worker.mjs
+          node --check cloudflare-free/request-body.mjs
           node --check serverless-shared/workflow-core.js
+          node --test cloudflare-free/request-body.test.mjs
           node --test cloudflare-gateway/policy.test.mjs
           node --test serverless-shared/workflow-core.test.mjs
           node --check < apps-script/Code.gs
