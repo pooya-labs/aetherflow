@@ -219,3 +219,54 @@ describe("Cloudflare Gateway request routing in the Workers runtime", () => {
     expect(await responses[0].json()).toEqual({ forwarded: true });
   });
 });
+
+
+describe("Cloudflare Gateway origin failure handling in the Workers runtime", () => {
+  it("rejects origin redirects without leaking the Location header", async () => {
+    const upstreamFetch = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          Location: "https://origin-not-configured.invalid/login",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const response = await exports.default.fetch(
+      new Request("https://gateway-runtime.test/api/v1/workflow-runs", {
+        headers: {
+          "CF-Connecting-IP": "192.0.2.42",
+          Authorization: "Bearer tenant-test-credential",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("origin_redirect_rejected");
+    expect(response.headers.has("Location")).toBe(false);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a generic no-store error when the upstream transport fails", async () => {
+    const upstreamFetch = vi.fn(async () => {
+      throw new Error("internal-origin.example: connection refused");
+    });
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const response = await exports.default.fetch(
+      new Request("https://gateway-runtime.test/api/v1/workflow-runs", {
+        headers: {
+          "CF-Connecting-IP": "192.0.2.43",
+          Authorization: "Bearer tenant-test-credential",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("origin_unavailable");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+  });
+});
