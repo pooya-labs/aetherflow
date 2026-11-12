@@ -3,6 +3,7 @@ import {
   clientBucketName,
   consumeTokenBucket,
   isAllowedPath,
+  isValidIngressToken,
   jsonError,
   parseOrigin,
   positiveInteger,
@@ -126,7 +127,7 @@ export class ClientRateLimiter {
 
 function gatewaySettings(env) {
   const origin = parseOrigin(env.AETHERFLOW_ORIGIN);
-  if (typeof env.AETHERFLOW_INGRESS_TOKEN !== "string" || env.AETHERFLOW_INGRESS_TOKEN.length < 32) {
+  if (!isValidIngressToken(env.AETHERFLOW_INGRESS_TOKEN)) {
     throw new TypeError("AETHERFLOW_INGRESS_TOKEN is required");
   }
   return {

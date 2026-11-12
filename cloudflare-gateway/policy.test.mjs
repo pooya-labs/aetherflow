@@ -9,6 +9,7 @@ import {
   clientBucketName,
   consumeTokenBucket,
   isAllowedPath,
+  isValidIngressToken,
   parseOrigin,
   positiveInteger,
 } from "./policy.mjs";
@@ -39,6 +40,40 @@ test("positive configuration rejects zero, signs, decimals and unbounded values"
   assert.equal(positiveInteger("12", 60, "burst"), 12);
   for (const value of ["0", "-1", "1.2", "Infinity", "1000001", "a"]) {
     assert.throws(() => positiveInteger(value, 60, "burst"));
+  }
+});
+
+test("ingress tokens match the Rust API length and URL-safe alphabet", () => {
+  assert.equal(isValidIngressToken("a".repeat(32)), true);
+  assert.equal(isValidIngressToken("a".repeat(256)), true);
+  for (const value of [
+    "a".repeat(31),
+    "a".repeat(257),
+    "a".repeat(32) + "!",
+    "a".repeat(32) + "/",
+    "a".repeat(32) + " ",
+    "é".repeat(32),
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(isValidIngressToken(value), false);
+  }
+});
+
+test("gateway refuses ingress tokens outside the API contract before limiter or origin access", async () => {
+  for (const token of ["a".repeat(31), "a".repeat(257), "a".repeat(32) + "!"]) {
+    const response = await worker.fetch(
+      new Request("https://gateway.example.test/api/v1/workflow-runs", {
+        headers: { "CF-Connecting-IP": "203.0.113.5" },
+      }),
+      {
+        AETHERFLOW_ORIGIN: "https://api.example.test",
+        AETHERFLOW_INGRESS_TOKEN: token,
+      },
+    );
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "gateway_not_configured");
   }
 });
 
