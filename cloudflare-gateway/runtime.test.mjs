@@ -243,7 +243,9 @@ describe("Cloudflare Gateway origin failure handling in the Workers runtime", ()
     );
 
     expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("origin_redirect_rejected");
+    const payload = await response.text();
+    expect(payload).toContain("origin_redirect_rejected");
+    expect(payload).not.toContain("origin-not-configured.invalid");
     expect(response.headers.has("Location")).toBe(false);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
@@ -265,7 +267,10 @@ describe("Cloudflare Gateway origin failure handling in the Workers runtime", ()
     );
 
     expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("origin_unavailable");
+    const payload = await response.text();
+    expect(payload).toContain("origin_unavailable");
+    expect(payload).not.toContain("internal-origin.example");
+    expect(payload).not.toContain("connection refused");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
   });
