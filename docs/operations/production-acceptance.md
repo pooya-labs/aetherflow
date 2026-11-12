@@ -56,7 +56,7 @@ Record the evidence: gateway configuration revision, source-key policy, threshol
 
 ## 3. API, identity and secrets
 
-- [ ] API replicas use non-loopback binds only with valid TLS certificates/private keys and the shared `AETHERFLOW_INGRESS_TOKEN`; direct requests without `X-AetherFlow-Ingress-Token` must receive 403 on every route except `/health`. Remote PostgreSQL connections require certificate and hostname verification.
+- [ ] API replicas use non-loopback binds only with valid TLS certificates/private keys and the shared `AETHERFLOW_INGRESS_TOKEN`; the shared secret must be 32–256 ASCII letters, digits, `-` or `_`, with the Worker and Rust API enforcing the same contract. Direct requests without `X-AetherFlow-Ingress-Token` must receive 403 on every route except `/health`. Remote PostgreSQL connections require certificate and hostname verification.
 - [ ] The deployment has a secret manager for operator/tenant credentials, database credentials, NATS credentials, TLS keys and OTLP exporter headers. No secret is stored in the repository, image, logs, shell history or public deployment metadata.
 - [ ] Credential issuance, revocation, expiry, emergency rotation and restart/rollout behavior are tested.
 - [ ] Operator identity limitations are accepted explicitly: the current platform API uses one shared operator token, so audit spans can identify only a shared operator credential, not a human. Do not claim per-person operator attribution until distinct operator identities or an approved external identity layer exists.
