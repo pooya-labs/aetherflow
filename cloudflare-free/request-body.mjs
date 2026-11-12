@@ -14,7 +14,7 @@ export async function readBoundedRequestText(request, maxBytes) {
 
   const declared = request.headers.get("Content-Length");
   if (declared !== null) {
-    if (!/^\\d+$/.test(declared)) {
+    if (!/^\d+$/.test(declared)) {
       throw new RequestBodyError(
         400,
         "invalid_content_length",
