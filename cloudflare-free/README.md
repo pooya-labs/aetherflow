@@ -66,6 +66,7 @@ From the repository root:
 
 ```sh
 node --test cloudflare-free/request-body.test.mjs
+node --experimental-loader=./cloudflare-free/test-loader.mjs --test cloudflare-free/worker-route.test.mjs
 node --test serverless-shared/workflow-core.test.mjs
 python scripts/check-serverless-contracts.py
 node --check dashboard/runtime-config.js
