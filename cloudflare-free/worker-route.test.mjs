@@ -8,10 +8,18 @@ test("Worker route returns a no-store 413 envelope for an oversized streamed req
   let cancelled = false;
   let databaseCalls = 0;
 
+  let chunkIndex = 0;
   const body = new ReadableStream(
     {
-      start(controller) {
-        controller.enqueue(new Uint8Array(maxBytes + 1).fill(0x61));
+      pull(controller) {
+        if (chunkIndex === 0) {
+          controller.enqueue(new Uint8Array(maxBytes / 2).fill(0x61));
+        } else if (chunkIndex === 1) {
+          controller.enqueue(new Uint8Array(maxBytes / 2 + 1).fill(0x62));
+        } else {
+          controller.close();
+        }
+        chunkIndex += 1;
       },
       cancel() {
         cancelled = true;
