@@ -25,6 +25,7 @@ gas = read("apps-script/Code.gs")
 gas_html = read("apps-script/Index.html")
 gas_manifest = json.loads(read("apps-script/appsscript.json"))
 cloudflare = read("cloudflare-free/worker.mjs")
+cloudflare_body_reader = read("cloudflare-free/request-body.mjs")
 cloudflare_sql = read("cloudflare-free/migrations/0001_control_plane.sql")
 cloudflare_config_text = read("cloudflare-free/wrangler.jsonc")
 cloudflare_config = json.loads(cloudflare_config_text)
@@ -65,6 +66,18 @@ for forbidden in ("UrlFetchApp.fetch", "MailApp.sendEmail", "GmailApp.sendEmail"
 
 require('import { WorkflowEntrypoint } from "cloudflare:workers";' in cloudflare, "Cloudflare WorkflowEntrypoint must be present")
 require('import "../serverless-shared/workflow-core.js";' in cloudflare, "Cloudflare runtime must import the shared core")
+require(
+    'import { readBoundedRequestText, RequestBodyError } from "./request-body.mjs";' in cloudflare,
+    "Cloudflare Free must use the bounded request-body reader",
+)
+require("readBoundedRequestText(request, maxBytes)" in cloudflare, "Cloudflare Free must enforce streamed request bytes")
+require("request.text()" not in cloudflare, "Cloudflare Free must not buffer an unbounded body with request.text()")
+require(
+    "getReader()" in cloudflare_body_reader
+    and "chunk.byteLength > maxBytes - totalBytes" in cloudflare_body_reader
+    and "reader.cancel()" in cloudflare_body_reader,
+    "Cloudflare Free request bodies must be counted and cancelled while streaming",
+)
 require("export class AetherFlowExecution extends WorkflowEntrypoint" in cloudflare, "durable Workflow class is missing")
 for route in (
     "/api/v1/demo/bootstrap",
