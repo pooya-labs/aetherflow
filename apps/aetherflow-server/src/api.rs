@@ -51,6 +51,8 @@ const HTTP_LATENCY_BUCKETS: [(u64, &str); 10] = [
     (5_000_000, "5"),
 ];
 
+const MAX_HTTP_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
+
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 use aetherflow_core::domain::{
@@ -997,7 +999,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .merge(operator_control_plane)
         .merge(tenant_control_plane)
-        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_HTTP_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             apply_browser_cors,
@@ -2700,9 +2702,9 @@ fn format_timestamp(value: SystemTime) -> String {
 mod tests {
     use super::{
         AppState, AuthFailureRateLimiter, HttpMetrics, HttpOperation, HttpResponseClass,
-        InFlightRequestGuard, PrincipalRateLimitKey, PrincipalRateLimiter,
-        TenantOperationalMetrics, authorization_matches, hash_api_token, hash_secret_token,
-        render_tenant_operational_metrics, request_source_ip, router,
+        InFlightRequestGuard, MAX_HTTP_REQUEST_BODY_BYTES, PrincipalRateLimitKey,
+        PrincipalRateLimiter, TenantOperationalMetrics, authorization_matches, hash_api_token,
+        hash_secret_token, render_tenant_operational_metrics, request_source_ip, router,
     };
     use axum::body::{Body, to_bytes};
     use axum::http::header::{
@@ -2803,6 +2805,34 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("1")
         );
+    }
+
+    #[tokio::test]
+    async fn api_rejects_oversized_json_body_without_content_length() {
+        let request_body = vec![b'x'; MAX_HTTP_REQUEST_BODY_BYTES + 1];
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/workflow-runs")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body))
+            .expect("valid oversized request");
+
+        // The test intentionally omits Content-Length. The body extractor
+        // must enforce the byte limit from the body stream itself.
+        assert!(request.headers().get("content-length").is_none());
+
+        let response = router(AppState::without_database())
+            .oneshot(request)
+            .await
+            .expect("oversized body response");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("bounded payload-too-large response");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("valid error response JSON");
+        assert_eq!(payload["error"]["code"], "payload_too_large");
     }
 
     #[test]
