@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint } from "cloudflare:workers";
+import { readBoundedRequestText, RequestBodyError } from "./request-body.mjs";
 import "../serverless-shared/workflow-core.js";
 
 const CORE = globalThis.AetherFlowCore;
@@ -70,19 +71,21 @@ function cors(response, request, allowedOrigin) {
 }
 
 async function readJson(request, maxBytes) {
-  const declared = request.headers.get("Content-Length");
-  if (declared !== null) {
-    if (!/^\d+$/.test(declared)) throw new HttpError(400, "invalid_content_length", "The request content length is invalid.");
-    if (Number(declared) > maxBytes) throw new HttpError(413, "request_too_large", "The request body is too large.");
-  }
   const type = request.headers.get("Content-Type") || "";
-  if (!/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(type)) {
+  if (!/^application\\/(?:json|[a-z0-9.+-]+\\+json)(?:\\s*;|$)/i.test(type)) {
     throw new HttpError(415, "content_type_required", "Use application/json for API requests.");
   }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new HttpError(413, "request_too_large", "The request body is too large.");
+
+  let text;
+  try {
+    text = await readBoundedRequestText(request, maxBytes);
+  } catch (error) {
+    if (error instanceof RequestBodyError) {
+      throw new HttpError(error.status, error.code, error.message);
+    }
+    throw new HttpError(400, "invalid_request_body", "The request body could not be read.");
   }
+
   try { return JSON.parse(text); }
   catch (ignored) { throw new HttpError(400, "invalid_json", "The request body must be valid JSON."); }
 }
