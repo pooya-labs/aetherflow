@@ -16,12 +16,12 @@ The runtime accepts only a small set of built-in task operations (`echo`, `colle
 | Daily API mutation requests | 2,500 |
 | Tasks per session | governed by the 60 mutation / 250 read cap |
 | Session lifetime | 6 hours |
-| Request body | 16 KiB |
+| Request body | 16 KiB (counted while streaming, even without Content-Length) |
 | Task input | 8 KiB |
 | Browser workspaces | 500 |
 | New browser sessions/day | 60 |
 
-The API read/mutation ceilings count incoming requests, not D1 rows. Before admitting a workflow, the Worker reserves a conservative step estimate: up to six attempts for each orchestration step plus the configured maximum attempts for every task. At the largest accepted definition this is 72 reserved steps per workflow, so 25 maximum-size submissions reserve at most 1,800 steps/day. The internal 2,000-step ceiling stays below Cloudflare Workflows Free's 3,000 steps/day. Cloudflare D1 Free separately allows 5 million rows read/day and 100,000 rows written/day; those provider-wide quotas are shared with other account workloads, so review account usage before raising project caps. Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 million rows read/day, 100,000 rows written/day and 5 GB total storage. Cloudflare Workflows Free includes 3,000 steps/day and 1 GB-month storage. AetherFlow sets lower internal budgets; monitor account usage before increasing them. See the official [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
+The Worker rejects an oversized declared Content-Length early and also counts actual stream bytes before JSON parsing; chunked requests without that header receive the same 413 contract. The body reader retains no more than the configured 16 KiB. The API read/mutation ceilings count incoming requests, not D1 rows. Before admitting a workflow, the Worker reserves a conservative step estimate: up to six attempts for each orchestration step plus the configured maximum attempts for every task. At the largest accepted definition this is 72 reserved steps per workflow, so 25 maximum-size submissions reserve at most 1,800 steps/day. The internal 2,000-step ceiling stays below Cloudflare Workflows Free's 3,000 steps/day. Cloudflare D1 Free separately allows 5 million rows read/day and 100,000 rows written/day; those provider-wide quotas are shared with other account workloads, so review account usage before raising project caps. Cloudflare documents Workers Free at 100,000 requests/day and D1 Free at 5 million rows read/day, 100,000 rows written/day and 5 GB total storage. Cloudflare Workflows Free includes 3,000 steps/day and 1 GB-month storage. AetherFlow sets lower internal budgets; monitor account usage before increasing them. See the official [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
 
 ## Current Cloudflare deployment
 
@@ -65,6 +65,7 @@ Task payloads and outputs are not returned by the dashboard API; only size metad
 From the repository root:
 
 ```sh
+node --test cloudflare-free/request-body.test.mjs
 node --test serverless-shared/workflow-core.test.mjs
 python scripts/check-serverless-contracts.py
 node --check dashboard/runtime-config.js
