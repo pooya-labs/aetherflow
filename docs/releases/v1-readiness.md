@@ -2,7 +2,7 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-13 (PR #47 Rust API streamed-body test and PR #48 Cloudflare Free bounded body reader merged)
+**Last reviewed:** 2026-11-13 (PR #47–#48 request-boundary hardening and PR #50 Worker-route rejection test merged)
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
@@ -16,9 +16,14 @@ AetherFlow already has a versioned v1 control-plane API, but that does not make 
 - On exact merge SHA `54c279c653cc1c07590716101181ec0fb6d1cd20`, the ordinary-push Cloudflare Free health/CORS smoke passed. Exact-merge Rust [43332425956](https://github.com/pooya-labs/aetherflow/actions/runs/43332425956), security [43332425857](https://github.com/pooya-labs/aetherflow/actions/runs/43332425857), and Pages [43332424487](https://github.com/pooya-labs/aetherflow/actions/runs/43332424487) were still running when this checkpoint was drafted. Keep the merge-SHA main matrix open until final outcomes are confirmed; do not substitute PR-head evidence for exact-merge evidence.
 - This change modifies the checked-in Cloudflare Free Worker source. The ordinary-push smoke is health/CORS-only and does not deploy the changed Worker bundle or run the full workflow smoke. The running deployment must not be described as containing this fix until a deliberate deploy is verified. A read-only Cloudflare API check on 2026-11-13 found active Worker version 8 (`aeedc435-66c0-4a59-a3ca-3ed0472b820b`) serving 100% of traffic, created 2026-11-08T18:49:58Z. The downloaded live module still contains `request.text()` and lacks `readBoundedRequestText`, directly confirming that the merged PR #48 source has not reached the running Worker.
  
-### Next application-level verification
+### PR #50 — Cloudflare Free Worker route-level rejection (merged)
 
-Add a Worker-route integration test that submits an over-limit streamed request without `Content-Length` and verifies the public HTTP 413 JSON envelope and no-store headers end-to-end. The current five tests exercise the dedicated bounded-reader module; the route-level response mapping is a separate coverage gap. Keep the no-Origin demo distinct from the Rust reverse-proxy Gateway. This additional local coverage still does not replace deployed Cloudflare acceptance or production ingress tests.
+[PR #50](https://github.com/pooya-labs/aetherflow/pull/50) merged as [0b0887f](https://github.com/pooya-labs/aetherflow/commit/0b0887fc3dc34d0ff7964664d7d9839a98af6b86). The Node route test imports the actual Worker module and calls its exported `fetch()`, with only the Cloudflare Workflow base class stubbed. A two-chunk request exceeding 16 KiB by one byte and omitting `Content-Length` must return HTTP 413 with `request_too_large`, a request ID, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and the permitted CORS origin; the stream must be cancelled, and the D1 mock rejects any later workflow write.
+
+Exact PR-head Rust CI [43332827414](https://github.com/pooya-labs/aetherflow/actions/runs/43332827414) passed all steps including the five bounded-reader tests and this route-level test, plus Clippy, workspace tests/build, benchmark smoke, WASM lint/ABI example, docs, and Compose. Exact PR-head supply-chain and full-history secret checks [43332827483](https://github.com/pooya-labs/aetherflow/actions/runs/43332827483) passed. Exact-merge-SHA main Rust [43334352329](https://github.com/pooya-labs/aetherflow/actions/runs/43334352329), security [43334352493](https://github.com/pooya-labs/aetherflow/actions/runs/43334352493), and Pages [43334350339](https://github.com/pooya-labs/aetherflow/actions/runs/43334350339) were still running at this checkpoint; treat them as pending until all three finish successfully.
+
+The test runs under Node and does not prove Cloudflare Workerd or deployed behavior. A read-only Cloudflare API inspection confirmed the live `aetherflow-free-runtime` is still Worker version 8 (`aeedc435-66c0-4a59-a3ca-3ed0472b820b`), serving 100% of traffic and containing the old `request.text()` call. PR #48's bounded stream fix and PR #50's route-level test are merged but **not deployed**. The next application acceptance task is to deploy the updated bundle through the approved account path, preserve the existing D1/Workflow bindings, verify the active version, and exercise a real chunked over-limit request plus the existing health/CORS and workflow smoke.
+
 
 ## Previous engineering checkpoint — 2026-11-12
 
