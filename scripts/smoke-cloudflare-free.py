@@ -99,10 +99,10 @@ def send_chunked_request(path: str, chunks: list[bytes], token: str, connection_
         for chunk in chunks:
             if not chunk:
                 continue
-            connection.send(f"{len(chunk):X}\r\\n".encode("ascii"))
+            connection.send(f"{len(chunk):X}\r\n".encode("ascii"))
             connection.send(chunk)
-            connection.send(b"\r\\n")
-        connection.send(b"0\r\\n\r\\n")
+            connection.send(b"\r\n")
+        connection.send(b"0\r\n\r\n")
 
         response = connection.getresponse()
         raw = response.read().decode("utf-8", "replace")
