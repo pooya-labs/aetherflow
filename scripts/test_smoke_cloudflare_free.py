@@ -102,7 +102,7 @@ class CloudflareSmokeHelpersTest(unittest.TestCase):
         self.assertNotIn("content-length", sent_headers)
         self.assertEqual(
             b"".join(connection.sent),
-            b"5\\r\\nhello\\r\\n6\\r\\nworld!\\r\\n0\\r\\n\\r\\n",
+            b"5\r\\nhello\r\\n6\r\\nworld!\r\\n0\r\\n\r\\n",
         )
         self.assertTrue(connection.ended)
         self.assertTrue(connection.closed)
