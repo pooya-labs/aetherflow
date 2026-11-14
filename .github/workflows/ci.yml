@@ -151,6 +151,8 @@ jobs:
           node --check < apps-script/Code.gs
           node --check < apps-script/Core.gs
           python3 scripts/check-serverless-contracts.py
+      - name: Test Cloudflare Free live-smoke helpers
+        run: python3 -m unittest discover -s scripts -p "test_smoke_cloudflare_free.py"
       - name: Validate operations runbooks against migrations and RLS
         run: bash scripts/check-operations-docs.sh
 

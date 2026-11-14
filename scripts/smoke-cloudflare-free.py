@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 API_BASE = os.environ.get(
@@ -15,9 +17,16 @@ API_BASE = os.environ.get(
     "https://aetherflow-free-runtime.pooyagame141.workers.dev",
 ).rstrip("/")
 ORIGIN = "https://pooya-labs.github.io"
+MAX_BODY_BYTES = 16 * 1024
 
 
-def request(path: str, method: str = "GET", body: dict | None = None, token: str | None = None):
+def request(
+    path: str,
+    method: str = "GET",
+    body: dict | None = None,
+    token: str | None = None,
+    expected_status: int | None = None,
+):
     headers = {"Accept": "application/json", "Origin": ORIGIN, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
     data = None
     if body is not None:
@@ -39,7 +48,69 @@ def request(path: str, method: str = "GET", body: dict | None = None, token: str
             payload = json.loads(raw)
         except json.JSONDecodeError:
             payload = raw
-        raise RuntimeError(f"{method} {path}: HTTP {error.code}: {payload}") from error
+        if expected_status != error.code:
+            raise RuntimeError(f"{method} {path}: HTTP {error.code}: {payload}") from error
+        return error.code, payload, error.headers
+
+
+def build_oversized_body(workflow_run_id: str) -> bytes:
+    """Build valid JSON exactly one byte over the Worker's 16 KiB cap."""
+    body = {
+        "workflow_id": "body-limit-acceptance",
+        "workflow_run_id": workflow_run_id,
+        "tasks": [],
+        "retry_policy": {
+            "max_attempts": 1,
+            "initial_backoff_ms": 0,
+            "max_backoff_ms": 0,
+        },
+        "padding": "",
+    }
+    encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    body["padding"] = "x" * (MAX_BODY_BYTES + 1 - len(encoded))
+    encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    if len(encoded) != MAX_BODY_BYTES + 1:
+        raise RuntimeError("Could not construct the exact 16 KiB + 1 acceptance body.")
+    return encoded
+
+
+def send_chunked_request(path: str, chunks: list[bytes], token: str, connection_factory=None):
+    """POST raw chunks over HTTPS without ever sending Content-Length."""
+    parsed = urllib.parse.urlsplit(API_BASE)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise RuntimeError("The live chunked-body smoke requires an HTTPS API_BASE.")
+    factory = connection_factory or http.client.HTTPSConnection
+    connection = factory(parsed.hostname, parsed.port or 443, timeout=20)
+    target = parsed.path.rstrip("/") + path
+    try:
+        connection.putrequest("POST", target, skip_accept_encoding=True)
+        connection.putheader("Accept", "application/json")
+        connection.putheader("Origin", ORIGIN)
+        connection.putheader(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Authorization", "Bearer " + token)
+        connection.putheader("Transfer-Encoding", "chunked")
+        connection.endheaders()
+
+        for chunk in chunks:
+            if not chunk:
+                continue
+            connection.send(f"{len(chunk):X}\r\n".encode("ascii"))
+            connection.send(chunk)
+            connection.send(b"\r\n")
+        connection.send(b"0\r\n\r\n")
+
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8", "replace")
+        content_type = response.headers.get("Content-Type", "")
+        payload = json.loads(raw) if "json" in content_type else raw
+        return response.status, payload, response.headers
+    finally:
+        connection.close()
 
 
 def main() -> None:
@@ -76,6 +147,43 @@ def main() -> None:
     token = session.get("sessionToken") if isinstance(session, dict) else None
     if status != 200 or not token:
         raise SystemExit(f"Cloudflare bootstrap did not return a session: {session}")
+
+    # Explicitly stream two chunks without Content-Length. The invalid empty
+    # task list is a second safety guard if the body-size check ever regresses.
+    run_id = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+    oversized_run_id = f"ci-body-limit-{run_id}-{attempt}"
+    oversized_body = build_oversized_body(oversized_run_id)
+    status, body_limit_error, body_limit_headers = send_chunked_request(
+        "/api/v1/workflow-runs",
+        [oversized_body[:8192], oversized_body[8192:]],
+        token,
+    )
+    error = body_limit_error.get("error", {}) if isinstance(body_limit_error, dict) else {}
+    if status != 413 or error.get("code") != "request_too_large":
+        raise SystemExit(f"Chunked over-limit request was not rejected with 413: {status} {body_limit_error}")
+    request_id = error.get("request_id", "")
+    if not isinstance(request_id, str) or not request_id.startswith("cf-"):
+        raise SystemExit(f"Chunked rejection did not include a Cloudflare request ID: {body_limit_error}")
+    required_headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Access-Control-Allow-Origin": ORIGIN,
+    }
+    for header, expected in required_headers.items():
+        if body_limit_headers.get(header) != expected:
+            raise SystemExit(
+                f"Chunked rejection header {header!r} was {body_limit_headers.get(header)!r}, expected {expected!r}."
+            )
+
+    missing_status, missing_run, _ = request(
+        "/api/v1/workflow-runs/" + oversized_run_id,
+        token=token,
+        expected_status=404,
+    )
+    missing_error = missing_run.get("error", {}) if isinstance(missing_run, dict) else {}
+    if missing_status != 404 or missing_error.get("code") != "not_found":
+        raise SystemExit(f"Oversized submission unexpectedly created a workflow record: {missing_run}")
 
     run_id = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
@@ -191,7 +299,7 @@ def main() -> None:
     if not {"task.retry_waiting", "task.succeeded", "workflow.succeeded"}.issubset(retry_event_types):
         raise SystemExit(f"Cloudflare retry/DAG event history is incomplete: {retry_event_types}")
 
-    print("Cloudflare Free live smoke: health, CORS, bootstrap, submit, durable execution, retry, DAG dependencies, D1 state and event history: OK")
+    print("Cloudflare Free live smoke: health, CORS, chunked 16 KiB + 1 rejection without Content-Length, response headers, no workflow write, durable execution, retry, DAG dependencies and D1 event history: OK")
 
 
 if __name__ == "__main__":
