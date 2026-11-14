@@ -461,3 +461,41 @@ PostgreSQL/NATS CI [43027919394](https://github.com/pooya-labs/aetherflow/action
 The archived artifact is [aetherflow-end-to-end-baseline-1eaf1be2e795ca0d37ac1b35ddc9ad8df8c42688](https://github.com/pooya-labs/aetherflow/actions/runs/43027919394) (artifact ID `13858887665`). It contains ten per-run CSVs, combined samples, summary statistics, and `metadata.json`. The artifact metadata records source SHA `1eaf1be2e795ca0d37ac1b35ddc9ad8df8c42688`; the PR head was `2d033aa53e00acd70d21c6fb1a8f14ebc487c705`.
 
 **Comparison boundary:** this session ran on AMD EPYC 9V74, not the stored AMD EPYC 9V45 reference. The fingerprint-aware comparator therefore correctly skipped numeric throughput/p95 thresholds. Keep this as a separate fingerprinted observation; do not pool it with the 9V45 reference or treat its values as a regression or improvement. It is not production capacity, an SLO, or an endorsement of a particular runner.
+
+## Ninth five-repeat session — AMD EPYC 9V45 (2026-11-14)
+
+PostgreSQL/NATS CI [43645793509](https://github.com/pooya-labs/aetherflow/actions/runs/43645793509) completed five fan-out and five chain repetitions on exact main application commit `7ae7bbfbb72ad9125f92d0963864e0bb9c3178be`. The workflow passed all **31/31** job steps, including storage and migration checks, RLS enforcement, multi-tenant HTTP/TLS integration, three-node JetStream cluster transport, client mutual TLS and hostname-mismatch tests, standalone worker/API smoke, and the isolated PostgreSQL + JetStream backup/restore-to-runtime rehearsal. Each repetition used a fresh PostgreSQL database and its own JetStream stream.
+
+### Environment fingerprint
+
+| Field | Recorded value |
+|---|---|
+| GitHub runner label | `ubuntu-24.04` |
+| Hosted image | `ubuntu24 / 20261111.370.1` |
+| Kernel | `7.0.0-1017-azure` |
+| CPU | AMD EPYC 9V45 96-Core Processor |
+| Allocated logical CPUs | 4 |
+| Visible memory | 16,760,348,672 bytes (about 15.6 GiB) |
+| Rust toolchain | `1.99.1` |
+| PostgreSQL | `18.7 (Debian 18.7-1.pgdg13+2)` |
+| NATS Server | `2.12.15` |
+| Workload | 64 workflows × 4 tasks; 256-byte payload |
+| Worker | One process, concurrency 4 |
+| Producer / handler | 8 offered workflows/s; 1 ms handler delay |
+| Timeout | 240 seconds |
+| Repetitions | 5 per shape, sequential, fresh PostgreSQL DB per repetition |
+
+### Results (ninth session)
+
+| Metric | Fan-out | Chain |
+|---|---:|---:|
+| Observed range, workflows/s | 7.18–7.46 | 7.20–7.33 |
+| Median workflows/s (approx) | 7.39 | 7.27 |
+| Outbox events per run | 896 | 896 |
+| Inbox events processed per run | 896 | 896 |
+| Duplicate events / errors | 0 / 0 | 0 / 0 |
+
+The archived artifact is [aetherflow-end-to-end-baseline-7ae7bbfbb72ad9125f92d0963864e0bb9c3178be](https://github.com/pooya-labs/aetherflow/actions/runs/43645793509) (artifact ID `14134347003`).
+
+**Comparison boundary:** the host CPU is the target AMD EPYC 9V45 96-Core Processor. Because GitHub Actions updated its base runner image to `20261111.370.1` (reference `20261026.354.1`) and PostgreSQL 18 updated to `18.7` (reference `18.6`), the fingerprint-aware comparator correctly noted the updated runner/database revisions and reported `SKIP` for numeric threshold gating while retaining the validated performance samples. All ten repetitions completed with zero duplicates and zero errors.
+

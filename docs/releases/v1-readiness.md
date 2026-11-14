@@ -2,11 +2,19 @@
 
 **Release target:** v1.0.0  
 **Current state:** Not released · M08 production engineering remains open  
-**Last reviewed:** 2026-11-14 (PR #47–#48 request-boundary hardening, PR #50 Worker-route rejection test, and PR #51 live chunked request-body acceptance smoke merged)
+**Last reviewed:** 2026-11-15 (PR #52 merged, full 31-step PostgreSQL/JetStream CI run 43645793509 verified on main SHA 7ae7bbf, live Cloudflare Free full workflow & chunked acceptance smoke verified)
 
 AetherFlow already has a versioned v1 control-plane API, but that does not make the complete platform a stable 1.0.0 release or a production-ready service. This checklist is the release gate. Keep workspace crate versions at 0.1.0 until the gates are closed; do not publish a 1.0.0 tag merely because the API path contains /v1.
 
-## Latest engineering checkpoint — 2026-11-14
+## Latest engineering checkpoint — 2026-11-15
+
+### Exact-main PostgreSQL/NATS verification & Ninth benchmark session
+- On exact merge SHA `7ae7bbfbb72ad9125f92d0963864e0bb9c3178be`, PostgreSQL/NATS CI [43645793509](https://github.com/pooya-labs/aetherflow/actions/runs/43645793509) completed all **31/31 steps** successfully. The run validated migration ledger v10, ten FORCE RLS tables and twelve policies, multi-tenant HTTP/TLS integration, three-node NATS JetStream cluster transport, client mutual TLS and hostname-mismatch rejection, standalone worker HTTP API smoke, and the isolated PostgreSQL + JetStream backup/restore-to-runtime rehearsal.
+- Captured the ninth five-repeat benchmark session on an AMD EPYC 9V45 96-Core Processor runner (`ubuntu24 / 20261111.370.1`, PostgreSQL 18.7, NATS 2.12.15). Median throughput: fan-out ~7.39 workflows/s (observed 7.18–7.46), chain ~7.27 workflows/s (observed 7.20–7.33). All ten repetitions reconciled 896 outbox and 896 inbox events with zero duplicates and zero errors. The archived artifact is `aetherflow-end-to-end-baseline-7ae7bbfbb72ad9125f92d0963864e0bb9c3178be` (artifact ID `14134347003`).
+- Ran the live Cloudflare Free acceptance test (`scripts/smoke-cloudflare-free.py` with `AETHERFLOW_FULL_WORKFLOW_SMOKE=1`): verified live chunked 16 KiB + 1 byte request rejection without `Content-Length`, HTTP 413, `request_too_large`, `cf-` request ID, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, canonical CORS origin, verified no workflow record was created in D1, and completed full durable workflow execution, retries, and DAG dependency completion.
+
+### PR #52 — Checkpoint synchronization (merged)
+- Merged as [7ae7bbfbb72ad9125f92d0963864e0bb9c3178be](https://github.com/pooya-labs/aetherflow/commit/7ae7bbfbb72ad9125f92d0963864e0bb9c3178be). Recorded PR #51 merge details, live chunked request rejection acceptance, and documented runner race condition handling. All PR-head check runs passed with `success` before merge.
 
 ### PR #51 — Cloudflare Free live chunked request-body acceptance (merged)
 
