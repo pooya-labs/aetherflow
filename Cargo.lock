@@ -56,7 +56,7 @@ dependencies = [
 name = "aetherflow-sdk"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "reqwest",
  "serde",
  "serde_json",
@@ -71,7 +71,7 @@ dependencies = [
  "aetherflow-storage-postgres",
  "axum",
  "axum-server",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "deadpool-postgres",
  "opentelemetry",

@@ -13,7 +13,7 @@ aetherflow-runtime = { version = "0.1.0", path = "../../crates/aetherflow-runtim
 aetherflow-storage-postgres = { version = "0.1.0", path = "../../crates/aetherflow-storage-postgres" }
 axum = "=0.8.9"
 axum-server = { version = "=0.8.0", default-features = false, features = ["tls-rustls-no-provider"] }
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1", "runtime"] }
 serde = { version = "=1.0.229", features = ["derive"] }
