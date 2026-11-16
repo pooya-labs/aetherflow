@@ -11,7 +11,7 @@ description = "NATS JetStream transport adapters for AetherFlow durable events."
 aetherflow-core = { version = "0.1.0", path = "../aetherflow-core" }
 aetherflow-runtime = { version = "0.1.0", path = "../aetherflow-runtime" }
 aetherflow-storage-postgres = { version = "0.1.0", path = "../aetherflow-storage-postgres" }
-async-nats = { version = "=0.51.0", default-features = false, features = ["jetstream", "nkeys", "ring", "server_2_12"] }
+async-nats = { version = "=0.52.0", default-features = false, features = ["jetstream", "nkeys", "ring", "server_2_12"] }
 axum = "=0.8.9"
 deadpool-postgres = { version = "=0.14.2", default-features = false, features = ["rt_tokio_1", "runtime"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std", "async-await"] }
